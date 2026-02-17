@@ -220,7 +220,7 @@ class OmniBase:
         if "dtype" in kwargs and not isinstance(kwargs["dtype"], str):
             if not isinstance(kwargs["dtype"], torch.dtype):
                 raise TypeError("Provided dtype must be a string or torch.dtype")
-            kwargs["dtype"] = str(kwargs["dtype"]).split(".")[-1]
+            kwargs["dtype"] = str(kwargs["dtype"]).removeprefix("torch.")
 
         cache_backend = kwargs.get("cache_backend", "none")
         cache_config = self._normalize_cache_config(cache_backend, kwargs.get("cache_config", None))
