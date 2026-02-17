@@ -4,9 +4,11 @@
 import math
 import time
 from collections import OrderedDict
+from typing import get_args
 
 import torch
 import torch.nn as nn
+from vllm.config.lora import MaxLoRARanks
 from vllm.logger import init_logger
 from vllm.lora.layers import BaseLayerWithLoRA
 from vllm.lora.lora_model import LoRAModel
@@ -87,6 +89,8 @@ class DiffusionLoRAManager:
         self._lora_modules: dict[str, BaseLayerWithLoRA] = {}
         # Track the maximum LoRA rank we've allocated buffers for.
         self._max_lora_rank: int = 0
+        # Valid max allowed ranks for LoRA in vLLM
+        self.valid_max_ranks = list(get_args(MaxLoRARanks))
 
         logger.info(
             "Initializing DiffusionLoRAManager: device=%s, dtype=%s, max_cached_adapters=%d, static_lora_path=%s",
@@ -416,6 +420,11 @@ class DiffusionLoRAManager:
         if min_rank <= 0:
             raise ValueError(f"Invalid LoRA rank: {min_rank}")
 
+        allowed_ranks = [rank for rank in self.valid_max_ranks if rank >= min_rank]
+        if not allowed_ranks:
+            raise ValueError(f"LoRA rank of {min_rank} exceeds max allowed rank of {max(self.valid_max_ranks)}")
+
+        min_rank = min(allowed_ranks)
         logger.info("Increasing max LoRA rank: %d -> %d", self._max_lora_rank, min_rank)
         self._max_lora_rank = min_rank
 
