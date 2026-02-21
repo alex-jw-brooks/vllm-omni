@@ -202,16 +202,18 @@ class DiffusionLoRAManager:
         )
         if adapter_id not in self._registered_adapters:
             logger.info("Loading new adapter: id=%d, name=%s", adapter_id, lora_request.lora_name)
-            self.add_adapter(lora_request, lora_scale)
-        else:
-            logger.debug("Adapter %d already loaded, activating", adapter_id)
+            self.add_adapter(lora_request)
 
-            # update access order
-            self._adapter_scales[adapter_id] = lora_scale
-            self._adapter_access_order[adapter_id] = time.time()
-            self._adapter_access_order.move_to_end(adapter_id)
+        self._activate_adapter(adapter_id, lora_scale)
 
-        self._activate_adapter(adapter_id)
+        # Update or add relevant information for cache tracking
+        self._touch_adapter_info(adapter_id, lora_scale)
+
+    def _touch_adapter_info(self, adapter_id: int, lora_scale: float):
+        """Update the current adapter scale & caching info."""
+        self._adapter_scales[adapter_id] = lora_scale
+        self._adapter_access_order[adapter_id] = time.time()
+        self._adapter_access_order.move_to_end(adapter_id)
 
     def _load_adapter(
         self,
@@ -389,8 +391,9 @@ class DiffusionLoRAManager:
         # Re-apply active adapter if needed (buffers were reset).
         if self._active_adapter_id is not None:
             active_id = self._active_adapter_id
+            active_scale = self._adapter_scales[active_id]
             self._active_adapter_id = None
-            self._activate_adapter(active_id)
+            self._activate_adapter(active_id, active_scale)
 
     def _get_lora_weights(
         self,
@@ -416,8 +419,8 @@ class DiffusionLoRAManager:
         module_suffix = full_module_name.split(".")[-1]
         return lora_model.get_lora(module_suffix)
 
-    def _activate_adapter(self, adapter_id: int) -> None:
-        if self._active_adapter_id == adapter_id:
+    def _activate_adapter(self, adapter_id: int, scale: float) -> None:
+        if self._active_adapter_id == adapter_id and self._adapter_scales.get(adapter_id) == scale:
             logger.debug("Adapter %d already active, skipping", adapter_id)
             return
 
@@ -453,7 +456,6 @@ class DiffusionLoRAManager:
                         lora_layer.reset_lora(0)
                         continue
 
-                    scale = self._adapter_scales.get(adapter_id, 1.0)
                     lora_a_list: list[torch.Tensor | None] = []
                     lora_b_list: list[torch.Tensor | None] = []
                     for sub_lora in sub_loras:
@@ -474,8 +476,6 @@ class DiffusionLoRAManager:
                 else:
                     lora_layer.reset_lora(0)
                 continue
-
-            scale = self._adapter_scales.get(adapter_id, 1.0)
 
             # Packed LoRA weights already provide per-slice tensors.
             if isinstance(lora_weights, PackedLoRALayerWeights):
@@ -562,7 +562,7 @@ class DiffusionLoRAManager:
             )
             self.remove_adapter(lru_adapter_id)
 
-    def add_adapter(self, lora_request: LoRARequest, lora_scale: float = 1.0) -> bool:
+    def add_adapter(self, lora_request: LoRARequest) -> bool:
         """
         Add a new adapter to the cache without activating it.
         """
@@ -575,12 +575,8 @@ class DiffusionLoRAManager:
         logger.info("Adding new adapter: id=%d, name=%s", adapter_id, lora_request.lora_name)
         lora_model, peft_helper = self._load_adapter(lora_request)
         self._registered_adapters[adapter_id] = lora_model
-        self._adapter_scales[adapter_id] = lora_scale
 
         self._replace_layers_with_lora(peft_helper)
-
-        self._adapter_access_order[adapter_id] = time.time()
-        self._adapter_access_order.move_to_end(adapter_id)
 
         # evict if cache full
         self._evict_if_needed()
