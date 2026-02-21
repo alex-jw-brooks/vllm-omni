@@ -447,7 +447,7 @@ class DiffusionLoRAManager:
 
     @classmethod
     def _get_smallest_valid_max_rank(cls, min_rank: int) -> int:
-        """Given a LoRA rank, getthe smallest max rank that can support it."""
+        """Given a LoRA rank, get the smallest max rank that can support it."""
         if min_rank <= 0:
             raise ValueError(f"Invalid LoRA rank: {min_rank}")
 
