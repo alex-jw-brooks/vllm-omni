@@ -47,6 +47,7 @@ class _DummyBaseLayerWithLoRA(torch.nn.Module):
             tuple[list[torch.Tensor | None] | torch.Tensor, list[torch.Tensor | None] | torch.Tensor]
         ] = []
         self.reset_calls: int = 0
+        self.create_calls: int = 0
 
     def set_lora(self, index: int, lora_a, lora_b):
         assert index == 0
@@ -60,7 +61,7 @@ class _DummyBaseLayerWithLoRA(torch.nn.Module):
         # Needs to be callable for scale test when rank changes, but not
         # actually used since we mock everything and check everything based
         # on set calls.
-        pass
+        self.create_calls += 1
 
 
 class _DummyPipeline(torch.nn.Module):
@@ -468,6 +469,7 @@ def test_lora_manager_scales_correctly_with_rank_changes(monkeypatch):
 
     # Activate adapter with initial scale
     manager.set_active_adapter(req1, lora_scale=initial_scale)
+    assert lora_model.transformer.foo.create_calls == 0
     assert len(lora_model.transformer.foo.set_calls) == 1
     lora_a, lora_b = lora_model.transformer.foo.set_calls[0]
     assert torch.all(lora_a == 1)
@@ -476,7 +478,9 @@ def test_lora_manager_scales_correctly_with_rank_changes(monkeypatch):
     # Increase the rank; this resets the buffers, so the adapter is activated again
     manager._ensure_max_lora_rank(8)
 
-    # Ensure we actually called set again, and that the scale didn't change
+    # Ensure we actually took the rank expansion path, which recreates
+    # and sets the weight buffets, but that the scale didn't change
+    assert lora_model.transformer.foo.create_calls == 1
     assert len(lora_model.transformer.foo.set_calls) == 2
     lora_a, lora_b = lora_model.transformer.foo.set_calls[1]
     assert torch.all(lora_a == 1)
