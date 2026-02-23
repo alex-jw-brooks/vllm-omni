@@ -84,7 +84,7 @@ class _DummyLM(torch.nn.Module):
         return {"transformer.foo": self._get_initial_lora(self.rank)}
 
     def get_lora(self, k: str) -> LoRALayerWeights:
-        """Get the uncaled LoRA weights for transformer.foo"""
+        """Get the unscaled LoRA weights for transformer.foo"""
         return self.loras[k]
 
     def _get_initial_lora(self, rank: int) -> LoRALayerWeights:
@@ -481,3 +481,18 @@ def test_lora_manager_scales_correctly_with_rank_changes(monkeypatch):
     lora_a, lora_b = lora_model.transformer.foo.set_calls[1]
     assert torch.all(lora_a == 1)
     assert torch.all(lora_b == initial_scale)
+
+
+def test_scale_keys_are_rounded():
+    """Ensure that added adapter scales are rounded to avoid lookup
+    issues due to precision differences, e.g., computed scales.
+    """
+    manager = DiffusionLoRAManager(
+        pipeline=_DummyPipeline(),
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+    )
+    adapter_id = 1
+    # Currently we round keys to 3 decimal places
+    manager._update_adapter_scale(adapter_id, 0.0031)
+    assert manager._adapter_scales[adapter_id] == 0.003
