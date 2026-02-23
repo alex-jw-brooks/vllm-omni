@@ -215,11 +215,8 @@ class DiffusionLoRAManager:
 
         self._activate_adapter(adapter_id, lora_scale)
 
-    def _touch_adapter_info(self, adapter_id: int, lora_scale: float | None = None):
-        """Update the current caching info; if no scale is provided, it's
-        implied that the adapter has been loaded, but not activated."""
-        if lora_scale is not None:
-            self._adapter_scales[adapter_id] = lora_scale
+    def _touch_adapter_info(self, adapter_id):
+        """Update the current caching ordering info."""
         self._adapter_access_order[adapter_id] = time.time()
         self._adapter_access_order.move_to_end(adapter_id)
 
