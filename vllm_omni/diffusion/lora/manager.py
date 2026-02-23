@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import math
 import time
 from collections import OrderedDict
 
@@ -189,6 +190,10 @@ class DiffusionLoRAManager:
             logger.debug("No lora_request provided, deactivating all LoRA adapters")
             self._deactivate_all_adapters()
             return
+        elif math.isclose(0.0, lora_scale):
+            logger.warning("Received a request with LoRA scale 0; deactivating all LoRA adapters")
+            self._deactivate_all_adapters()
+            return
 
         adapter_id = lora_request.lora_int_id
         logger.debug(
@@ -209,8 +214,6 @@ class DiffusionLoRAManager:
             self._touch_adapter_info(adapter_id)
 
         self._activate_adapter(adapter_id, lora_scale)
-        # Ensure the scale is correctly updated
-        self._update_adapter_scale(adapter_id, lora_scale)
 
     def _touch_adapter_info(self, adapter_id: int, lora_scale: float | None = None):
         """Update the current caching info; if no scale is provided, it's
@@ -560,6 +563,7 @@ class DiffusionLoRAManager:
             )
 
         self._active_adapter_id = adapter_id
+        self._update_adapter_scale(adapter_id, scale)
 
     def _deactivate_all_adapters(self) -> None:
         logger.info("Deactivating all adapters: %d layers", len(self._lora_modules))
