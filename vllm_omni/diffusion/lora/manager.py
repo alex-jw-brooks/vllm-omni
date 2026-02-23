@@ -202,18 +202,38 @@ class DiffusionLoRAManager:
         )
         if adapter_id not in self._registered_adapters:
             logger.info("Loading new adapter: id=%d, name=%s", adapter_id, lora_request.lora_name)
+            # Add the adapter + add to the cache
             self.add_adapter(lora_request)
+        else:
+            # Just touch the cache access order
+            self._touch_adapter_info(adapter_id)
 
         self._activate_adapter(adapter_id, lora_scale)
+        # Ensure the scale is correctly updated
+        self._update_adapter_scale(adapter_id, lora_scale)
 
-        # Update or add relevant information for cache tracking
-        self._touch_adapter_info(adapter_id, lora_scale)
-
-    def _touch_adapter_info(self, adapter_id: int, lora_scale: float):
-        """Update the current adapter scale & caching info."""
-        self._adapter_scales[adapter_id] = lora_scale
+    def _touch_adapter_info(self, adapter_id: int, lora_scale: float | None = None):
+        """Update the current caching info; if no scale is provided, it's
+        implied that the adapter has been loaded, but not activated."""
+        if lora_scale is not None:
+            self._adapter_scales[adapter_id] = lora_scale
         self._adapter_access_order[adapter_id] = time.time()
         self._adapter_access_order.move_to_end(adapter_id)
+
+    def _update_adapter_scale(self, adapter_id: int, lora_scale: float):
+        """Update the adapter scale for a given adapter ID. To avoid potential
+        issues with using Floats as keys, for now, we round float values to
+        3 decimal points.
+        """
+        scale = DiffusionLoRAManager._get_rounded_scale(lora_scale)
+        self._adapter_scales[adapter_id] = scale
+
+    @staticmethod
+    def _get_rounded_scale(lora_scale: float):
+        """Normalizes a lora scale for use as a key in the _adapter_scales
+        dict; for now we just round scales to 3 decimal places.
+        """
+        return round(lora_scale, 3)
 
     def _load_adapter(
         self,
@@ -419,9 +439,16 @@ class DiffusionLoRAManager:
         module_suffix = full_module_name.split(".")[-1]
         return lora_model.get_lora(module_suffix)
 
+    def _is_active_at_scale(self, adapter_id: int, scale: float) -> bool:
+        """True if the adapter_id is active and the current scale matches."""
+        rounded_scale = DiffusionLoRAManager._get_rounded_scale(scale)
+        is_active = self._active_adapter_id == adapter_id
+        matches_scale = self._adapter_scales.get(adapter_id) == rounded_scale
+        return is_active and matches_scale
+
     def _activate_adapter(self, adapter_id: int, scale: float) -> None:
-        if self._active_adapter_id == adapter_id and self._adapter_scales.get(adapter_id) == scale:
-            logger.debug("Adapter %d already active, skipping", adapter_id)
+        if self._is_active_at_scale(adapter_id, scale):
+            logger.debug("Adapter %d already active at scale %.3f skipping", adapter_id, scale)
             return
 
         logger.info("Activating adapter: id=%d", adapter_id)
@@ -574,6 +601,8 @@ class DiffusionLoRAManager:
 
         logger.info("Adding new adapter: id=%d, name=%s", adapter_id, lora_request.lora_name)
         lora_model, peft_helper = self._load_adapter(lora_request)
+        self._touch_adapter_info(adapter_id)
+
         self._registered_adapters[adapter_id] = lora_model
 
         self._replace_layers_with_lora(peft_helper)
