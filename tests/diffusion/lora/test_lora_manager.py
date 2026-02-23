@@ -385,7 +385,7 @@ def test_lora_manager_warns_when_all_adapters_pinned(monkeypatch):
     assert manager.pin_adapter(2)
 
     manager.max_cached_adapters = 1
-    manager._evict_if_needed()
+    manager._evict_for_new_adapter()
 
     assert set(manager.list_adapters()) == {1, 2}
 

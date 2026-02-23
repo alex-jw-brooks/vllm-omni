@@ -572,8 +572,10 @@ class DiffusionLoRAManager:
         self._active_adapter_id = None
         logger.debug("All adapters deactivated")
 
-    def _evict_if_needed(self) -> None:
-        while len(self._registered_adapters) > self.max_cached_adapters:
+    def _evict_for_new_adapter(self) -> None:
+        """Evict unpinned registered adapters until we have room for a new
+        adapter to be loaded."""
+        while len(self._registered_adapters) > (self.max_cached_adapters - 1):
             # Pick LRU among non-pinned adapters
             evict_candidates = [aid for aid in self._adapter_access_order.keys() if aid not in self._pinned_adapters]
             if not evict_candidates:
@@ -604,15 +606,17 @@ class DiffusionLoRAManager:
             return False
 
         logger.info("Adding new adapter: id=%d, name=%s", adapter_id, lora_request.lora_name)
+
+        # evict if cache full before adding the new adapter
+        # so that we don't go over capacity on the new load
+        self._evict_for_new_adapter()
+
         lora_model, peft_helper = self._load_adapter(lora_request)
         self._touch_adapter_info(adapter_id)
 
         self._registered_adapters[adapter_id] = lora_model
 
         self._replace_layers_with_lora(peft_helper)
-
-        # evict if cache full
-        self._evict_if_needed()
 
         logger.debug(
             "Adapter %d added, cache size: %d/%d", adapter_id, len(self._registered_adapters), self.max_cached_adapters
