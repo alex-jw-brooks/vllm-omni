@@ -722,6 +722,84 @@ def extract_flux2_klein_context(
         },
     )
 
+def extract_longcat_context(
+    module: nn.Module,  # LongCatImageTransformer2DModel
+    hidden_states,
+    timestep,
+    guidance,
+    encoder_hidden_states,
+    txt_ids,
+    img_ids,
+    **kwargs,
+) -> CacheContext:
+    """"""
+    from diffusers.models.modeling_outputs import Transformer2DModelOutput
+
+    # 1. Model specific preprocessing
+    # TODO - fix sequence parallelism
+    sp_size = module.parallel_config.sequence_parallel_size
+    get_forward_context().sequence_parallel_size = sp_size
+
+    hidden_states = module.x_embedder(hidden_states)
+
+    timestep = timestep.to(hidden_states.dtype) * 1000
+
+    temb = module.time_embed(timestep, hidden_states.dtype)
+    encoder_hidden_states = module.context_embedder(encoder_hidden_states)
+
+    ids = torch.cat((txt_ids, img_ids), dim=0)
+    image_rotary_emb = module.pos_embed(ids)
+
+    # 2. Extract the modulated output from the first mm-DiT block
+    first_block = module.transformer_blocks[0]
+    hs, _ = first_block(
+        hidden_states=hidden_states,
+        encoder_hidden_states=encoder_hidden_states,
+        temb=temb,
+        image_rotary_emb=image_rotary_emb,
+    )
+    img_modulated = first_block.norm1(hs, emb=temb)[0]
+
+    # 3. Define the transformer execution
+    def run_transformer_blocks():
+        """Execute all Longcat transformer blocks."""
+        h = hidden_states
+        e = encoder_hidden_states
+        for block in module.transformer_blocks:
+            e, h = block(
+                hidden_states=h,
+                encoder_hidden_states=e,
+                temb=temb,
+                image_rotary_emb=image_rotary_emb,
+            )
+
+        for block in module.single_transformer_blocks:
+            e, h = block(
+                hidden_states=h,
+                encoder_hidden_states=e,
+                temb=temb,
+                image_rotary_emb=image_rotary_emb,
+            )
+
+        return (h, e)
+
+    # 4. Postprocessing
+    def postprocess(h):
+        """Apply Longcat-specific output postprocessing."""
+        h = module.norm_out(h, temb)
+        output = module.proj_out(h)
+        return Transformer2DModelOutput(sample=output)
+
+    # 5. Return the CacheContext
+    return CacheContext(
+        modulated_input=img_modulated,
+        hidden_states=hidden_states,
+        encoder_hidden_states=encoder_hidden_states,
+        temb=temb,
+        run_transformer_blocks=run_transformer_blocks,
+        postprocess=postprocess,
+    )
+
 
 def extract_stable_audio_context(
     module: nn.Module,
@@ -980,6 +1058,7 @@ EXTRACTOR_REGISTRY: dict[str, Callable] = {
     "Flux2Klein": extract_flux2_klein_context,
     "StableAudioDiTModel": extract_stable_audio_context,
     "Flux2Transformer2DModel": extract_flux2_context,
+    "LongCatImageTransformer2DModel": extract_longcat_context,
     # Future models:
     # "FluxTransformer2DModel": extract_flux_context,
     # "CogVideoXTransformer3DModel": extract_cogvideox_context,
