@@ -13,8 +13,8 @@ from typing import Any, Literal, overload
 
 import huggingface_hub
 import msgspec.msgpack
-import zmq
 import torch
+import zmq
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 from vllm import SamplingParams
