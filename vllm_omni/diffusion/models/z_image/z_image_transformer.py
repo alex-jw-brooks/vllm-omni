@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.cache.base import CachedTransformer
+from vllm_omni.diffusion.config import ZImageTransformer2DModelConfig
 from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,
     SequenceParallelOutput,
@@ -52,7 +53,6 @@ from vllm_omni.diffusion.forward_context import (
     is_forward_context_available,
 )
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
-from vllm_omni.diffusion.models.z_image.transformer_config import ZImageTransformer2DModelConfig
 
 ADALN_EMBED_DIM = 256
 SEQ_MULTI_OF = 32
@@ -600,12 +600,13 @@ class ZImageTransformer2DModel(CachedTransformer):
 
     def __init__(
         self,
+        hf_config: ZImageTransformer2DModelConfig,
         od_config: OmniDiffusionConfig,
     ) -> None:
         super().__init__()
         quant_config = get_vllm_quant_config_for_layers(od_config.quantization_config)
-        self.hf_config = ZImageTransformer2DModelConfig.from_dict(od_config.tf_model_config.to_dict())
 
+        self.hf_config = hf_config
         self.t_scale = self.hf_config.t_scale
         self.out_channels = self.hf_config.in_channels
         self.in_channels = self.hf_config.in_channels
