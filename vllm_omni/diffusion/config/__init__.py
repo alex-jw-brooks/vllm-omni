@@ -2,11 +2,13 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from vllm_omni.diffusion.config.sd3 import SD3Transformer2DModelConfig
+from vllm_omni.diffusion.config.stable_audio import StableAudioDiTModelConfig
 from vllm_omni.diffusion.config.wan2 import WanTransformer3DModelConfig
 from vllm_omni.diffusion.config.z_image import ZImageTransformer2DModelConfig
 
 __all__ = [
     "SD3Transformer2DModelConfig",
+    "StableAudioDiTModelConfig",
     "WanTransformer3DModelConfig",
     "ZImageTransformer2DModelConfig",
 ]

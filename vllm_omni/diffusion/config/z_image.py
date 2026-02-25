@@ -9,7 +9,7 @@ class ZImageTransformer2DModelConfig(BaseDiTConfig):
     A pretrainedConfig for z-image DiT models.
 
     Ref for default values: https://github.com/huggingface/diffusers/blob/v0.36.0/src/diffusers/models/transformers/transformer_z_image.py#L315
-    """
+    """  # noqa: E501
 
     # Expected _class_name in Diffusers
     _class_name = "ZImageTransformer2DModel"

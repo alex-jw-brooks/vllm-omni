@@ -9,7 +9,7 @@ class WanTransformer3DModelConfig(BaseDiTConfig):
     A pretrainedConfig for Wan DIT models.
 
     Ref for default values: https://github.com/huggingface/diffusers/blob/v0.36.0/src/diffusers/models/transformers/transformer_wan.py#L565
-    """
+    """  # noqa: E501
 
     # Expected _class_name in Diffusers
     _class_name = "WanTransformer3DModel"
