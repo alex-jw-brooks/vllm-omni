@@ -1348,7 +1348,9 @@ def test_close_sends_shutdown_signal(monkeypatch: pytest.MonkeyPatch, mocker: Mo
 # In the future we should ensure dtypes are parsed in less hacky way and make
 # these tests more atomic.
 @pytest.mark.parametrize("dtype", ["float16", torch.float16])
-def test_dtype_normalization_valid_types(monkeypatch, dtype: str | torch.dtype):
+def test_dtype_normalization_valid_types(
+    monkeypatch, dtype: str | torch.dtype, mocker: MockerFixture, fake_stage_config
+):
     """Ensure Diffusion Config builder coerces valid types correctly."""
 
     def _fake_loader(model: str, base_engine_args=None):
@@ -1365,12 +1367,11 @@ def test_dtype_normalization_valid_types(monkeypatch, dtype: str | torch.dtype):
         if module_name in sys.modules:
             del sys.modules[module_name]
 
-    _setup_engine_mocks(monkeypatch)
-    _setup_multiprocessing_mocks(monkeypatch)
+    _setup_engine_mocks(monkeypatch, mocker)
+    _setup_multiprocessing_mocks(monkeypatch, mocker)
     _setup_ipc_mocks(monkeypatch)
     _setup_log_mocks(monkeypatch)
 
-    import vllm_omni.entrypoints.omni as omni_module
     from vllm_omni.entrypoints.omni import Omni
 
     monkeypatch.setattr(
@@ -1379,13 +1380,11 @@ def test_dtype_normalization_valid_types(monkeypatch, dtype: str | torch.dtype):
         raising=False,
     )
 
-    monkeypatch.setattr(omni_module, "load_stage_configs_from_model", _fake_loader)
-
     omni = Omni(model="any", init_timeout=1, dtype=dtype)
 
     # Dtype parsing being checked is on the diffusion path
     assert len(omni.stage_configs) == 1
-    omni.stage_configs[0]["stage_type"] == "diffusion"
+    assert omni.stage_configs[0]["stage_type"] == "diffusion"
 
     # Regardless of whether a str / dtype is passed, it resolves correctly
     engine_args = omni.stage_configs[0]["engine_args"]
@@ -1394,7 +1393,7 @@ def test_dtype_normalization_valid_types(monkeypatch, dtype: str | torch.dtype):
     assert engine_args["dtype"] == "float16"
 
 
-def test_dtype_normalization_invalid_types(monkeypatch):
+def test_dtype_normalization_invalid_types(monkeypatch, mocker: MockerFixture, fake_stage_config):
     """Ensure Diffusion Config builder correctly handles bad dtype overrides."""
 
     def _fake_loader(model: str, base_engine_args=None):
@@ -1414,12 +1413,11 @@ def test_dtype_normalization_invalid_types(monkeypatch):
         if module_name in sys.modules:
             del sys.modules[module_name]
 
-    _setup_engine_mocks(monkeypatch)
-    _setup_multiprocessing_mocks(monkeypatch)
+    _setup_engine_mocks(monkeypatch, mocker)
+    _setup_multiprocessing_mocks(monkeypatch, mocker)
     _setup_ipc_mocks(monkeypatch)
     _setup_log_mocks(monkeypatch)
 
-    import vllm_omni.entrypoints.omni as omni_module
     from vllm_omni.entrypoints.omni import Omni
 
     monkeypatch.setattr(
@@ -1427,8 +1425,6 @@ def test_dtype_normalization_invalid_types(monkeypatch):
         _fake_loader,
         raising=False,
     )
-
-    monkeypatch.setattr(omni_module, "load_stage_configs_from_model", _fake_loader)
 
     # Raise TypeError if we get an unrecognized type
     with pytest.raises(TypeError):
