@@ -14,6 +14,7 @@ from vllm_omni.diffusion.hooks import HookRegistry, ModelHook
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.bagel.pipeline_bagel import BagelPipeline
 from vllm_omni.diffusion.models.flux2.pipeline_flux2 import Flux2Pipeline
+from vllm_omni.diffusion.models.longcat_image.pipeline_longcat_image import LongCatImagePipeline
 from vllm_omni.diffusion.models.stable_audio.pipeline_stable_audio import StableAudioPipeline
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
@@ -36,6 +37,7 @@ class DataCollectionHook(ModelHook):
 
     def new_forward(self, module: torch.nn.Module, *args: Any, **kwargs: Any) -> Any:
         ctx = self.extractor_fn(module, *args, **kwargs)
+        # NOTE: We upcast to float32 to also handle bfloat16.
         modulated_input_cpu = ctx.modulated_input.detach().float().cpu().numpy()
 
         outputs = ctx.run_transformer_blocks()
@@ -64,7 +66,8 @@ class BagelAdapter:
 
         pipeline = BagelPipeline(od_config=od_config)
         loader = DiffusersPipelineLoader(LoadConfig())
-        loader.load_weights(pipeline)
+        with set_default_torch_dtype(od_config.dtype):
+            loader.load_weights(pipeline)
         pipeline.to(device)
         return pipeline
 
@@ -146,10 +149,34 @@ class DefaultAdapter:
         registry.register_hook(hook._HOOK_NAME, hook)
 
 
+class LongCatAdapter(DefaultAdapter):
+    """Adapter for LongCat Image - NOTE: currently this models needs the vLLM
+    context to be correctly configured to actually run the estimation, since it
+    uses vLLM norm layers etc.
+    """
+
+    @staticmethod
+    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> Any:
+
+        od_config = OmniDiffusionConfig.from_kwargs(model=model_path, dtype=dtype)
+        od_config.model_class_name = "LongCatImagePipeline"
+
+        # TODO - we should use load_model in all adapters since the
+        # dtype is already specified in the Diffusion config anyway
+        with set_default_torch_dtype(dtype):
+            pipeline = LongCatImagePipeline(od_config=od_config)
+
+        loader = DiffusersPipelineLoader(LoadConfig())
+        loader.load_weights(pipeline)
+        pipeline.to(device)
+        return pipeline
+
+
 _MODEL_ADAPTERS: dict[str, type] = {
     "Bagel": BagelAdapter,
     "StableAudio": StableAudioAdapter,
     "Flux2": Flux2Adapter,
+    "LongCat": LongCatAdapter,
 }
 
 _EPSILON = 1e-6
