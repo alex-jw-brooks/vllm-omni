@@ -818,7 +818,7 @@ def extract_longcat_context(
 
     # 2. Extract the modulated output from the first mm-DiT block
     first_block = module.transformer_blocks[0]
-    hs, _ = first_block(
+    _, hs = first_block(
         hidden_states=hidden_states,
         encoder_hidden_states=encoder_hidden_states,
         temb=temb,
@@ -846,7 +846,7 @@ def extract_longcat_context(
                 temb=temb,
                 image_rotary_emb=image_rotary_emb,
             )
-
+        # Hook expects hidden states to be first
         return (h, e)
 
     # 4. Postprocessing
