@@ -53,14 +53,6 @@ _MODEL_COEFFICIENTS = {
         68.05368574596551,
         -12.281286412689623,
         1.0733905006198015,
-    # LongCat Image transformer coefficients
-    # Using Qwen-image to start
-    "LongCatImageTransformer2DModel": [
-        -90.25,
-        95.12,
-        31.15,
-        4.85,
-        -0.017,
     ],
     # HunyuanImage3 pipeline coefficients
     # Calibrated via polyfit on 3920 data points (80 prompts × 49 steps).
@@ -81,6 +73,8 @@ _MODEL_COEFFICIENTS = {
         3.20000000e00,
         -2.00000000e-02,
     ],
+    # LongCat Image transformer coefficients
+    "LongCatImageTransformer2DModel": [116.500, -58.959, 6.909, 1.175, 0.108],
 }
 
 
