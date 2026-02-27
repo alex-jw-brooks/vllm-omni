@@ -19,9 +19,16 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+from vllm.logger import init_logger
 
+from vllm_omni.diffusion.distributed.parallel_state import (
+    get_sequence_parallel_rank,
+    get_sequence_parallel_world_size,
+)
 from vllm_omni.diffusion.forward_context import get_forward_context
 from vllm_omni.platforms import current_omni_platform
+
+logger = init_logger(__name__)
 
 
 @dataclass
@@ -734,11 +741,32 @@ def extract_longcat_context(
 ) -> CacheContext:
     """"""
     from diffusers.models.modeling_outputs import Transformer2DModelOutput
+    # TODO (Alex) - Refactor TeaCache extractors to more tightly integrate with .forward
 
     # 1. Model specific preprocessing
-    # TODO - fix sequence parallelism
     sp_size = module.parallel_config.sequence_parallel_size
+    # Store SP size in forward context for sub-modules to access
     get_forward_context().sequence_parallel_size = sp_size
+
+    if sp_size > 1:
+        sp_world_size = get_sequence_parallel_world_size()
+        sp_rank = get_sequence_parallel_rank()
+        original_shape = hidden_states.shape
+        hidden_states = torch.chunk(hidden_states, sp_world_size, dim=1)[sp_rank]
+        # LongCat uses dual-stream (text + image) with joint attention
+        # Text embeddings should be replicated across SP ranks for correctness
+        get_forward_context().split_text_embed_in_sp = False
+        # Debug log (only first forward)
+        if not hasattr(module, "_sp_forward_logged"):
+            module._sp_forward_logged = True
+            logger.info(
+                f"[LongCat Transformer] SP enabled: sp_size={sp_size}, world_size={sp_world_size}, "
+                f"rank={sp_rank}, original_shape={original_shape}, chunked_shape={hidden_states.shape}"
+            )
+    else:
+        if not hasattr(module, "_sp_forward_logged"):
+            module._sp_forward_logged = True
+            logger.info(f"[LongCat Transformer] SP disabled: sp_size={sp_size}")
 
     hidden_states = module.x_embedder(hidden_states)
 
@@ -748,7 +776,45 @@ def extract_longcat_context(
     encoder_hidden_states = module.context_embedder(encoder_hidden_states)
 
     ids = torch.cat((txt_ids, img_ids), dim=0)
-    image_rotary_emb = module.pos_embed(ids)
+
+    if current_omni_platform.is_npu():
+        freqs_cos, freqs_sin = module.pos_embed(ids.cpu())
+        image_rotary_emb = (freqs_cos.npu(), freqs_sin.npu())
+    else:
+        image_rotary_emb = module.pos_embed(ids)
+
+    # SP: Chunk RoPE embeddings along sequence dimension
+    if module.parallel_config.sequence_parallel_size > 1:
+        sp_world_size = get_sequence_parallel_world_size()
+        sp_rank = get_sequence_parallel_rank()
+        freqs_cos, freqs_sin = image_rotary_emb
+        txt_len = txt_ids.shape[0]
+
+        # Split RoPE into text and image portions
+        # txt_freqs: (txt_seq_len, head_dim) - keep full for all ranks
+        # img_freqs: (img_seq_len, head_dim) -> (img_seq_len // SP, head_dim)
+        txt_freqs_cos = freqs_cos[:txt_len]
+        txt_freqs_sin = freqs_sin[:txt_len]
+        img_freqs_cos = freqs_cos[txt_len:]
+        img_freqs_sin = freqs_sin[txt_len:]
+
+        # Chunk image RoPE for each SP rank
+        # img_freqs_cos: (img_seq_len // SP, head_dim)
+        # img_freqs_sin: (img_seq_len // SP, head_dim)
+        img_freqs_cos = torch.chunk(img_freqs_cos, sp_world_size, dim=0)[sp_rank]
+        img_freqs_sin = torch.chunk(img_freqs_sin, sp_world_size, dim=0)[sp_rank]
+
+        # Optionally chunk text RoPE if split_text_embed_in_sp is True
+        if get_forward_context().split_text_embed_in_sp:
+            txt_freqs_cos = torch.chunk(txt_freqs_cos, sp_world_size, dim=0)[sp_rank]
+            txt_freqs_sin = torch.chunk(txt_freqs_sin, sp_world_size, dim=0)[sp_rank]
+
+        # Reconstruct image_rotary_emb with chunked values
+        # Final shape: (txt_seq_len + img_seq_len // SP, head_dim)
+        image_rotary_emb = (
+            torch.cat([txt_freqs_cos, img_freqs_cos], dim=0),
+            torch.cat([txt_freqs_sin, img_freqs_sin], dim=0),
+        )
 
     # 2. Extract the modulated output from the first mm-DiT block
     first_block = module.transformer_blocks[0]
