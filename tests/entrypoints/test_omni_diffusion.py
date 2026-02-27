@@ -4,8 +4,8 @@ from queue import Empty, Queue
 from typing import Any
 
 import pytest
-from pytest_mock import MockerFixture
 import torch
+from pytest_mock import MockerFixture
 
 from vllm_omni.entrypoints.stage_utils import SHUTDOWN_TASK
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
