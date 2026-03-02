@@ -528,7 +528,6 @@ class LongCatImageTransformer2DModel(nn.Module):
         num_attention_heads = model_config.num_attention_heads
         joint_attention_dim = model_config.joint_attention_dim
         pooled_projection_dim = model_config.pooled_projection_dim
-        axes_dims_rope = model_config.axes_dims_rope if hasattr(model_config, "axes_dims_rope") else [16, 56, 56]
         axes_dims_rope = getattr(model_config, "axes_dims_rope", [16, 56, 56])
         self.out_channels = in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
