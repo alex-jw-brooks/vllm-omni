@@ -209,7 +209,7 @@ class LongCatImageAttention(nn.Module):
             encoder_key = self.norm_added_k(encoder_key)
 
             sp_size = self.parallel_config.sequence_parallel_size
-            if sp_size and sp_size > 1:
+            if sp_size is not None and sp_size > 1:
                 # SP Mode: Use common helper for RoPE + joint attention
                 hidden_states = self._sp_attention_with_rope(
                     img_query=query,
@@ -246,7 +246,13 @@ class LongCatImageAttention(nn.Module):
             sp_size = self.parallel_config.sequence_parallel_size
             text_seq_len = kwargs.get("text_seq_len", None)
 
-            if (sp_size and sp_size > 1) and text_seq_len is not None:
+            if (sp_size is not None and sp_size > 1) and text_seq_len is not None:
+                # Ensure that the SP split won't cause out of bounds issues.
+                if text_seq_len < 0 or text_seq_len > query.shape[1]:
+                    raise ValueError(
+                        f"text_seq_len={text_seq_len} is out of bounds for sequence length {query.shape[1]}"
+                    )
+
                 # SP Mode for single-stream block:
                 # Split QKV into text and image parts, then use common helper
                 hidden_states = self._sp_attention_with_rope(
@@ -308,7 +314,7 @@ class LongCatImageTransformerBlock(nn.Module):
         self.norm1_context = AdaLayerNormZero(dim)
 
         self.attn = LongCatImageAttention(
-            parallel_config,
+            parallel_config=parallel_config,
             query_dim=dim,
             added_kv_proj_dim=dim,
             dim_head=attention_head_dim,
@@ -454,6 +460,11 @@ class RoPEPreparer(nn.Module):
         Returns:
             Tuple of cosine / sine components for text & image
             in the order: (txt_cos, txt_sin, img_cos, img_sin)
+
+            NOTE: careful about output orders if this is refactored in the
+             future; we need to match the _sp_plan indices, since text
+             components (0 & 1) need to be replicated across SP ranks,
+             while image components (2 & 3) must be sharded.
         """
         # Concatenate and compute RoPE for full sequence
         ids = torch.cat((txt_ids, img_ids), dim=0)
@@ -578,7 +589,7 @@ class LongCatImageTransformer2DModel(nn.Module):
         "transformer_blocks.0": {
             "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
         },
-        # Gather at at the last linear projection
+        # Gather at the last linear projection
         "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
     }
 
