@@ -8,6 +8,7 @@ from dataclasses import asdict
 
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 
+from vllm_omni.config.model import OmniModelConfig
 from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs, OmniEngineArgs
 
 
@@ -36,3 +37,26 @@ def test_default_async_config_matches_sync_config():
     # After removing async only keys from our AsyncOmniEngineArgs,
     # we should have the same dict as the OmniEngineArgs.
     assert async_omni_dict == sync_omni_dict
+
+
+def test_sync_config_is_omni():
+    """Ensure create_model_config gives the right type."""
+    cfg = AsyncOmniEngineArgs().create_model_config()
+    assert isinstance(cfg, OmniModelConfig)
+
+
+def test_async_config_is_omni():
+    """Ensure create_model_config gives the right type."""
+    cfg = OmniEngineArgs().create_model_config()
+    assert isinstance(cfg, OmniModelConfig)
+
+
+def test_async_engine_args_mro():
+    """Ensure .mro is correct to prevent issues with config creation."""
+    mro = AsyncOmniEngineArgs.mro()
+    omni_eng_idx = mro.index(OmniEngineArgs)
+    async_args_idx = mro.index(AsyncEngineArgs)
+    # > 0 since the first entry is AsyncOmniEngineArgs
+    assert omni_eng_idx > 0
+    assert async_args_idx > 0
+    assert omni_eng_idx < async_args_idx
