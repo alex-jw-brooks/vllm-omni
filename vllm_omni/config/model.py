@@ -1,13 +1,13 @@
-from dataclasses import field
+from dataclasses import asdict, field
 from typing import Any
 
 from pydantic import ConfigDict
-from vllm.config import ModelConfig
-from vllm.config.multimodal import MMCacheType, MMEncoderTPMode
+from transformers import PretrainedConfig
+from vllm.config import ModelConfig, MultiModalConfig
 from vllm.config.utils import config
+from vllm.engine.arg_utils import EngineArgs
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_text_config
-from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
 import vllm_omni.model_executor.models as me_models
 
@@ -44,6 +44,14 @@ class OmniModelConfig(ModelConfig):
         ...     model_arch="Qwen2_5OmniForConditionalGeneration"
         ... )
     """
+
+    # InitVars from ModelConfig; we explicitly require these because we
+    # leverage the vLLMConfig's post_init to handle (most) settings outside
+    # of the Omni config options.
+    hf_config: PretrainedConfig | None = None
+    """The Hugging Face config of the model."""
+    hf_text_config: PretrainedConfig | None = None
+    """The Hugging Face config of the text model (same as hf_config for text models)."""
 
     stage_id: int = 0
     async_chunk: bool = False
@@ -98,55 +106,21 @@ class OmniModelConfig(ModelConfig):
             )
             return get_hf_text_config(self.hf_config)
 
-    def __post_init__(
-        self,
-        # Multimodal config init vars
-        limit_mm_per_prompt: dict[str, int | dict[str, int]] | None,
-        enable_mm_embeds: bool | None,
-        media_io_kwargs: dict[str, dict[str, Any]] | None,
-        mm_processor_kwargs: dict[str, Any] | None,
-        mm_processor_cache_gb: float | None,
-        mm_processor_cache_type: MMCacheType | None,
-        mm_shm_cache_max_object_size_mb: int | None,
-        mm_encoder_only: bool | None,
-        mm_encoder_tp_mode: MMEncoderTPMode | None,
-        mm_encoder_attn_backend: AttentionBackendEnum | str | None,
-        interleave_mm_strings: bool | None,
-        skip_mm_profiling: bool | None,
-        video_pruning_rate: float | None,
-    ) -> None:
-        # Call parent's __post_init__ to handle all standard ModelConfig initialization
-        super().__post_init__(
-            limit_mm_per_prompt=limit_mm_per_prompt,
-            enable_mm_embeds=enable_mm_embeds,
-            media_io_kwargs=media_io_kwargs,
-            mm_processor_kwargs=mm_processor_kwargs,
-            mm_processor_cache_gb=mm_processor_cache_gb,
-            mm_processor_cache_type=mm_processor_cache_type,
-            mm_shm_cache_max_object_size_mb=mm_shm_cache_max_object_size_mb,
-            mm_encoder_only=mm_encoder_only,
-            mm_encoder_tp_mode=mm_encoder_tp_mode,
-            mm_encoder_attn_backend=mm_encoder_attn_backend,
-            interleave_mm_strings=interleave_mm_strings,
-            skip_mm_profiling=skip_mm_profiling,
-            video_pruning_rate=video_pruning_rate,
-        )
+    def _patch_qwen3_tts(self):
+        talker_cfg = getattr(self.hf_config, "talker_config", None)
+        if isinstance(talker_cfg, dict):
+            pos_per_sec = talker_cfg.get("position_id_per_seconds")
+        else:
+            pos_per_sec = getattr(talker_cfg, "position_id_per_seconds", None)
+        if pos_per_sec is not None:
+            try:
+                fps = float(pos_per_sec)
+            except Exception:
+                fps = None
+            if fps is not None and fps > 0:
+                self.codec_frame_rate_hz = fps
 
-        # Qwen3-TTS: infer codec frame rate from the model config for online serving.
-        if self.codec_frame_rate_hz is None and self.model_arch == "Qwen3TTSTalkerForConditionalGenerationARVLLM":
-            talker_cfg = getattr(self.hf_config, "talker_config", None)
-            if isinstance(talker_cfg, dict):
-                pos_per_sec = talker_cfg.get("position_id_per_seconds")
-            else:
-                pos_per_sec = getattr(talker_cfg, "position_id_per_seconds", None)
-            if pos_per_sec is not None:
-                try:
-                    fps = float(pos_per_sec)
-                except Exception:
-                    fps = None
-                if fps is not None and fps > 0:
-                    self.codec_frame_rate_hz = fps
-
+    def _maybe_override_text_config(self):
         # Override hf_text_config with omni-specific logic for multi-stage models
         # (e.g., thinker_config, talker_config)
         new_hf_text_config = self.draw_hf_text_config()
@@ -159,3 +133,21 @@ class OmniModelConfig(ModelConfig):
             # Reset sliding_window if needed
             if self.disable_sliding_window:
                 self.hf_text_config.sliding_window = None
+
+    @classmethod
+    def from_omni_engine_args(cls, omni_engine_args, **omni_kwargs):
+        # Explicitly call the EngineArgs model creation, since we may
+        # be considering the async subclass of OmniEngineArgs
+        vllm_config = EngineArgs.create_model_config(omni_engine_args)
+        vllm_config.multimodal_config = MultiModalConfig()  # FIXME
+        non_omni_kwargs = asdict(vllm_config)
+
+        # Apply patch overrides for Qwen3 TTS if needed
+        omni_cfg = cls(**non_omni_kwargs, **omni_kwargs)
+        if (
+            omni_cfg.codec_frame_rate_hz is None
+            and omni_cfg.model_arch == "Qwen3TTSTalkerForConditionalGenerationARVLLM"
+        ):
+            omni_cfg._patch_qwen3_tts()
+        omni_cfg._maybe_override_text_config()
+        return omni_cfg
