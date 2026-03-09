@@ -4,8 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import vllm.envs as envs
-from vllm.config import MultiModalConfig
-from vllm.engine.arg_utils import EngineArgs
+from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 from vllm.logger import init_logger
 
 from vllm_omni.config import OmniModelConfig
@@ -116,8 +115,8 @@ class OmniEngineArgs(EngineArgs):
         }
         stage_connector_config["extra"]["stage_id"] = self.stage_id
 
+        # Build the vLLM config first, then use it to create the Omni config.
         vllm_config = super().create_model_config()
-        vllm_config.multimodal_config = MultiModalConfig()
 
         omni_config = OmniModelConfig.from_vllm_config(
             vllm_config=vllm_config,
