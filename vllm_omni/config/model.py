@@ -3,9 +3,8 @@ from typing import Any
 
 from pydantic import ConfigDict
 from transformers import PretrainedConfig
-from vllm.config import ModelConfig, MultiModalConfig
+from vllm.config import ModelConfig
 from vllm.config.utils import config
-from vllm.engine.arg_utils import EngineArgs
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_text_config
 
@@ -135,11 +134,9 @@ class OmniModelConfig(ModelConfig):
                 self.hf_text_config.sliding_window = None
 
     @classmethod
-    def from_omni_engine_args(cls, omni_engine_args, **omni_kwargs):
+    def from_vllm_config(cls, vllm_config, **omni_kwargs):
         # Explicitly call the EngineArgs model creation, since we may
         # be considering the async subclass of OmniEngineArgs
-        vllm_config = EngineArgs.create_model_config(omni_engine_args)
-        vllm_config.multimodal_config = MultiModalConfig()  # FIXME
         non_omni_kwargs = asdict(vllm_config)
 
         # Apply patch overrides for Qwen3 TTS if needed

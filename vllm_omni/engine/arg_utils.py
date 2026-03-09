@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from vllm.config import MultiModalConfig
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 from vllm.logger import init_logger
 
@@ -106,8 +107,12 @@ class OmniEngineArgs(EngineArgs):
         }
         stage_connector_config["extra"]["stage_id"] = self.stage_id
 
-        omni_config = OmniModelConfig.from_omni_engine_args(
-            omni_engine_args=self,
+        vllm_config = super().create_model_config()
+        vllm_config.multimodal_config = MultiModalConfig()
+
+        omni_config = OmniModelConfig.from_vllm_config(
+            vllm_config=vllm_config,
+            # All kwargs outside of the vLLM config are Omni related.
             stage_id=self.stage_id,
             async_chunk=self.async_chunk,
             model_stage=self.model_stage,
