@@ -57,6 +57,7 @@ class OmniEngineArgs(EngineArgs):
         engine_output_type: Optional output type specification for the engine.
             Used to route outputs to appropriate processors (e.g., "image",
             "audio", "latents"). If None, output type is inferred.
+        hf_config_name: Optional path to HF config (default: None)
         custom_process_next_stage_input_func: Optional path to a custom function for processing
             inputs from previous stages
             If None, default processing is used.
@@ -132,8 +133,10 @@ class OmniEngineArgs(EngineArgs):
 class AsyncOmniEngineArgs(OmniEngineArgs, AsyncEngineArgs):
     """Async engine arguments for omni models.
 
-    NOTE: Python maintains the inheritance order specified; Since
-    AsyncEngineArgs & OmniEngineArgs are both subclasses of vLLM's
-    EngineArgs, OmniEngineArgs is first, which ensures that we call
-    the methods defined on OmniEngineArgs, and not on EngineArgs.
+    NOTE: Python maintains the inheritance order specified, so we should
+    keep OmniEngineArgs first to ensure that we are invoking the right methods,
+    e.g., `OmniEngineArgs.create_model_config`; for now, this does not
+    matter, since `AsyncEngineArgs` doesn't implement `create_model_config`
+    and both appear before `EngineArgs` in .mro regardless of order,
+    but the current order ensures correct behavior.
     """
