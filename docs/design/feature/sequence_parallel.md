@@ -7,8 +7,7 @@ This section describes how to add Sequence Parallel (SP) to a diffusion transfor
 ## Table of Contents
 
 - [Overview](#overview)
-- [Approach 1: Non-Intrusive `_sp_plan` (Recommended)](#approach-1-non-intrusive-_sp_plan-recommended)
-- [Approach 2: Intrusive Modification (For Complex Cases)](#approach-2-intrusive-modification-for-complex-cases)
+- [Enabling Sequence Parallelism With `_sp_plan`](#enabling-sequence-parallelism-with-_sp_plan)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Reference Implementations](#reference-implementations)
@@ -46,14 +45,10 @@ from vllm_omni.diffusion.distributed.sp_sharding import sp_shard, sp_gather
 
 ---
 
-## Approach 1: Non-Intrusive `_sp_plan` (Recommended)
+## Enabling Sequence Parallelism With `_sp_plan`
 
 The `_sp_plan` mechanism allows SP **without modifying `forward()` logic**. The framework automatically registers hooks to shard inputs and gather outputs at module boundaries.
 
-**When to use:**
-- Standard transformer architectures
-- Tensor operations happen at `nn.Module` boundaries
-- Predictable sharding/gathering patterns
 
 **How it works:**
 1. Declare `_sp_plan` dict in your transformer class
@@ -201,6 +196,36 @@ class TransformerWithRoPE(nn.Module):
     }
 ```
 
+**Pattern 3: Shard RoPE for Dual Stream Attention**
+In some cases, different streams in attention may need to handle sequence parallelism differently. For example, we may want to shard the image embeddings, while replicating the text embeddings to correctly configure joint attention.
+
+```python
+class DualStreamTransformer(nn.Module):
+    """
+    Dual-stream model where we need to replicate the text components, but shard
+    the image components to correctly handle sequence parallelism.
+    """
+    _sp_plan = {
+        # In this case, the rope_preparer returns a tuple of len 4, where the
+        # first 2 items correspond to the text, and the second 2 correspond to
+        # visual inputs, so we only shard the second.
+        "rope_preparer": {
+            # Outputs 0, 1 (text) - NOT sharded (replicated)
+            # Outputs 2, 3 (image) - sharded
+            2: SequenceParallelInput(split_dim=0, expected_dims=2, split_output=True),  # img_cos
+            3: SequenceParallelInput(split_dim=0, expected_dims=2, split_output=True),  # img_sin
+        },
+        # Shard transformer block INPUT
+        "transformer_blocks.0": {
+            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
+        },
+        # Gather at output
+        "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
+    }
+```
+
+NOTE: be careful to test adequately when refactoring classes that take this style of plan, as changing the order of the return values will break sequence parallelism.
+
 ### API Reference
 
 **SequenceParallelInput Parameters:**
@@ -236,37 +261,6 @@ class TransformerWithRoPE(nn.Module):
 | `"param_name"` (str) | `False` | Shard **input parameter** by name |
 | `0`, `1`, ... (int) | `True` | Shard **output tuple** by index |
 
----
-
-## Approach 2: Intrusive Modification (For Complex Cases)
-
-For models with dynamic sharding logic that cannot be expressed via `_sp_plan`, manually insert shard/gather calls. Importantly, when taking this approach, be careful to ensure that you correctly manage the `_sp_shard_depth`; if the sequence parallel shard depth is 0, Ulysses will not be used.
-
-
-**When to use:**
-- Dynamic/conditional sharding logic
-- Complex tensor manipulations that can't be encapsulated
-- Temporary workaround during development
-
-```python
-from vllm_omni.diffusion.distributed.sp_sharding import sp_shard, sp_gather
-
-def forward(self, hidden_states, ...):
-    if self.parallel_config.sequence_parallel_size > 1:
-        # <Increment the _sp_shard_depth on the fwd context>
-        hidden_states = sp_shard(hidden_states, dim=1)
-
-    # ... computation ...
-
-    if self.parallel_config.sequence_parallel_size > 1:
-        output = sp_gather(output, dim=1)
-        # <Decrement the _sp_shard_depth on the fwd context>
-
-    return output
-```
-Note that currently, `sp_shard` / `sp_gather` do *not* automatically manage the `_sp_shard_depth`; you need to be careful to manage it yourself.
-
----
 
 ## Testing
 
@@ -439,6 +433,7 @@ Complete examples in the codebase:
 
 | Model | Path | Pattern | Notes |
 |-------|------|---------|-------|
+| **LongCat** | `vllm_omni/diffusion/models/longcat_image/longcat_image_transformer.py` | Dual-stream | Text components replicated, image components sharded |
 | **Qwen-Image** | `vllm_omni/diffusion/models/qwen_image/qwen_image_transformer.py` | Dual-stream + preprocessing | auto_pad, separate RoPE |
 | **Wan2.2** | `vllm_omni/diffusion/models/wan2_2/wan2_2_transformer.py` | Dual-Transformer + RoPE | Video transformer |
 | **Z-Image** | `vllm_omni/diffusion/models/z_image/z_image_transformer.py` | Unified sequence | Concatenated input |
@@ -452,9 +447,8 @@ Complete examples in the codebase:
 
 Adding Sequence Parallel support to a transformer:
 
-1. ✅ **Choose approach** - Use `_sp_plan` for standard cases, intrusive modification for complex cases
-2. ✅ **Identify sharding boundaries** - Where should tensors be split/gathered?
-3. ✅ **Extract inline operations** - Move `torch.cat`, `pad_sequence`, etc. to submodules
-4. ✅ **Define `_sp_plan`** - Declare shard/gather points as class attribute
-5. ✅ **Use `auto_pad` for variable lengths** - Support non-uniform sequences
-6. ✅ **Test** - Verify with different `ulysses_degree` and `ring_degree` combinations
+1. ✅ **Identify sharding boundaries** - Where should tensors be split/gathered? and which module boundaries need to be moved facilitate this?
+2. ✅ **Extract inline operations** - Move `torch.cat`, `pad_sequence`, etc. to submodules
+3. ✅ **Define `_sp_plan`** - Declare shard/gather points as class attribute
+4. ✅ **Use `auto_pad` for variable lengths** - Support non-uniform sequences
+5. ✅ **Test** - Verify with different `ulysses_degree` and `ring_degree` combinations

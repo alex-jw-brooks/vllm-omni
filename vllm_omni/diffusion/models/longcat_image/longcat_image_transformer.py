@@ -23,6 +23,7 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,
     SequenceParallelOutput,
 )
+from vllm_omni.diffusion.forward_context import get_forward_context
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
@@ -245,8 +246,14 @@ class LongCatImageAttention(nn.Module):
             # Check if SP is enabled and we have text_seq_len info
             sp_size = self.parallel_config.sequence_parallel_size
             text_seq_len = kwargs.get("text_seq_len", None)
+            forward_ctx = get_forward_context()
 
-            if (sp_size is not None and sp_size > 1) and text_seq_len is not None:
+            if (
+                sp_size is not None
+                and sp_size > 1
+                and not forward_ctx.split_text_embed_in_sp
+                and text_seq_len is not None
+            ):
                 # Ensure that the SP split won't cause out of bounds issues.
                 if text_seq_len < 0 or text_seq_len > query.shape[1]:
                     raise ValueError(
@@ -665,7 +672,11 @@ class LongCatImageTransformer2DModel(nn.Module):
         guidance: torch.Tensor = None,
         return_dict: bool = True,
     ) -> torch.FloatTensor | Transformer2DModelOutput:
-        # Input projection (will be sharded by _sp_plan)
+        fwd_context = get_forward_context()
+        sp_size = self.parallel_config.sequence_parallel_size
+        if sp_size is not None and sp_size > 1:
+            fwd_context.split_text_embed_in_sp = False
+
         hidden_states = self.x_embedder(hidden_states)
 
         timestep = timestep.to(hidden_states.dtype) * 1000
@@ -685,7 +696,6 @@ class LongCatImageTransformer2DModel(nn.Module):
             torch.cat([txt_sin, img_sin], dim=0),
         )
 
-        # Transformer blocks (hidden_states automatically sharded by _sp_plan)
         for block in self.transformer_blocks:
             encoder_hidden_states, hidden_states = block(
                 hidden_states=hidden_states,
