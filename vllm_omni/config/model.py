@@ -51,9 +51,9 @@ class OmniModelConfig(ModelConfig):
          ... )
     """
 
-    # InitVars from ModelConfig; we explicitly require these because we
-    # leverage the ModelConfig's's post_init to handle (most) settings
-    # outside of the Omni config options.
+    # Fields that set init=False from ModelConfig; we explicitly require'
+    # these because we leverage the ModelConfig's's post_init to handle
+    # (most) settings outside of the Omni config options.
     hf_config: PretrainedConfig | None = None
     """The Hugging Face config of the model."""
     hf_text_config: PretrainedConfig | None = None
@@ -153,7 +153,10 @@ class OmniModelConfig(ModelConfig):
         # be considering the async subclass of OmniEngineArgs
         non_omni_kwargs = asdict(model_config)
 
-        # Apply patch overrides for Qwen3 TTS if needed
+        # Apply patch overrides for Qwen3 TTS if needed.
+        # NOTE: this technically does call the post init hook
+        # ModelConfig again; avoiding this would be a nice optimization
+        # in the future.
         omni_cfg = cls(**non_omni_kwargs, **omni_kwargs)
         if (
             omni_cfg.codec_frame_rate_hz is None
