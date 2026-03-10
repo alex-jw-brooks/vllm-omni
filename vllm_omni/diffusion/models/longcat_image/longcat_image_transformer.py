@@ -585,16 +585,16 @@ class LongCatImageTransformer2DModel(nn.Module):
 
     # Sequence Parallelism for LongCat (following diffusers' _cp_plan pattern)
     _sp_plan = {
+        "": {
+            # Chunk the hidden states prior to the forward()
+            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
+        },
         # Shard RoPE image embeddings after rope_preparer computes them
         # Outputs 0, 1 are text components, so they aren't sharded
         # Outputs 2, 3 are image components and are sharded
         "rope_preparer": {
             2: SequenceParallelInput(split_dim=0, expected_dims=2, split_output=True),
             3: SequenceParallelInput(split_dim=0, expected_dims=2, split_output=True),
-        },
-        # Shard hidden_states at the first transformer block's input
-        "transformer_blocks.0": {
-            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
         },
         # Gather at the last linear projection
         "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
@@ -677,6 +677,7 @@ class LongCatImageTransformer2DModel(nn.Module):
         if sp_size is not None and sp_size > 1:
             fwd_context.split_text_embed_in_sp = False
 
+        # Hidden states are sharded prior to forward() when sp is active
         hidden_states = self.x_embedder(hidden_states)
 
         timestep = timestep.to(hidden_states.dtype) * 1000
