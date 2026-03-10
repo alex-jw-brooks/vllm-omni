@@ -6,10 +6,13 @@ explicitly patch values that differ from vLLM.
 
 from dataclasses import asdict
 
+import pytest
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 
 from vllm_omni.config.model import OmniModelConfig
 from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs, OmniEngineArgs
+
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 def test_default_async_engine_args_match_sync_engine_args():
@@ -41,13 +44,13 @@ def test_default_async_engine_args_match_sync_engine_args():
 
 def test_sync_config_is_omni():
     """Ensure create_model_config gives the right type."""
-    cfg = AsyncOmniEngineArgs().create_model_config()
+    cfg = OmniEngineArgs().create_model_config()
     assert isinstance(cfg, OmniModelConfig)
 
 
 def test_async_config_is_omni():
-    """Ensure create_model_config gives the right type."""
-    cfg = OmniEngineArgs().create_model_config()
+    """Ensure create_model_config gives the right type (async args)."""
+    cfg = AsyncOmniEngineArgs().create_model_config()
     assert isinstance(cfg, OmniModelConfig)
 
 
