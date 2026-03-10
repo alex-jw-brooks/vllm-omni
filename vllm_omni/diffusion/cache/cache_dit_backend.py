@@ -14,7 +14,14 @@ from typing import Any, Optional
 
 import cache_dit
 import torch
-from cache_dit import BlockAdapter, DBCacheConfig, ForwardPattern, ParamsModifier, TaylorSeerCalibratorConfig
+from cache_dit import (
+    BlockAdapter,
+    CalibratorConfig,
+    DBCacheConfig,
+    ForwardPattern,
+    ParamsModifier,
+    TaylorSeerCalibratorConfig,
+)
 from cache_dit.caching.block_adapters import FakeDiffusionPipeline
 from cache_dit.caching.cache_adapters.cache_adapter import CachedAdapter
 from cache_dit.caching.cache_blocks.pattern_0_1_2 import CachedBlocks_Pattern_0_1_2
@@ -42,6 +49,18 @@ def cache_summary(pipeline: Any, details: bool = True) -> None:
 # Models in this registry require custom handling (e.g., dual-transformer architectures)
 # Will be populated after function definitions
 CUSTOM_DIT_ENABLERS: dict[str, Callable] = {}
+
+
+def _resolve_calibrator_config(cache_config: DiffusionCacheConfig) -> CalibratorConfig | None:
+    """Resolves the Calibrator subconfig For DiT cache."""
+    calibrator = None
+    if cache_config.enable_taylorseer:
+        taylorseer_order = cache_config.taylorseer_order
+        calibrator = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
+        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
+    # In the future, more calibrators will likely be added to DiT Cache,
+    # e.g., focal; handle them generically here.
+    return calibrator
 
 
 def _build_db_cache_config(cache_config: Any) -> DBCacheConfig:
@@ -326,17 +345,7 @@ def enable_cache_for_longcat_image(pipeline: Any, cache_config: Any) -> Callable
     # Build DBCacheConfig for transformer
     db_cache_config = _build_db_cache_config(cache_config)
 
-    calibrator = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    # Build ParamsModifier for transformer
-    modifier = ParamsModifier(
-        cache_config=db_cache_config,
-        calibrator_config=calibrator,
-    )
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     logger.info(
         f"Enabling cache-dit on LongCatImage transformer with BlockAdapter: "
@@ -355,10 +364,9 @@ def enable_cache_for_longcat_image(pipeline: Any, cache_config: Any) -> Callable
                     pipeline.transformer.single_transformer_blocks,
                 ],
                 forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
-                params_modifiers=[modifier],
-                has_separate_cfg=True,
             )
         ),
+        calibrator_config=calibrator_config,
         cache_config=db_cache_config,
     )
 
@@ -401,17 +409,7 @@ def enable_cache_for_flux(pipeline: Any, cache_config: Any) -> Callable[[int], N
     # Build DBCacheConfig for transformer
     db_cache_config = _build_db_cache_config(cache_config)
 
-    calibrator = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    # Build ParamsModifier for transformer
-    modifier = ParamsModifier(
-        cache_config=db_cache_config,
-        calibrator_config=calibrator,
-    )
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     logger.info(
         f"Enabling cache-dit on Flux transformer with BlockAdapter: "
@@ -430,9 +428,10 @@ def enable_cache_for_flux(pipeline: Any, cache_config: Any) -> Callable[[int], N
                     pipeline.transformer.single_transformer_blocks,
                 ],
                 forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
-                params_modifiers=[modifier],
+                # params_modifiers=[modifier],
             )
         ),
+        calibrator_config=calibrator_config,
         cache_config=db_cache_config,
     )
 
@@ -478,17 +477,7 @@ def enable_cache_for_flux2_klein(pipeline: Any, cache_config: Any) -> Callable[[
     # and the rationale (quality degradation at Fn=1) only lives in flux2_klein.
     db_cache_config.Fn_compute_blocks = 2
 
-    calibrator = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    # Build ParamsModifier for transformer
-    modifier = ParamsModifier(
-        cache_config=db_cache_config,
-        calibrator_config=calibrator,
-    )
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     logger.info(
         f"Enabling cache-dit on Flux2-Klein transformer with BlockAdapter: "
@@ -507,10 +496,10 @@ def enable_cache_for_flux2_klein(pipeline: Any, cache_config: Any) -> Callable[[
                     pipeline.transformer.single_transformer_blocks,
                 ],
                 forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_2],
-                params_modifiers=[modifier],
             )
         ),
         cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
     )
 
     def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
@@ -621,17 +610,7 @@ def enable_cache_for_sd3(pipeline: Any, cache_config: Any) -> Callable[[int], No
     # Build DBCacheConfig for transformer
     db_cache_config = _build_db_cache_config(cache_config)
 
-    calibrator = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    # Build ParamsModifier for transformer
-    modifier = ParamsModifier(
-        cache_config=db_cache_config,
-        calibrator_config=calibrator,
-    )
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     logger.info(
         f"Enabling cache-dit on StableDiffusion3 transformer with BlockAdapter: "
@@ -647,10 +626,11 @@ def enable_cache_for_sd3(pipeline: Any, cache_config: Any) -> Callable[[int], No
                 transformer=pipeline.transformer,
                 blocks=pipeline.transformer.transformer_blocks,
                 forward_pattern=ForwardPattern.Pattern_1,
-                params_modifiers=[modifier],
+                # params_modifiers=[modifier],
             )
         ),
         cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
     )
 
     def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
@@ -685,11 +665,7 @@ def enable_cache_for_ltx2(pipeline: Any, cache_config: Any) -> Callable[[int], N
 
     db_cache_config = _build_db_cache_config(cache_config)
 
-    calibrator_config = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     blocks = transformer.transformer_blocks
 
@@ -749,11 +725,7 @@ def enable_cache_for_dit(pipeline: Any, cache_config: Any) -> Callable[[int], No
     db_cache_config = _build_db_cache_config(cache_config)
 
     # Build calibrator config if TaylorSeer is enabled
-    calibrator_config = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     logger.info(
         f"Enabling cache-dit on transformer: "
@@ -1337,11 +1309,7 @@ def enable_cache_for_bagel(pipeline: Any, cache_config: Any) -> Callable[[int], 
     db_cache_config = _build_db_cache_config(cache_config)
 
     # Build calibrator config if TaylorSeer is enabled
-    calibrator_config = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     # Access the transformer: BagelPipeline -> Qwen2MoTForCausalLM -> Qwen2MoTModel
     # BagelPipeline has self.language_model which is Qwen2MoTForCausalLM
