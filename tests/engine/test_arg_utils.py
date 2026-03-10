@@ -12,7 +12,7 @@ from vllm_omni.config.model import OmniModelConfig
 from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs, OmniEngineArgs
 
 
-def test_default_async_config_matches_sync_config():
+def test_default_async_engine_args_match_sync_engine_args():
     """Ensure that all keys/values in sync omni engine args are aligned
     with async omni engine args, and that any keys in the async omni engine
     args not in the sync omni args are aligned with vLLM's asyncEngineArgs.
