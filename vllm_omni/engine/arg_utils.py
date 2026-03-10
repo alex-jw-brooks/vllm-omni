@@ -108,10 +108,10 @@ class OmniEngineArgs(EngineArgs):
         stage_connector_config["extra"]["stage_id"] = self.stage_id
 
         # Build the vLLM config first, then use it to create the Omni config.
-        vllm_config = super().create_model_config()
+        model_config = super().create_model_config()
 
-        omni_config = OmniModelConfig.from_vllm_config(
-            vllm_config=vllm_config,
+        omni_config = OmniModelConfig.from_vllm_model_config(
+            model_config=model_config,
             # All kwargs outside of the vLLM config are Omni related.
             stage_id=self.stage_id,
             async_chunk=self.async_chunk,
@@ -125,7 +125,6 @@ class OmniEngineArgs(EngineArgs):
             omni_kv_config=self.omni_kv_config,
             task_type=self.task_type,
         )
-        omni_config.hf_config.architectures = omni_config.architectures
         return omni_config
 
 
