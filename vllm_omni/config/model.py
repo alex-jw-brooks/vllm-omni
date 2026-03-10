@@ -113,6 +113,9 @@ class OmniModelConfig(ModelConfig):
             return get_hf_text_config(self.hf_config)
 
     def _patch_qwen3_tts(self):
+        """Patches the value of `position_id_per_seconds` in Qwen3's
+        TTS's talker_config to the codec_frame_rate_hz.
+        """
         talker_cfg = getattr(self.hf_config, "talker_config", None)
         if isinstance(talker_cfg, dict):
             pos_per_sec = talker_cfg.get("position_id_per_seconds")
@@ -127,8 +130,9 @@ class OmniModelConfig(ModelConfig):
                 self.codec_frame_rate_hz = fps
 
     def _maybe_override_text_config(self):
-        # Override hf_text_config with omni-specific logic for multi-stage models
-        # (e.g., thinker_config, talker_config)
+        """Override hf_text_config with omni-specific logic for multi-stage
+        models (e.g., thinker_config, talker_config).
+        """
         new_hf_text_config = self.draw_hf_text_config()
         if new_hf_text_config is not self.hf_text_config:
             self.hf_text_config = new_hf_text_config
