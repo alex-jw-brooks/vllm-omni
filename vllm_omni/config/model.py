@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import ConfigDict
 from transformers import PretrainedConfig
-from vllm.config import ModelConfig, VllmConfig
+from vllm.config import ModelConfig
 from vllm.config.utils import config
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_text_config
@@ -43,7 +43,7 @@ class OmniModelConfig(ModelConfig):
     of the logic for handling values is in the ModelConfig's __post_init__.
 
        Example:
-         >>> config = OmniModelConfig.from_vllm_config(
+         >>> config = OmniModelConfig.from_vllm_model_config(
          ...     vllm_config,
          ...     stage_id=0,
          ...     model_stage="thinker",
@@ -52,8 +52,8 @@ class OmniModelConfig(ModelConfig):
     """
 
     # InitVars from ModelConfig; we explicitly require these because we
-    # leverage the vLLMConfig's post_init to handle (most) settings outside
-    # of the Omni config options.
+    # leverage the ModelConfig's's post_init to handle (most) settings
+    # outside of the Omni config options.
     hf_config: PretrainedConfig | None = None
     """The Hugging Face config of the model."""
     hf_text_config: PretrainedConfig | None = None
@@ -143,13 +143,13 @@ class OmniModelConfig(ModelConfig):
                 self.hf_text_config.sliding_window = None
 
     @classmethod
-    def from_vllm_config(cls, vllm_config: VllmConfig, **omni_kwargs):
+    def from_vllm_model_config(cls, model_config: ModelConfig, **omni_kwargs):
         """Create an OmniModelConfig from a vLLM ModelConfig & omni
         specific kwargs.
         """
         # Explicitly call the EngineArgs model creation, since we may
         # be considering the async subclass of OmniEngineArgs
-        non_omni_kwargs = asdict(vllm_config)
+        non_omni_kwargs = asdict(model_config)
 
         # Apply patch overrides for Qwen3 TTS if needed
         omni_cfg = cls(**non_omni_kwargs, **omni_kwargs)
@@ -159,4 +159,8 @@ class OmniModelConfig(ModelConfig):
         ):
             omni_cfg._patch_qwen3_tts()
         omni_cfg._maybe_override_text_config()
+
+        if omni_cfg.hf_config is not None:
+            omni_cfg.hf_config.architectures = omni_cfg.architectures
+
         return omni_cfg
