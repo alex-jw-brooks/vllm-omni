@@ -468,10 +468,10 @@ class RoPEPreparer(nn.Module):
             Tuple of cosine / sine components for text & image
             in the order: (txt_cos, txt_sin, img_cos, img_sin)
 
-            NOTE: careful about output orders if this is refactored in the
-             future; we need to match the _sp_plan indices, since text
-             components (0 & 1) need to be replicated across SP ranks,
-             while image components (2 & 3) must be sharded.
+        NOTE: careful about output orders if this is refactored in the
+        future; we need to match the _sp_plan indices, since text
+        components (0 & 1) need to be replicated across SP ranks,
+        while image components (2 & 3) must be sharded.
         """
         # Concatenate and compute RoPE for full sequence
         ids = torch.cat((txt_ids, img_ids), dim=0)
