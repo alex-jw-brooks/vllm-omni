@@ -51,8 +51,8 @@ class OmniModelConfig(ModelConfig):
          ... )
     """
 
-    # Fields that set init=False from ModelConfig; we explicitly require'
-    # these because we leverage the ModelConfig's's post_init to handle
+    # Fields that set init=False in ModelConfig; we explicitly require
+    # these because we leverage the ModelConfig's post_init to handle
     # (most) settings outside of the Omni config options.
     hf_config: PretrainedConfig | None = None
     """The Hugging Face config of the model."""
