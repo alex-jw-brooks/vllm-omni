@@ -136,7 +136,45 @@ def _build_db_cache_config(cache_config: Any) -> DBCacheConfig:
     )
 
 
-def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
+def enable_cache_for_dit(
+    pipeline: Any,
+    cache_config: Any,
+    block_adapter: BlockAdapter | None = None,
+) -> refresh_cache_context_func:
+    """Enable cache-dit for regular single-transformer DiT models.
+
+    Args:
+        pipeline: The diffusion pipeline instance.
+        cache_config: DiffusionCacheConfig instance with cache configuration.
+        block_adapter: Custom block adapters for specific model architectures.
+
+    Returns:
+        A refresh function that can be called to update cache context with new num_inference_steps.
+    """
+    # Build DBCacheConfig with optional SCM support
+    db_cache_config = _build_db_cache_config(cache_config)
+
+    # Build calibrator config if TaylorSeer is enabled
+    calibrator_config = _resolve_calibrator_config(cache_config)
+
+    logger.info(
+        f"Enabling cache-dit on transformer: "
+        f"Fn={db_cache_config.Fn_compute_blocks}, "
+        f"Bn={db_cache_config.Bn_compute_blocks}, "
+        f"W={db_cache_config.max_warmup_steps}, "
+    )
+
+    # Enable cache-dit on the transformer
+    cache_dit.enable_cache(
+        pipeline.transformer if block_adapter is None else block_adapter,
+        cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
+    )
+
+    return build_cache_context_refresh(cache_config)
+
+
+def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
     """Enable cache-dit for Wan2.2 single or dual-transformer architecture.
 
     Wan2.2 can use single or dual transformers (transformer and transformer_2) that need
@@ -395,35 +433,19 @@ def enable_cache_for_longcat_image(pipeline: Any, cache_config: Any) -> refresh_
         pipeline: The LongCatImage pipeline instance.
         cache_config: DiffusionCacheConfig instance with cache configuration.
     """
-    # Build DBCacheConfig for transformer
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = _resolve_calibrator_config(cache_config)
-
-    logger.info(
-        f"Enabling cache-dit on LongCatImage transformer with BlockAdapter: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
+    block_adapter = BlockAdapter(
+        transformer=pipeline.transformer,
+        blocks=[
+            pipeline.transformer.transformer_blocks,
+            pipeline.transformer.single_transformer_blocks,
+        ],
+        forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
     )
-
-    # Enable cache-dit using BlockAdapter for transformer
-    cache_dit.enable_cache(
-        (
-            BlockAdapter(
-                transformer=pipeline.transformer,
-                blocks=[
-                    pipeline.transformer.transformer_blocks,
-                    pipeline.transformer.single_transformer_blocks,
-                ],
-                forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
-            )
-        ),
-        calibrator_config=calibrator_config,
-        cache_config=db_cache_config,
+    return enable_cache_for_dit(
+        pipeline,
+        cache_config,
+        block_adapter=block_adapter,
     )
-
-    return build_cache_context_refresh(cache_config)
 
 
 def enable_cache_for_flux(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
@@ -436,35 +458,20 @@ def enable_cache_for_flux(pipeline: Any, cache_config: Any) -> refresh_cache_con
         A refresh function that can be called with a new ``num_inference_steps``
         to update the cache context for the pipeline.
     """
-    # Build DBCacheConfig for transformer
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = _resolve_calibrator_config(cache_config)
-
-    logger.info(
-        f"Enabling cache-dit on Flux transformer with BlockAdapter: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
+    block_adapter = BlockAdapter(
+        transformer=pipeline.transformer,
+        blocks=[
+            pipeline.transformer.transformer_blocks,
+            pipeline.transformer.single_transformer_blocks,
+        ],
+        forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
     )
 
-    # Enable cache-dit using BlockAdapter for transformer
-    cache_dit.enable_cache(
-        (
-            BlockAdapter(
-                transformer=pipeline.transformer,
-                blocks=[
-                    pipeline.transformer.transformer_blocks,
-                    pipeline.transformer.single_transformer_blocks,
-                ],
-                forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
-            )
-        ),
-        calibrator_config=calibrator_config,
-        cache_config=db_cache_config,
+    return enable_cache_for_dit(
+        pipeline,
+        cache_config,
+        block_adapter=block_adapter,
     )
-
-    return build_cache_context_refresh(cache_config)
 
 
 def enable_cache_for_flux2_klein(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
@@ -588,66 +595,37 @@ def enable_cache_for_sd3(pipeline: Any, cache_config: Any) -> refresh_cache_cont
         pipeline: The StableDiffusion3 pipeline instance.
         cache_config: DiffusionCacheConfig instance with cache configuration.
     """
-    # Build DBCacheConfig for transformer
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = _resolve_calibrator_config(cache_config)
-
-    logger.info(
-        f"Enabling cache-dit on StableDiffusion3 transformer with BlockAdapter: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
+    block_adapter = BlockAdapter(
+        transformer=pipeline.transformer,
+        blocks=pipeline.transformer.transformer_blocks,
+        forward_pattern=ForwardPattern.Pattern_1,
     )
-
-    # Enable cache-dit using BlockAdapter for transformer
-    cache_dit.enable_cache(
-        (
-            BlockAdapter(
-                transformer=pipeline.transformer,
-                blocks=pipeline.transformer.transformer_blocks,
-                forward_pattern=ForwardPattern.Pattern_1,
-            )
-        ),
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
+    return enable_cache_for_dit(
+        pipeline,
+        cache_config,
+        block_adapter=block_adapter,
     )
-
-    return build_cache_context_refresh(cache_config)
 
 
 def enable_cache_for_ltx2(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
     """Enable cache-dit for LTX2 pipelines (audio-video transformer blocks)."""
     transformer = get_transformer_from_pipeline(pipeline)
 
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = _resolve_calibrator_config(cache_config)
-
     blocks = transformer.transformer_blocks
 
-    logger.info(
-        f"Enabling cache-dit on LTX2 transformer: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
+    block_adapter = BlockAdapter(
+        transformer=transformer,
+        blocks=blocks,
+        # LTX2 blocks return (hidden_states, audio_hidden_states)
+        forward_pattern=ForwardPattern.Pattern_0,
+        # Treat audio_hidden_states as encoder_hidden_states in Pattern_0
+        check_forward_pattern=False,
     )
-
-    cache_dit.enable_cache(
-        BlockAdapter(
-            transformer=transformer,
-            blocks=blocks,
-            # LTX2 blocks return (hidden_states, audio_hidden_states)
-            forward_pattern=ForwardPattern.Pattern_0,
-            # Treat audio_hidden_states as encoder_hidden_states in Pattern_0
-            check_forward_pattern=False,
-            has_separate_cfg=True,
-        ),
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
+    return enable_cache_for_dit(
+        pipeline,
+        cache_config,
+        block_adapter=block_adapter,
     )
-
-    return build_cache_context_refresh(cache_config)
 
 
 def enable_cache_for_dit(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
@@ -680,8 +658,78 @@ def enable_cache_for_dit(pipeline: Any, cache_config: Any) -> refresh_cache_cont
         cache_config=db_cache_config,
         calibrator_config=calibrator_config,
     )
-
     return build_cache_context_refresh(cache_config)
+
+
+
+def enable_cache_for_hunyuan_image3(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
+    """Enable cache-dit for HunyuanImage3 pipeline.
+
+    HunyuanImage3 stores its main transformer stack at ``pipeline.model`` with
+    decoder blocks in ``pipeline.model.layers``.
+    """
+    db_cache_config = _build_db_cache_config(cache_config)
+
+    calibrator_config = None
+    if cache_config.enable_taylorseer:
+        taylorseer_order = cache_config.taylorseer_order
+        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
+        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
+
+    transformer = getattr(pipeline, "model", None)
+    if transformer is None or not hasattr(transformer, "layers"):
+        raise ValueError(
+            f"HunyuanImage3 cache-dit enabler expects pipeline.model.layers, got pipeline={pipeline.__class__.__name__}"
+        )
+
+    logger.info(
+        f"Enabling cache-dit on HunyuanImage3 model: "
+        f"Fn={db_cache_config.Fn_compute_blocks}, "
+        f"Bn={db_cache_config.Bn_compute_blocks}, "
+        f"W={db_cache_config.max_warmup_steps}, "
+    )
+    # HunyuanImage3 decoder layers are single-stream `hidden_states` blocks
+    # (`HunyuanImage3DecoderLayer.forward(hidden_states, ...)`) while caller
+    # still reads outputs as tuple (`layer_outputs[0]`). Pattern_4 matches this:
+    # hidden-only input with hidden-first tuple output.
+    modifier = ParamsModifier(
+        cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
+    )
+
+    cache_dit.enable_cache(
+        BlockAdapter(
+            transformer=transformer,
+            blocks=transformer.layers,
+            forward_pattern=ForwardPattern.Pattern_4,
+            params_modifiers=[modifier],
+            check_forward_pattern=False,
+        ),
+        cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
+    )
+
+    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
+        transformer = getattr(pipeline, "model", None)
+        if transformer is None:
+            raise ValueError("HunyuanImage3 cache-dit refresh expects pipeline.model to exist.")
+        if cache_config.scm_steps_mask_policy is None:
+            cache_dit.refresh_context(transformer, num_inference_steps=num_inference_steps, verbose=verbose)
+        else:
+            cache_dit.refresh_context(
+                transformer,
+                cache_config=DBCacheConfig().reset(
+                    num_inference_steps=num_inference_steps,
+                    steps_computation_mask=cache_dit.steps_mask(
+                        mask_policy=cache_config.scm_steps_mask_policy,
+                        total_steps=num_inference_steps,
+                    ),
+                    steps_computation_policy=cache_config.scm_steps_policy,
+                ),
+                verbose=verbose,
+            )
+
+    return refresh_cache_context
 
 
 class BagelCachedContextManager(CachedContextManager):
