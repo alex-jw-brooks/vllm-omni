@@ -272,7 +272,7 @@ NOTE: be careful to test adequately when refactoring classes that take this styl
 
 ## Approach 2: Intrusive Modification (For Complex Cases)
 
-For models with dynamic sharding logic that cannot be expressed via `_sp_plan`, manually insert shard/gather calls. 
+For models with dynamic sharding logic that cannot be expressed via `_sp_plan`, manually insert shard/gather calls.
 
 
 **When to use:**
