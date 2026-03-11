@@ -187,6 +187,8 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_co
     Returns:
         A refresh function that can be called to update cache context with new num_inference_steps.
     """
+    # Build DBCacheConfig with optional SCM support
+    db_cache_config = _build_db_cache_config(cache_config)
 
     if getattr(pipeline, "transformer_2", None) is None:
         logger.info("transformer_2 not found, enabling cache-dit for single transformer mode")
@@ -256,15 +258,7 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_co
             ],
             has_separate_cfg=True,
         ),
-        cache_config=DBCacheConfig(
-            Fn_compute_blocks=cache_config.Fn_compute_blocks,
-            Bn_compute_blocks=cache_config.Bn_compute_blocks,
-            max_warmup_steps=cache_config.max_warmup_steps,
-            max_cached_steps=cache_config.max_cached_steps,
-            max_continuous_cached_steps=cache_config.max_continuous_cached_steps,
-            residual_diff_threshold=cache_config.residual_diff_threshold,
-            num_inference_steps=None,
-        ),
+        cache_config=db_cache_config,
     )
 
     # from https://github.com/vipshop/cache-dit/pull/542
