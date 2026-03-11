@@ -7,7 +7,8 @@ This section describes how to add Sequence Parallel (SP) to a diffusion transfor
 ## Table of Contents
 
 - [Overview](#overview)
-- [Enabling Sequence Parallelism With `_sp_plan`](#enabling-sequence-parallelism-with-_sp_plan)
+- [Approach 1: Non-Intrusive `_sp_plan` (Recommended)](#approach-1-non-intrusive-_sp_plan-recommended)
+- [Approach 2: Intrusive Modification (For Complex Cases)](#approach-2-intrusive-modification-for-complex-cases)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Reference Implementations](#reference-implementations)
@@ -45,10 +46,16 @@ from vllm_omni.diffusion.distributed.sp_sharding import sp_shard, sp_gather
 
 ---
 
-## Enabling Sequence Parallelism With `_sp_plan`
+## Approach 1: Non-Intrusive `_sp_plan` (Recommended)
 
 The `_sp_plan` mechanism allows SP **without modifying `forward()` logic**. The framework automatically registers hooks to shard inputs and gather outputs at module boundaries.
 
+**When to use:**
+- Standard transformer architectures
+- Tensor operations happen at `nn.Module` boundaries
+- Predictable sharding/gathering patterns
+
+This is the ideal approach for integrating sequence parallelism into new models, as it is easier to maintain and ensure compatibility with other types of acceleration.
 
 **How it works:**
 1. Declare `_sp_plan` dict in your transformer class
@@ -261,6 +268,36 @@ NOTE: be careful to test adequately when refactoring classes that take this styl
 | `"param_name"` (str) | `False` | Shard **input parameter** by name |
 | `0`, `1`, ... (int) | `True` | Shard **output tuple** by index |
 
+---
+
+## Approach 2: Intrusive Modification (For Complex Cases)
+
+For models with dynamic sharding logic that cannot be expressed via `_sp_plan`, manually insert shard/gather calls. Importantly, when taking this approach, be careful to ensure that you correctly manage the `_sp_shard_depth`; if the sequence parallel shard depth is 0, Ulysses will not be used.
+
+
+**When to use:**
+- Dynamic/conditional sharding logic
+- Complex tensor manipulations that can't be encapsulated
+- Temporary workaround during development
+
+```python
+from vllm_omni.diffusion.distributed.sp_sharding import sp_shard, sp_gather
+
+def forward(self, hidden_states, ...):
+    if self.parallel_config.sequence_parallel_size > 1:
+        # <Increment the _sp_shard_depth on the fwd context>
+        hidden_states = sp_shard(hidden_states, dim=1)
+
+    # ... computation ...
+
+    if self.parallel_config.sequence_parallel_size > 1:
+        output = sp_gather(output, dim=1)
+        # <Decrement the _sp_shard_depth on the fwd context>
+
+    return output
+```
+
+---
 
 ## Testing
 
@@ -447,8 +484,9 @@ Complete examples in the codebase:
 
 Adding Sequence Parallel support to a transformer:
 
-1. ✅ **Identify sharding boundaries** - Where should tensors be split/gathered? and which module boundaries need to be moved facilitate this?
-2. ✅ **Extract inline operations** - Move `torch.cat`, `pad_sequence`, etc. to submodules
-3. ✅ **Define `_sp_plan`** - Declare shard/gather points as class attribute
-4. ✅ **Use `auto_pad` for variable lengths** - Support non-uniform sequences
-5. ✅ **Test** - Verify with different `ulysses_degree` and `ring_degree` combinations
+1. ✅ **Choose approach** - Use `_sp_plan` for standard cases, intrusive modification for complex cases
+2. ✅ **Identify sharding boundaries** - Where should tensors be split/gathered? And which module boundaries need to be moved to facilitate this?
+3. ✅ **Extract inline operations** - Move `torch.cat`, `pad_sequence`, etc. to submodules
+4. ✅ **Define `_sp_plan`** - Declare shard/gather points as class attribute
+5. ✅ **Use `auto_pad` for variable lengths** - Support non-uniform sequences
+6. ✅ **Test** - Verify with different `ulysses_degree` and `ring_degree` combinations
