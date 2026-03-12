@@ -155,11 +155,13 @@ class OmniModelConfig(ModelConfig):
         # be considering the async subclass of OmniEngineArgs
         non_omni_kwargs = asdict(model_config)
 
-        # Apply patch overrides for Qwen3 TTS if needed.
-        # NOTE: this technically does call the post init hook
-        # ModelConfig again; avoiding this would be a nice optimization
-        # in the future.
-        omni_cfg = cls(**non_omni_kwargs, **omni_kwargs)
+        # Allocate a new instance directly and copy the model config's dict;
+        # NOTE: The initvars for ModelConfig are encapsulated in the
+        # corresponding fields, e.g., Multimodal Config, and therefore do not
+        # need to be reconsidered here.
+        omni_cfg = object.__new__(cls)
+        omni_cfg.__dict__.update(non_omni_kwargs)
+
         if (
             omni_cfg.codec_frame_rate_hz is None
             and omni_cfg.model_arch == "Qwen3TTSTalkerForConditionalGenerationARVLLM"
