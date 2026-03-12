@@ -1,7 +1,7 @@
 from dataclasses import field
 from typing import Any
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from transformers import PretrainedConfig
 from vllm.config import ModelConfig
 from vllm.config.utils import config
@@ -148,15 +148,17 @@ class OmniModelConfig(ModelConfig):
 
     @classmethod
     def from_vllm_model_config(cls, model_config: ModelConfig, **omni_kwargs):
-        """Create an OmniModelConfig from a vLLM ModelConfig & omni
-        specific kwargs.
+        """Create OmniModelConfig from an existing vLLM ModelConfig
+        and additional Omni specific kwargs.
         """
-        # Allocate a new instance directly and copy the model config's dict;
-        # We do this instead of asdict() because there are a couple of vars
-        # in vLLM's ModelConfig that are set in post init, but not declared
-        # as part of the schema, e.g, .original_max_model_len and .runner_type
-        omni_cfg = object.__new__(cls)
+        # We only validate the omni specific kwargs here since ModelConfig has
+        # already validated its fields; Creating through .__new__ and directly
+        # validating through TypeAdapters allows us to best effort check the config
+        # for correctness without double calling expensive validation and post
+        # initialization from the superclass.
+        cls._validate_omni_fields(**omni_kwargs)
 
+        omni_cfg = object.__new__(cls)
         omni_cfg.__dict__.update(model_config.__dict__)
         omni_cfg.__dict__.update(omni_kwargs)
 
@@ -165,9 +167,26 @@ class OmniModelConfig(ModelConfig):
             and omni_cfg.model_arch == "Qwen3TTSTalkerForConditionalGenerationARVLLM"
         ):
             omni_cfg._patch_qwen3_tts()
+
         omni_cfg._maybe_override_text_config()
 
         if omni_cfg.hf_config is not None:
             omni_cfg.hf_config.architectures = omni_cfg.architectures
 
         return omni_cfg
+
+    @classmethod
+    def _validate_omni_fields(cls, **omni_kwargs):
+        """Validate omni-specific fields; we use TypeAdapters here to quickly
+        validate only omni kwargs to avoid rerunning validation on the
+        ModelConfig.
+        """
+        omni_fields = set(cls.__dataclass_fields__) - set(ModelConfig.__dataclass_fields__)
+
+        for key, value in omni_kwargs.items():
+            if key not in omni_fields:
+                raise ValueError(f"Unexpected omni kwarg: {key}")
+
+            field_type = cls.__dataclass_fields__[key].type
+            if field_type is not Any:
+                TypeAdapter(field_type).validate_python(value)

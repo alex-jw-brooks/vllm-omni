@@ -8,6 +8,7 @@ import inspect
 from dataclasses import asdict
 
 import pytest
+from pydantic import ValidationError
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 
 from vllm_omni.config.model import OmniModelConfig
@@ -83,3 +84,17 @@ def test_multimodal_kwarg_overrides():
     # Ensure that the override was applied correctly
     assert cfg.multimodal_config is not None
     assert cfg.multimodal_config.mm_processor_cache_gb == override_val
+
+
+def test_from_vllm_config_validates_invalid_omni_kwargs():
+    """Ensure omni-specific field validation catches invalid keys."""
+    model_config = OmniEngineArgs().create_model_config()
+    with pytest.raises(ValueError, match="Unexpected omni kwarg"):
+        OmniModelConfig.from_vllm_model_config(model_config, foo="bar")
+
+
+def test_from_vllm_config_validates_bad_omni_kwarg_types():
+    """Ensure omni-specific field validation catches type errors."""
+    model_config = OmniEngineArgs().create_model_config()
+    with pytest.raises(ValidationError):
+        OmniModelConfig.from_vllm_model_config(model_config, stage_id="not_an_int")
