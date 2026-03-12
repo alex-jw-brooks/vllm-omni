@@ -60,7 +60,9 @@ class OmniEngineArgs(EngineArgs):
         engine_output_type: Optional output type specification for the engine.
             Used to route outputs to appropriate processors (e.g., "image",
             "audio", "latents"). If None, output type is inferred.
-        hf_config_name: Optional path to HF config (default: None)
+        hf_config_name: Optional key for HF config subkey to be extracted
+            for this stage, e.g., talker_config; If None, the default
+            HF config will be used.
         custom_process_next_stage_input_func: Optional path to a custom function for processing
             inputs from previous stages
             If None, default processing is used.

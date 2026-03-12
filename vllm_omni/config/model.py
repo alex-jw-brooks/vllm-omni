@@ -116,7 +116,7 @@ class OmniModelConfig(ModelConfig):
 
     def _patch_qwen3_tts(self):
         """Patches the value of `position_id_per_seconds` in Qwen3's
-        TTS's talker_config to the codec_frame_rate_hz.
+        TTS's talker_config into the this class's codec_frame_rate_hz.
         """
         talker_cfg = getattr(self.hf_config, "talker_config", None)
         if isinstance(talker_cfg, dict):
