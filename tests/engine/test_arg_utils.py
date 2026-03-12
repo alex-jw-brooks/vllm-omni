@@ -4,6 +4,7 @@ invariant to the specific attributes of vLLM config except in cases where we
 explicitly patch values that differ from vLLM.
 """
 
+import inspect
 from dataclasses import asdict
 
 import pytest
@@ -63,3 +64,22 @@ def test_async_engine_args_mro():
     assert omni_eng_idx > 0
     assert async_args_idx > 0
     assert omni_eng_idx < async_args_idx
+
+
+def test_multimodal_kwarg_overrides():
+    """Ensure that overrides in the multimodal config are preserved."""
+    # Get a different value than the default for a multimodal field
+    sig = inspect.signature(OmniEngineArgs)
+    default_mm_cache = sig.parameters["mm_processor_cache_gb"].default
+    override_val = default_mm_cache + 1
+
+    # NOTE: This needs to be a model that resolves to supports_multimodal=True
+    # in vLLM, otherwise we won't have an MM config
+    cfg = OmniEngineArgs(
+        model="Qwen/Qwen2-VL-2B-Instruct",
+        mm_processor_cache_gb=override_val,
+    ).create_model_config()
+
+    # Ensure that the override was applied correctly
+    assert cfg.multimodal_config is not None
+    assert cfg.multimodal_config.mm_processor_cache_gb == override_val
