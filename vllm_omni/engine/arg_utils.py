@@ -121,7 +121,7 @@ class OmniEngineArgs(EngineArgs):
 
         omni_config = OmniModelConfig.from_vllm_model_config(
             model_config=model_config,
-            # All kwargs outside of the vLLM config are Omni related.
+            # All kwargs below are Omni specific
             stage_id=self.stage_id,
             async_chunk=self.async_chunk,
             model_stage=self.model_stage,

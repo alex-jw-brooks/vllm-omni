@@ -1,4 +1,4 @@
-from dataclasses import asdict, field
+from dataclasses import field
 from typing import Any
 
 from pydantic import ConfigDict
@@ -151,16 +151,14 @@ class OmniModelConfig(ModelConfig):
         """Create an OmniModelConfig from a vLLM ModelConfig & omni
         specific kwargs.
         """
-        # Explicitly call the EngineArgs model creation, since we may
-        # be considering the async subclass of OmniEngineArgs
-        non_omni_kwargs = asdict(model_config)
-
         # Allocate a new instance directly and copy the model config's dict;
-        # NOTE: The initvars for ModelConfig are encapsulated in the
-        # corresponding fields, e.g., Multimodal Config, and therefore do not
-        # need to be reconsidered here.
+        # We do this instead of asdict() because there are a couple of vars
+        # in vLLM's ModelConfig that are set in post init, but not declared
+        # as part of the schema, e.g, .original_max_model_len and .runner_type
         omni_cfg = object.__new__(cls)
-        omni_cfg.__dict__.update(non_omni_kwargs)
+
+        omni_cfg.__dict__.update(model_config.__dict__)
+        omni_cfg.__dict__.update(omni_kwargs)
 
         if (
             omni_cfg.codec_frame_rate_hz is None
