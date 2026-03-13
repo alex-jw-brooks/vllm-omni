@@ -204,10 +204,11 @@ class OmniModelConfig(ModelConfig):
 
         To work around this issue, we explicitly add defaults to the omni_kwargs
         dict provided to ensure all fields are defined correctly.
+
+        NOTE: omni_kwargs are mutated in place.
         """
-        # Initialize omni-specific fields with their defaults
-        # This is necessary because we bypass __init__ with __new__
         omni_fields = set(cls.__dataclass_fields__) - set(ModelConfig.__dataclass_fields__)
+
         for field_name in omni_fields - set(omni_kwargs.keys()):
             field_def = cls.__dataclass_fields__[field_name]
             if field_def.default_factory is not MISSING:
