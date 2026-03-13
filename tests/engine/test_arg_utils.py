@@ -6,6 +6,7 @@ explicitly patch values that differ from vLLM.
 
 import inspect
 from dataclasses import asdict
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
@@ -98,3 +99,25 @@ def test_from_vllm_config_validates_bad_omni_kwarg_types():
     model_config = OmniEngineArgs().create_model_config()
     with pytest.raises(ValidationError):
         OmniModelConfig.from_vllm_model_config(model_config, stage_id="not_an_int")
+
+
+def test_qwen3_tts_codec_frame_rate_patching():
+    """Ensure the patch for qwen3 tts is applied correctly when creating the omni config."""
+    # Create a vLLM ModelConfig
+    vllm_config = EngineArgs().create_model_config()
+
+    # Create a mock talking config with a dummy value for position_id_per_seconds
+    mock_talker_config = Mock()
+    mock_talker_config.position_id_per_seconds = 12.3
+    vllm_config.hf_config.talker_config = mock_talker_config
+
+    # Ensure creating the config for a Qwen3TTSTalkerForConditionalGenerationARVLLM
+    # model calls the patch func to apply position_id_per_seconds from the talker
+    # config to the config's codec_frame_rate_hz
+    omni_config = OmniModelConfig.from_vllm_model_config(
+        vllm_config,
+        model_arch="Qwen3TTSTalkerForConditionalGenerationARVLLM",
+    )
+
+    # Verify codec_frame_rate_hz was patched
+    assert omni_config.codec_frame_rate_hz == 12.3
