@@ -153,9 +153,9 @@ class OmniModelConfig(ModelConfig):
         """
         # We only validate the omni specific kwargs here since ModelConfig has
         # already validated its fields; Creating through .__new__ and directly
-        # validating through TypeAdapters allows us to best effort check the config
-        # for correctness without double calling expensive validation and post
-        # initialization from the superclass.
+        # validating through TypeAdapters allows us to validate the config
+        # without double calling expensive validation and post initialization
+        # from the superclass.
         cls._validate_omni_fields(**omni_kwargs)
 
         omni_cfg = object.__new__(cls)
