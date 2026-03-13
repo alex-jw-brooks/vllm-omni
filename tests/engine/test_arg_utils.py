@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
+from transformers import PretrainedConfig
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 
 from vllm_omni.config.model import OmniModelConfig
@@ -89,16 +90,41 @@ def test_multimodal_kwarg_overrides():
 
 def test_from_vllm_config_validates_invalid_omni_kwargs():
     """Ensure omni-specific field validation catches invalid keys."""
-    model_config = OmniEngineArgs().create_model_config()
+    model_config = EngineArgs().create_model_config()
     with pytest.raises(ValueError, match="Unexpected omni kwarg"):
         OmniModelConfig.from_vllm_model_config(model_config, foo="bar")
 
 
 def test_from_vllm_config_validates_bad_omni_kwarg_types():
     """Ensure omni-specific field validation catches type errors."""
-    model_config = OmniEngineArgs().create_model_config()
+    model_config = EngineArgs().create_model_config()
     with pytest.raises(ValidationError):
         OmniModelConfig.from_vllm_model_config(model_config, stage_id="not_an_int")
+
+
+def test_default_all_values_are_initialized():
+    """Ensure omni-specific field initializes all fields"""
+    model_config = EngineArgs().create_model_config()
+    cfg = OmniModelConfig.from_vllm_model_config(model_config)
+
+    # Test a primitive
+    assert cfg.model_stage == "thinker"
+    # Test a field initialized with a default factory
+    assert cfg.stage_connector_config == {
+        "name": "SharedMemoryConnector",
+        "extra": {},
+    }
+
+    # Ensure that hf_config is initialized on model_config in the vLLM by ModelConfig's
+    # __post_init__, and that the hf_config is copied over to the OmniModelConfig;
+    # we explicitly set this since the field sets init=False
+    assert isinstance(model_config.hf_config, PretrainedConfig)
+    assert cfg.hf_config is model_config.hf_config
+
+    # Ensure that we can convert it to a string; this will convert
+    # all attributes, so should raise if we have attributes that are
+    # not initialized correctly, e.g., due to default factories
+    str(cfg)
 
 
 def test_qwen3_tts_codec_frame_rate_patching():

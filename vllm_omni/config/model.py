@@ -1,8 +1,7 @@
-from dataclasses import field
+from dataclasses import MISSING, field
 from typing import Any
 
 from pydantic import ConfigDict, TypeAdapter
-from transformers import PretrainedConfig
 from vllm.config import ModelConfig
 from vllm.config.utils import config
 from vllm.logger import init_logger
@@ -50,14 +49,6 @@ class OmniModelConfig(ModelConfig):
          ...     model_arch="Qwen2_5OmniForConditionalGeneration"
          ... )
     """
-
-    # Fields that set init=False in ModelConfig; we explicitly require
-    # these because we leverage the ModelConfig's post_init to handle
-    # (most) settings outside of the Omni config options.
-    hf_config: PretrainedConfig | None = None
-    """The Hugging Face config of the model."""
-    hf_text_config: PretrainedConfig | None = None
-    """The Hugging Face config of the text model (same as hf_config for text models)."""
 
     stage_id: int = 0
     async_chunk: bool = False
@@ -150,18 +141,24 @@ class OmniModelConfig(ModelConfig):
     def from_vllm_model_config(cls, model_config: ModelConfig, **omni_kwargs):
         """Create OmniModelConfig from an existing vLLM ModelConfig
         and additional Omni specific kwargs.
+
+        NOTE: The validation and __post_init__ for ModelConfig is expensive;
+        to avoid calling it a second time, we explicitly retrieve defaults
+        from dataclass attributes for values not passed to omni_kwargs,
+        and use that to initialize a __new__ instance. This is significantly
+        faster than creating the OmniModelConfig directly from the ModelConfig,
+        and saves us from having to pass all kwargs to the OmniModelConfig.
         """
-        # We only validate the omni specific kwargs here since ModelConfig has
-        # already validated its fields; Creating through .__new__ and directly
-        # validating through TypeAdapters allows us to validate the config
-        # without double calling expensive validation and post initialization
-        # from the superclass.
+        # Add missing defaults to the omni kwargs and ensure values are valid
+        cls.add_defaults_to_omni_kwargs(omni_kwargs)
         cls._validate_omni_fields(**omni_kwargs)
 
+        # Allocate the new omni config and copy the model config & omni fields
         omni_cfg = object.__new__(cls)
         omni_cfg.__dict__.update(model_config.__dict__)
         omni_cfg.__dict__.update(omni_kwargs)
 
+        # Apply any model specific patches or necessary overrides
         if (
             omni_cfg.codec_frame_rate_hz is None
             and omni_cfg.model_arch == "Qwen3TTSTalkerForConditionalGenerationARVLLM"
@@ -180,6 +177,9 @@ class OmniModelConfig(ModelConfig):
         """Validate omni-specific fields; we use TypeAdapters here to quickly
         validate only omni kwargs to avoid rerunning validation on the
         ModelConfig.
+
+        NOTE: all keys should be added to the omni_kwargs here to ensure all
+        fields are correctly initialized.
         """
         omni_fields = set(cls.__dataclass_fields__) - set(ModelConfig.__dataclass_fields__)
 
@@ -190,3 +190,27 @@ class OmniModelConfig(ModelConfig):
             field_type = cls.__dataclass_fields__[key].type
             if field_type is not Any:
                 TypeAdapter(field_type).validate_python(value)
+
+        # We should not have any uninitialized keys
+        unintialized_fields = omni_fields - omni_kwargs.keys()
+        if len(unintialized_fields):
+            raise ValueError("The following OmniModelConfig keys were not initialized: {omni_fields}")
+
+    @classmethod
+    def add_defaults_to_omni_kwargs(cls, omni_kwargs):
+        """Because we init the OmniModelConfig with __new__ to sidestep expensive
+        validation, we need to be careful to ensure fields with default factories
+        are initialized, otherwise we will get an AttributeError when we use it.
+
+        To work around this issue, we explicitly add defaults to the omni_kwargs
+        dict provided to ensure all fields are defined correctly.
+        """
+        # Initialize omni-specific fields with their defaults
+        # This is necessary because we bypass __init__ with __new__
+        omni_fields = set(cls.__dataclass_fields__) - set(ModelConfig.__dataclass_fields__)
+        for field_name in omni_fields - set(omni_kwargs.keys()):
+            field_def = cls.__dataclass_fields__[field_name]
+            if field_def.default_factory is not MISSING:
+                omni_kwargs[field_name] = field_def.default_factory()
+            elif field_def.default is not MISSING:
+                omni_kwargs[field_name] = field_def.default
