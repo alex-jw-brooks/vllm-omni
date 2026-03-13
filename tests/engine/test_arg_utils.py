@@ -121,3 +121,33 @@ def test_qwen3_tts_codec_frame_rate_patching():
 
     # Verify codec_frame_rate_hz was patched
     assert omni_config.codec_frame_rate_hz == 12.3
+
+
+def test_stage_specific_text_config_override():
+    """Ensure dependent attributes are updated when using stage-specific config."""
+    vllm_config = EngineArgs().create_model_config()
+    vllm_config.disable_sliding_window = True
+
+    # Switch the created hf text config with a mock whose
+    # values we want to pull through the text config helper
+    stage_text_config = vllm_config.hf_text_config
+    vllm_config.hf_text_config = Mock()
+    stage_text_config.sliding_window = 4096
+    stage_text_config.attention_chunk_size = 2048
+
+    # Move the stage config's text config getter & thinker config
+    mock_stage_config = Mock()
+    mock_stage_config.get_text_config.return_value = stage_text_config
+    vllm_config.hf_config.thinker_config = mock_stage_config
+
+    # Ensure that create from a vLLM config correctly pulls the
+    # expected values off of the thinker config & swaps the text config
+    omni_config = OmniModelConfig.from_vllm_model_config(
+        vllm_config,
+        hf_config_name="thinker_config",
+    )
+
+    assert omni_config.hf_text_config is stage_text_config
+    assert omni_config.attention_chunk_size == 2048
+    assert omni_config.max_model_len == 4096
+    assert omni_config.hf_text_config.sliding_window is None
