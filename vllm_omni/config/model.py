@@ -178,8 +178,8 @@ class OmniModelConfig(ModelConfig):
         validate only omni kwargs to avoid rerunning validation on the
         ModelConfig.
 
-        NOTE: all keys should be added to the omni_kwargs here to ensure all
-        fields are correctly initialized.
+        NOTE: This assumes add_defaults_to_omni_kwargs has already been called,
+        so that all omni fields are present in the provided omni_kwargs.
         """
         omni_fields = set(cls.__dataclass_fields__) - set(ModelConfig.__dataclass_fields__)
 
@@ -192,9 +192,9 @@ class OmniModelConfig(ModelConfig):
                 TypeAdapter(field_type).validate_python(value)
 
         # We should not have any uninitialized keys
-        unintialized_fields = omni_fields - omni_kwargs.keys()
-        if len(unintialized_fields):
-            raise ValueError("The following OmniModelConfig keys were not initialized: {omni_fields}")
+        uninitialized_fields = omni_fields - omni_kwargs.keys()
+        if len(uninitialized_fields):
+            logger.warning(f"The following OmniModelConfig keys were not initialized: {uninitialized_fields}")
 
     @classmethod
     def add_defaults_to_omni_kwargs(cls, omni_kwargs):
