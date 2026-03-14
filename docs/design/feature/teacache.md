@@ -332,6 +332,11 @@ print(f"Estimated coefficients: {coeffs}")
 Note: some models may require the vLLM context and config to be initialized to initialize vLLM modules. To this end, you may need a workaround like the following to be able to run coefficient estimation.
 ```python
 from vllm_omni.diffusion.forward_context import set_forward_context
+from vllm_omni.diffusion.distributed.parallel_state import (
+    init_distributed_environment,
+    initialize_model_parallel,
+)
+from vllm.config import VllmConfig
 ...
 
 if __name__ == "__main__":
@@ -345,6 +350,12 @@ if __name__ == "__main__":
     init_distributed_environment()
     initialize_model_parallel()
 
+    # NOTE: you may have to pass an initialized OmniDiffusionConfig as a kwarg
+    # here to make current sp checks happy; if this is the case, just create one
+    # .from_kwargs() with the model name to get around this check for now,
+    # since your estimator subclass should handle the actual model configuration.
+    #
+    # This will be cleaned up in the future
     with set_forward_context(vllm_config):
         <create the estimator + run estimation here>
 ```
