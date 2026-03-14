@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import os
 from typing import Any
 
 import numpy as np
 import torch
 from vllm.config import LoadConfig
-from vllm.utils.torch_utils import set_default_torch_dtype
+from vllm.transformers_utils.config import get_hf_file_to_dict
 
 from vllm_omni.diffusion.cache.teacache.extractors import get_extractor
-from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.data import OmniDiffusionConfig, TransformerConfig
 from vllm_omni.diffusion.hooks import HookRegistry, ModelHook
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.bagel.pipeline_bagel import BagelPipeline
@@ -60,16 +61,14 @@ class BagelAdapter:
     """Adapter for Bagel model."""
 
     @staticmethod
-    def load_pipeline(model_path: str, device: str = "cuda", dtype: torch.dtype = torch.bfloat16) -> BagelPipeline:
+    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> BagelPipeline:
         od_config = OmniDiffusionConfig.from_kwargs(model=model_path, dtype=dtype)
         od_config.model_class_name = "BagelPipeline"
+        # No hack needed for tf_model_config since Bagel doesn't use it
 
-        pipeline = BagelPipeline(od_config=od_config)
-        loader = DiffusersPipelineLoader(LoadConfig())
-        with set_default_torch_dtype(od_config.dtype):
-            loader.load_weights(pipeline)
-        pipeline.to(device)
-        return pipeline
+        loader = DiffusersPipelineLoader(LoadConfig(), od_config=od_config)
+        # load_model will handle dtypes / device placement, put in .eval() mode
+        return loader.load_model(od_config=od_config, load_device=device)
 
     @staticmethod
     def get_transformer(pipeline: Any) -> tuple[Any, str]:
@@ -156,20 +155,20 @@ class LongCatAdapter(DefaultAdapter):
     """
 
     @staticmethod
-    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> Any:
-
+    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> LongCatImagePipeline:
         od_config = OmniDiffusionConfig.from_kwargs(model=model_path, dtype=dtype)
         od_config.model_class_name = "LongCatImagePipeline"
+        # TODO (Alex): Refactor to handle tf_model_config in OmniDiffusionConfig
+        # instead of OmniDiffusion and remove the manual population here
+        tf_config_dict = get_hf_file_to_dict(
+            os.path.join("transformer", "config.json"),
+            od_config.model,
+        )
+        od_config.tf_model_config = TransformerConfig.from_dict(tf_config_dict)
 
-        # TODO - we should use load_model in all adapters since the
-        # dtype is already specified in the Diffusion config anyway
-        with set_default_torch_dtype(dtype):
-            pipeline = LongCatImagePipeline(od_config=od_config)
-
-        loader = DiffusersPipelineLoader(LoadConfig())
-        loader.load_weights(pipeline)
-        pipeline.to(device)
-        return pipeline
+        loader = DiffusersPipelineLoader(LoadConfig(), od_config=od_config)
+        # load_model will handle dtypes / device placement, put in .eval() mode
+        return loader.load_model(od_config=od_config, load_device=device)
 
 
 _MODEL_ADAPTERS: dict[str, type] = {

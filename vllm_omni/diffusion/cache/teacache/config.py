@@ -74,7 +74,7 @@ _MODEL_COEFFICIENTS = {
         -2.00000000e-02,
     ],
     # LongCat Image transformer coefficients
-    "LongCatImageTransformer2DModel": [116.500, -58.959, 6.909, 1.175, 0.108],
+    "LongCatImageTransformer2DModel": [652.5980, -424.1615, 84.5526, -4.5923, 0.1694],
 }
 
 
