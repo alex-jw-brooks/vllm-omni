@@ -776,13 +776,7 @@ def extract_longcat_context(
 
     # 2. Extract the modulated output from the first mm-DiT block
     first_block = module.transformer_blocks[0]
-    _, hs = first_block(
-        hidden_states=hidden_states,
-        encoder_hidden_states=encoder_hidden_states,
-        temb=temb,
-        image_rotary_emb=image_rotary_emb,
-    )
-    img_modulated = first_block.norm1(hs, emb=temb)[0]
+    img_modulated = first_block.norm1(hidden_states, emb=temb)[0]
 
     # 3. Define the transformer execution
     def run_transformer_blocks():
