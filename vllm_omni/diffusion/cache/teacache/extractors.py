@@ -739,9 +739,20 @@ def extract_longcat_context(
     img_ids,
     **kwargs,
 ) -> CacheContext:
-    """"""
-    from diffusers.models.modeling_outputs import Transformer2DModelOutput
+    """Extract the cache context for LongCat Image.
+
+    Similar to other extractors, this is currently the only code needed
+    for TeaCache support for LongCat image, and encapsulates preprocessing,
+    modulated input extraction, transformer execution, and postprocessing
+    logic.
+
+    Args & kawrgs are identical to the inputs to LongCat Image's forward.
+
+    Returns:
+        CacheContext with all information needed for generic caching
+    """
     # TODO (Alex) - Refactor TeaCache extractors to more tightly integrate with .forward
+    from diffusers.models.modeling_outputs import Transformer2DModelOutput
 
     # 1. Model specific preprocessing
     sp_size = module.parallel_config.sequence_parallel_size
