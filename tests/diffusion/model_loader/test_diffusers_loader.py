@@ -28,6 +28,8 @@ from vllm_omni.diffusion.models.helios import HeliosPipeline
 
 model_path = "hf-internal-testing/tiny-helios-modular-pipe"
 
+pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+
 
 @pytest.fixture(scope="function", autouse=True)
 def mock_tp_group():
