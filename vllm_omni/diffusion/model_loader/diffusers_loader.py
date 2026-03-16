@@ -110,12 +110,12 @@ class DiffusersPipelineLoader:
 
     def _prepare_weights(
         self,
-        model_name_or_path: Path,
+        model_name_or_path: Path | str,
         subfolder: str | None,
         revision: str | None,
         fall_back_to_pt: bool,
         allow_patterns_overrides: list[str] | None,
-    ) -> tuple[str, list[str], bool]:
+    ) -> tuple[Path | str, list[str], bool]:
         """Prepare weights for the model.
 
         If the model is not local, it will be downloaded."""
@@ -212,15 +212,14 @@ class DiffusersPipelineLoader:
             source.allow_patterns_overrides,
         )
 
-        od_config = self.od_config
         use_multithread = (
             use_safetensors
-            and od_config is not None
-            and getattr(od_config, "enable_multithread_weight_load", False)
+            and self.od_config is not None
+            and getattr(self.od_config, "enable_multithread_weight_load", False)
             and self.load_config.safetensors_load_strategy != "torchao"
         )
         if use_multithread:
-            num_threads = getattr(od_config, "num_weight_load_threads", 4)
+            num_threads = getattr(self.od_config, "num_weight_load_threads", 4)
             # Keep deterministic shard order before passing to vLLM helper.
             sorted_hf_weights_files = sorted(hf_weights_files, key=_natural_sort_key)
             weights_iterator = multi_thread_safetensors_weights_iterator(
@@ -378,7 +377,7 @@ class DiffusersPipelineLoader:
         """
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
-            if isinstance(quant_method, QuantizeMethodBase):
+            if quant_method is not None and isinstance(quant_method, QuantizeMethodBase):
                 # Move module to target device for processing if needed
                 module_device = next(module.parameters(), None)
                 if module_device is not None:
