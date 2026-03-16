@@ -138,7 +138,6 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         with get_memory_context():
             with DeviceMemoryProfiler() as m:
                 self.pipeline = model_loader.load_model(
-                    od_config=self.od_config,
                     load_device=load_device,
                     load_format=load_format,
                     custom_pipeline_name=custom_pipeline_name,

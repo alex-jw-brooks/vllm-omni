@@ -305,7 +305,7 @@ class GPUWorker:
         )
 
         # Load model
-        model_loader = DiffusersPipelineLoader(load_config)
+        model_loader = DiffusersPipelineLoader(load_config, self.od_config)
         self.pipeline = model_loader.load_model(od_config, load_device=f"cuda:{rank}")
 
         # Setup cache backend
