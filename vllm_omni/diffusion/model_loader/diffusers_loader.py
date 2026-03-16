@@ -320,14 +320,13 @@ class DiffusersPipelineLoader:
         """Load a model with the given configurations."""
         if load_format is None:
             load_format = "default"
-        self.od_config = od_config
         # CPU offload + quantization: for offline-quantized models (e.g., AutoRound MXFP8),
         # weights are already quantized in the checkpoint — load directly on CPU.
         # For online quantization, load on device so quantization can run on accelerator,
         # then move back to CPU afterward.
         offload_after_quant = False
-        if load_device == "cpu" and od_config.quantization_config is not None:
-            quant_cfg = od_config.quantization_config
+        if load_device == "cpu" and self.od_config.quantization_config is not None:
+            quant_cfg = self.od_config.quantization_config
             is_offline = getattr(quant_cfg, "data_type", None) == "mx_fp" or getattr(
                 quant_cfg, "is_checkpoint_quantized", False
             )

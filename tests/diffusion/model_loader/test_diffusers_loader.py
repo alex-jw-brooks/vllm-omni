@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+"""
+Tests for the DiffusersPipelineLoader.
+"""
+
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +17,31 @@ from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
 from vllm_omni.diffusion.registry import initialize_model
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from vllm.config.load import LoadConfig
+
+from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.models.helios import HeliosPipeline
+
+model_path = "hf-internal-testing/tiny-helios-modular-pipe"
+
+
+@pytest.fixture(scope="function", autouse=True)
+def mock_tp_group():
+    """Mocks the tensor parallel group; this is needed to initialize the Helios model."""
+    with (
+        patch("vllm.model_executor.layers.linear.get_tensor_model_parallel_world_size", return_value=1),
+        patch("vllm.model_executor.layers.linear.get_tensor_model_parallel_rank", return_value=0),
+        patch("vllm.distributed.parallel_state.get_tp_group") as mock_get_tp_group,
+    ):
+        mock_tp_group = MagicMock()
+        mock_tp_group.world_size = 1
+        mock_tp_group.rank_in_group = 0
+        mock_get_tp_group.return_value = mock_tp_group
+        yield
 
 
 class _DummyPipelineModel(nn.Module):
@@ -168,3 +197,34 @@ def test_load_model_custom_pipeline_sets_current_diffusion_config(monkeypatch):
     assert model.captured_config is od_config
     assert model.seen_config_during_init is od_config
     assert get_current_diffusion_config_or_none() is None
+
+
+def test_get_all_weights():
+    """Ensure that get all weights on a tiny model resolves to nonempty weights."""
+    od_config = OmniDiffusionConfig(
+        model_class_name="HeliosPipeline",
+        model=model_path,
+    )
+    loader = DiffusersPipelineLoader(
+        load_config=LoadConfig(),
+        od_config=od_config,
+    )
+    pipeline = HeliosPipeline(od_config=od_config)
+
+    weight_iter = loader.get_all_weights(pipeline)
+    # Ensure that the Helios model has nonempty weights
+    next(weight_iter)
+
+
+def test_load_model():
+    """Ensure that load model creates an instance of the expected pipeline class."""
+    od_config = OmniDiffusionConfig(
+        model_class_name="HeliosPipeline",
+        model=model_path,
+    )
+    loader = DiffusersPipelineLoader(
+        load_config=LoadConfig(),
+        od_config=od_config,
+    )
+    model = loader.load_model(load_device="cpu")
+    assert isinstance(model, HeliosPipeline)
