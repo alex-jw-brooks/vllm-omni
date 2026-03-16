@@ -214,7 +214,6 @@ class DiffusersPipelineLoader:
 
         use_multithread = (
             use_safetensors
-            and self.od_config is not None
             and getattr(self.od_config, "enable_multithread_weight_load", False)
             and self.load_config.safetensors_load_strategy != "torchao"
         )
