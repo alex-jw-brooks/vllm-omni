@@ -6,131 +6,32 @@ E2E online serving test for Qwen-Image-Edit-2509 multi-image input.
 
 import base64
 import os
-import signal
-import socket
-import subprocess
-import sys
 import threading
-import time
 from io import BytesIO
-from typing import Any
 
-import openai
 import pytest
-import requests
 from PIL import Image
 from vllm.assets.image import ImageAsset
-from vllm.utils.network_utils import get_open_port
 
+from tests.conftest import OmniServerParams
 from tests.utils import hardware_test
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 # Increase timeout for downloading assets from S3 (default 5s is too short for CI)
 os.environ.setdefault("VLLM_IMAGE_FETCH_TIMEOUT", "60")
 
-models = ["Qwen/Qwen-Image-Edit-2509"]
-test_params = models
-t2i_models = ["Tongyi-MAI/Z-Image-Turbo"]
-
-
-class OmniServer:
-    """Omniserver for vLLM-Omni tests."""
-
-    def __init__(
-        self,
-        model: str,
-        serve_args: list[str],
-        *,
-        env_dict: dict[str, str] | None = None,
-    ) -> None:
-        self.model = model
-        self.serve_args = serve_args
-        self.env_dict = env_dict
-        self.proc: subprocess.Popen | None = None
-        self.host = "127.0.0.1"
-        self.port = get_open_port()
-
-    def _start_server(self) -> None:
-        """Start the vLLM-Omni server subprocess."""
-        env = os.environ.copy()
-        env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-        if self.env_dict is not None:
-            env.update(self.env_dict)
-
-        cmd = [
-            sys.executable,
-            "-m",
-            "vllm_omni.entrypoints.cli.main",
-            "serve",
-            self.model,
-            "--omni",
-            "--host",
-            self.host,
-            "--port",
-            str(self.port),
-        ] + self.serve_args
-
-        print(f"Launching OmniServer with: {' '.join(cmd)}")
-        self.proc = subprocess.Popen(
-            cmd,
-            env=env,
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # Set working directory to vllm-omni root
-            start_new_session=True,
-        )
-
-        # Wait for server to be ready
-        max_wait = 600  # 10 minutes
-        start_time = time.time()
-        while time.time() - start_time < max_wait:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    sock.settimeout(1)
-                    result = sock.connect_ex((self.host, self.port))
-                    if result == 0:
-                        print(f"Server ready on {self.host}:{self.port}")
-                        return
-            except Exception:
-                pass
-            time.sleep(2)
-
-        raise RuntimeError(f"Server failed to start within {max_wait} seconds")
-
-    def __enter__(self):
-        self._start_server()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.proc:
-            try:
-                os.killpg(self.proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-
-            try:
-                self.proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(self.proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                self.proc.wait()
-
-
-@pytest.fixture
-def omni_server(request):
-    """Start vLLM-Omni server as a subprocess with actual model weights."""
-    model = request.param
-    with OmniServer(model, ["--num-gpus", "1"]) as server:
-        yield server
-
-
-@pytest.fixture
-def client(omni_server):
-    """OpenAI client for the running vLLM-Omni server."""
-    return openai.OpenAI(
-        base_url=f"http://{omni_server.host}:{omni_server.port}/v1",
-        api_key="EMPTY",
+i2i_params = [
+    OmniServerParams(
+        model="Qwen/Qwen-Image-Edit-2509",
+        server_args=["--stage-init-timeout", "300"],
     )
+]
+t2i_params = [
+    OmniServerParams(
+        model="Tongyi-MAI/Z-Image-Turbo",
+        server_args=["--stage-init-timeout", "300"],
+    )
+]
 
 
 @pytest.fixture(scope="session")
@@ -183,9 +84,10 @@ def _decode_data_url_to_image_bytes(data_url: str) -> bytes:
 @pytest.mark.core_model
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"})
-@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+@pytest.mark.parametrize("omni_server", i2i_params, indirect=True)
 def test_i2i_multi_image_input_qwen_image_edit_2509(
     omni_server,
+    openai_client,
     base64_encoded_images: list[str],
 ) -> None:
     """Test multi-image input editing via OpenAI API with concurrent requests."""
@@ -196,12 +98,8 @@ def test_i2i_multi_image_input_qwen_image_edit_2509(
     results: list[tuple[int, int]] = []
 
     def _call_chat(width: int, height: int) -> None:
-        client = openai.OpenAI(
-            base_url=f"http://{omni_server.host}:{omni_server.port}/v1",
-            api_key="EMPTY",
-        )
         barrier.wait()
-        chat_completion = client.chat.completions.create(
+        chat_completion = openai_client.client.chat.completions.create(
             model=omni_server.model,
             messages=messages,
             extra_body={
@@ -238,29 +136,24 @@ def test_i2i_multi_image_input_qwen_image_edit_2509(
     # assert (1024, 768) in results
 
 
-@pytest.mark.parametrize("omni_server", t2i_models, indirect=True)
-def test_t2i_concurrent_requests_different_sizes(omni_server) -> None:
+@pytest.mark.parametrize("omni_server", t2i_params, indirect=True)
+def test_t2i_concurrent_requests_different_sizes(omni_server, openai_client) -> None:
     """Test /v1/images/generations concurrent requests with different sizes."""
-    base_url = f"http://{omni_server.host}:{omni_server.port}"
-    url = f"{base_url}/v1/images/generations"
-
     barrier = threading.Barrier(2)
     results: list[tuple[int, int]] = []
 
     def _call_generate(size: str) -> None:
-        payload: dict[str, Any] = {
-            "prompt": "cute cat playing with a ball",
-            "n": 1,
-            "size": size,
-            "response_format": "b64_json",
-            "num_inference_steps": 2,
-        }
         barrier.wait()
-        response = requests.post(url, json=payload, timeout=120)
-        assert response.status_code == 200
-        data = response.json()
-        image_b64 = data["data"][0]["b64_json"]
-        image_bytes = base64.b64decode(image_b64)
+        response = openai_client.client.images.generate(
+            model=omni_server.model,
+            prompt="cute cat playing with a ball",
+            n=1,
+            size=size,
+            response_format="b64_json",
+            extra_body={"num_inference_steps": 2},
+            timeout=120,
+        )
+        image_bytes = base64.b64decode(response.data[0].b64_json)
         img = Image.open(BytesIO(image_bytes))
         img.load()
         results.append(img.size)
