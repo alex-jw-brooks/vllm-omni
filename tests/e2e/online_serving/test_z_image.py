@@ -22,7 +22,7 @@ import torch
 from PIL import Image
 from safetensors.torch import save_file
 
-from tests.conftest import OmniServer, OpenAIClientHandler
+from tests.conftest import OmniServerParams, OpenAIClientHandler
 from tests.utils import hardware_test
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -35,21 +35,12 @@ PROMPT = "a photo of a cat sitting on a laptop keyboard"
 SIZE = "256x256"
 SEED = 42
 
-
-@pytest.fixture(scope="module")
-def omni_server():
-    with OmniServer(
-        MODEL,
-        [
-            "--num-gpus",
-            "1",
-            "--stage-init-timeout",
-            str(DIFFUSION_INIT_TIMEOUT_S),
-            "--init-timeout",
-            str(DIFFUSION_INIT_TIMEOUT_S),
-        ],
-    ) as server:
-        yield server
+z_image_params = [
+    OmniServerParams(
+        model=MODEL,
+        server_args=["--num-gpus", "1", "--stage-init-timeout", str(DIFFUSION_INIT_TIMEOUT_S), "--init-timeout", str(DIFFUSION_INIT_TIMEOUT_S)],
+    )
+]
 
 
 ### End to end tests
@@ -81,6 +72,7 @@ def _generate_image(
     return img.convert("RGB")
 
 
+@pytest.mark.parametrize("omni_server", z_image_params, indirect=True)
 def test_t2i_concurrent_requests_different_sizes(omni_server, openai_client) -> None:
     """Test /v1/images/generations concurrent requests with different sizes."""
     barrier = threading.Barrier(2)
@@ -195,8 +187,9 @@ def _assert_slice_diff(actual: np.ndarray, baseline: np.ndarray, *, label: str) 
 @pytest.mark.advanced_model
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "L4", "rocm": "MI325", "xpu": "B60"})
+@pytest.mark.parametrize("omni_server", z_image_params, indirect=True)
 def test_images_generations_per_request_lora_switching(
-    omni_server: OmniServer, tmp_path: Path, openai_client: OpenAIClientHandler
+    omni_server, tmp_path: Path, openai_client: OpenAIClientHandler
 ) -> None:
     # Base generation.
     base_img = _generate_image(openai_client, omni_server.model)

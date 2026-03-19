@@ -1582,7 +1582,7 @@ def omni_server(request: pytest.FixtureRequest, run_level: str, model_prefix: st
 
         server_args = params.server_args or []
 
-        if params.use_omni and "--stage-init-timeout" not in server_args:
+        if params.use_omni and not any(arg.startswith("--stage-init-timeout") for arg in server_args):
             server_args = ["--stage-init-timeout", "120", *server_args]
 
         if stage_config_path is not None:
