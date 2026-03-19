@@ -18,12 +18,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import requests
 import torch
 from PIL import Image
 from safetensors.torch import save_file
 
-from tests.conftest import OmniServer, OmniServerParams
+from tests.conftest import OmniServer, OpenAIClientHandler
 from tests.utils import hardware_test
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -32,19 +31,6 @@ os.environ.setdefault("VLLM_IMAGE_FETCH_TIMEOUT", "60")
 
 MODEL = "Tongyi-MAI/Z-Image-Turbo"
 DIFFUSION_INIT_TIMEOUT_S = 700
-
-t2i_params = [
-    OmniServerParams(
-        model=MODEL,
-        server_args=[
-            "--stage-init-timeout",
-            str(DIFFUSION_INIT_TIMEOUT_S),
-            "--init-timeout",
-            str(DIFFUSION_INIT_TIMEOUT_S),
-        ],
-    )
-]
-
 PROMPT = "a photo of a cat sitting on a laptop keyboard"
 SIZE = "256x256"
 SEED = 42
@@ -67,6 +53,34 @@ def omni_server():
 
 
 ### End to end tests
+def _generate_image(
+    openai_client: OpenAIClientHandler,
+    model: str,
+    prompt: str = PROMPT,
+    size: str = SIZE,
+    extra_body: dict | None = None,
+    timeout: int = 900,
+) -> Image.Image:
+    response = openai_client.client.images.generate(
+        model=model,
+        prompt=prompt,
+        n=1,
+        size=size,
+        response_format="b64_json",
+        extra_body={
+            "num_inference_steps": 2,
+            "guidance_scale": 0.0,
+            "seed": SEED,
+            **(extra_body or {}),
+        },
+        timeout=timeout,
+    )
+    img_bytes = base64.b64decode(response.data[0].b64_json)
+    img = Image.open(BytesIO(img_bytes))
+    img.load()
+    return img.convert("RGB")
+
+
 def test_t2i_concurrent_requests_different_sizes(omni_server, openai_client) -> None:
     """Test /v1/images/generations concurrent requests with different sizes."""
     barrier = threading.Barrier(2)
@@ -74,18 +88,13 @@ def test_t2i_concurrent_requests_different_sizes(omni_server, openai_client) -> 
 
     def _call_generate(size: str) -> None:
         barrier.wait()
-        response = openai_client.client.images.generate(
-            model=omni_server.model,
+        img = _generate_image(
+            openai_client,
+            omni_server.model,
             prompt="cute cat playing with a ball",
-            n=1,
             size=size,
-            response_format="b64_json",
-            extra_body={"num_inference_steps": 2},
             timeout=120,
         )
-        image_bytes = base64.b64decode(response.data[0].b64_json)
-        img = Image.open(BytesIO(image_bytes))
-        img.load()
         results.append(img.size)
 
     threads = [
@@ -141,18 +150,6 @@ def _write_zimage_lora(adapter_dir: Path, *, q_scale: float = 0.0, k_scale: floa
     )
 
 
-def _post_images(server: OmniServer, payload: dict) -> Image.Image:
-    url = f"http://{server.host}:{server.port}/v1/images/generations"
-    resp = requests.post(url, json=payload, headers={"Authorization": "Bearer EMPTY"}, timeout=900)
-    resp.raise_for_status()
-    data = resp.json()
-    b64 = data["data"][0]["b64_json"]
-    img_bytes = base64.b64decode(b64)
-    img = Image.open(BytesIO(img_bytes))
-    img.load()
-    return img.convert("RGB")
-
-
 def _image_blue_tail_slice(img: Image.Image) -> np.ndarray:
     arr = np.asarray(img, dtype=np.uint8)
     assert arr.ndim == 3 and arr.shape[-1] == 3
@@ -195,34 +192,24 @@ def _assert_slice_diff(actual: np.ndarray, baseline: np.ndarray, *, label: str) 
     assert diff > 0.1, f"{label} slice diff too small: {diff} ({actual.tolist()} vs {baseline.tolist()})"
 
 
-def _basic_payload() -> dict:
-    return {
-        "prompt": PROMPT,
-        "n": 1,
-        "size": SIZE,
-        "num_inference_steps": 2,
-        "guidance_scale": 0.0,
-        "seed": SEED,
-    }
-
-
 @pytest.mark.advanced_model
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "L4", "rocm": "MI325", "xpu": "B60"})
-def test_images_generations_per_request_lora_switching(omni_server: OmniServer, tmp_path: Path) -> None:
+def test_images_generations_per_request_lora_switching(
+    omni_server: OmniServer, tmp_path: Path, openai_client: OpenAIClientHandler
+) -> None:
     # Base generation.
-    base_img = _post_images(omni_server, _basic_payload())
+    base_img = _generate_image(openai_client, omni_server.model)
     base_slice = _image_blue_tail_slice(base_img)
-    base_ref_img = _post_images(omni_server, _basic_payload())
+    base_ref_img = _generate_image(openai_client, omni_server.model)
     base_ref_slice = _image_blue_tail_slice(base_ref_img)
     base_ref_max, base_ref_mean = _slice_diff_stats(base_ref_slice, base_slice)
 
     # Adapter A: apply delta to V slice only.
     lora_a_dir = tmp_path / "zimage_lora_a"
     _write_zimage_lora(lora_a_dir, v_scale=8.0)
-    payload_a = _basic_payload()
-    payload_a["lora"] = {"name": "a", "path": str(lora_a_dir), "scale": 64.0}
-    img_a = _post_images(omni_server, payload_a)
+    lora_a = {"name": "a", "path": str(lora_a_dir), "scale": 64.0}
+    img_a = _generate_image(openai_client, omni_server.model, extra_body={"lora": lora_a})
     a_slice = _image_blue_tail_slice(img_a)
     _assert_slice_diff(a_slice, base_slice, label="lora_a_vs_base")
     a_vs_base = float(np.abs(a_slice - base_slice).mean())
@@ -230,9 +217,8 @@ def test_images_generations_per_request_lora_switching(omni_server: OmniServer, 
     # Adapter B: apply delta to K slice only (should differ from adapter A).
     lora_b_dir = tmp_path / "zimage_lora_b"
     _write_zimage_lora(lora_b_dir, k_scale=4.0)
-    payload_b = _basic_payload()
-    payload_b["lora"] = {"name": "b", "path": str(lora_b_dir), "scale": 64.0}
-    img_b = _post_images(omni_server, payload_b)
+    lora_b = {"name": "b", "path": str(lora_b_dir), "scale": 64.0}
+    img_b = _generate_image(openai_client, omni_server.model, extra_body={"lora": lora_b})
     b_slice = _image_blue_tail_slice(img_b)
     _assert_slice_diff(b_slice, base_slice, label="lora_b_vs_base")
     _assert_slice_diff(b_slice, a_slice, label="lora_b_vs_lora_a")
@@ -240,7 +226,7 @@ def test_images_generations_per_request_lora_switching(omni_server: OmniServer, 
     b_vs_a = float(np.abs(b_slice - a_slice).mean())
 
     # Ensure switching back to no-LoRA restores the base output.
-    base_img_2 = _post_images(omni_server, _basic_payload())
+    base_img_2 = _generate_image(openai_client, omni_server.model)
     base_slice_2 = _image_blue_tail_slice(base_img_2)
     _, base_reset_mean = _slice_diff_stats(base_slice_2, base_slice)
     _assert_slice_close(
