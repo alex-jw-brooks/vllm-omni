@@ -55,39 +55,36 @@ def set_stage_devices(
         if vis is not None:
             visible_device_list = _parse_device_list(vis)
             device_list = _map_device_list(stage_id, device_list, visible_device_list)
-        device_str = ",".join([str(dev) for dev in device_list])
+        device_str = ",".join(device_list)
         current_omni_platform.set_device_control_env_var(device_str)
         return device_str
 
     raise TypeError(f"Expected str or int device IDs for stage initialization, got type {type(devices)}")
 
 
-def _parse_device_list(devices: str | int) -> list[int]:
+def _parse_device_list(devices: str | int) -> list[str]:
     """Given an int or a str representing one or more comma separated
-    non-negative IDs, coerce it to a list of ints.
+    non-negative IDs, coerce it to a list of strs.
 
     Args:
-        devices: devices to be converted to a list of ints.
+        devices: devices to be converted to a list of strs.
     """
     if isinstance(devices, int):
-        device_list = [devices]
-    else:
-        toks = [t.strip() for t in devices.split(",") if t.strip() != ""]
-
-        # Every token should be castable to an int
-        if not all(tok.isdigit() for tok in toks):
-            raise ValueError(f"Device string should be a comma separated list of ints, but received: {devices}")
-        device_list = [int(tok) for tok in toks]
-    return device_list
+        if devices < 0:
+            raise ValueError("Device IDs must be non-negative integers!")
+        return [str(devices)]
+    # Devices will usually be ints, but not always
+    # so we don't explicitly validate that here.
+    return [t.strip() for t in devices.split(",") if t.strip() != ""]
 
 
-def _map_device_list(stage_id: int, device_list: list[int], visible_device_list: list[int]):
+def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]):
     """Maps logical to physical devices if we have enough visible devices available.
 
     Args:
         stage_id: The stage ID currently configuring devices.
-        device_list: List of (logical) devices to be used, which are non-negative
-            ints counting from 0, 1, ..., n devices needed.
+        device_list: List of (logical) devices to be used, which are strings
+            holding non-negative nums counting from 0, 1, ..., n devices needed.
         visible_device_list: List of physical devices available.
     """
     num_visible = len(visible_device_list)
@@ -96,13 +93,17 @@ def _map_device_list(stage_id: int, device_list: list[int], visible_device_list:
         raise ValueError(f"Stage {stage_id} requires {num_logical} devices, but only {num_visible} devices are visible")
 
     # Ensure that the logical IDs are actually in range to avoid index errors;
-    # If the check above passes and this one fails, the logical devices are wrong,
+    # If the check above passes and those below fail, the logical devices are wrong,
     # i.e., not actually 0, 1, ..., n
-    if max(device_list) >= num_visible:
+    if not all(device.isdigit() for device in device_list):
+        raise ValueError("Logical devices must be non-negative integers")
+
+    logical_ids = [int(device) for device in device_list]
+    if min(logical_ids) < 0 or max(logical_ids) >= num_visible:
         raise AssertionError(
             f"Stage {stage_id} has logical IDs {device_list}, one or more of which exceed the number of visible devices"
         )
-    return [visible_device_list[idx] for idx in device_list]
+    return [visible_device_list[idx] for idx in logical_ids]
 
 
 def serialize_obj(obj: Any) -> bytes:
