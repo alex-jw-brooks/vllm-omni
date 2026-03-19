@@ -26,12 +26,6 @@ i2i_params = [
         server_args=["--stage-init-timeout", "300"],
     )
 ]
-t2i_params = [
-    OmniServerParams(
-        model="Tongyi-MAI/Z-Image-Turbo",
-        server_args=["--stage-init-timeout", "300"],
-    )
-]
 
 
 @pytest.fixture(scope="session")
@@ -134,38 +128,3 @@ def test_i2i_multi_image_input_qwen_image_edit_2509(
     # TODO @ZJY
     # assert (1248, 832) in results
     # assert (1024, 768) in results
-
-
-@pytest.mark.parametrize("omni_server", t2i_params, indirect=True)
-def test_t2i_concurrent_requests_different_sizes(omni_server, openai_client) -> None:
-    """Test /v1/images/generations concurrent requests with different sizes."""
-    barrier = threading.Barrier(2)
-    results: list[tuple[int, int]] = []
-
-    def _call_generate(size: str) -> None:
-        barrier.wait()
-        response = openai_client.client.images.generate(
-            model=omni_server.model,
-            prompt="cute cat playing with a ball",
-            n=1,
-            size=size,
-            response_format="b64_json",
-            extra_body={"num_inference_steps": 2},
-            timeout=120,
-        )
-        image_bytes = base64.b64decode(response.data[0].b64_json)
-        img = Image.open(BytesIO(image_bytes))
-        img.load()
-        results.append(img.size)
-
-    threads = [
-        threading.Thread(target=_call_generate, args=("512x512",)),
-        threading.Thread(target=_call_generate, args=("768x512",)),
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert (512, 512) in results
-    assert (768, 512) in results

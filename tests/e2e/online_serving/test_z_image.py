@@ -12,6 +12,7 @@ This validates:
 import base64
 import json
 import os
+import threading
 from io import BytesIO
 from pathlib import Path
 
@@ -22,14 +23,27 @@ import torch
 from PIL import Image
 from safetensors.torch import save_file
 
-from tests.conftest import OmniServer
+from tests.conftest import OmniServer, OmniServerParams
 from tests.utils import hardware_test
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+# Increase timeout for downloading assets from S3 (default 5s is too short for CI)
+os.environ.setdefault("VLLM_IMAGE_FETCH_TIMEOUT", "60")
 
 MODEL = "Tongyi-MAI/Z-Image-Turbo"
 DIFFUSION_INIT_TIMEOUT_S = 700
 
+t2i_params = [
+    OmniServerParams(
+        model=MODEL,
+        server_args=[
+            "--stage-init-timeout",
+            str(DIFFUSION_INIT_TIMEOUT_S),
+            "--init-timeout",
+            str(DIFFUSION_INIT_TIMEOUT_S),
+        ],
+    )
+]
 
 PROMPT = "a photo of a cat sitting on a laptop keyboard"
 SIZE = "256x256"
@@ -52,6 +66,42 @@ def omni_server():
         yield server
 
 
+### End to end tests
+def test_t2i_concurrent_requests_different_sizes(omni_server, openai_client) -> None:
+    """Test /v1/images/generations concurrent requests with different sizes."""
+    barrier = threading.Barrier(2)
+    results: list[tuple[int, int]] = []
+
+    def _call_generate(size: str) -> None:
+        barrier.wait()
+        response = openai_client.client.images.generate(
+            model=omni_server.model,
+            prompt="cute cat playing with a ball",
+            n=1,
+            size=size,
+            response_format="b64_json",
+            extra_body={"num_inference_steps": 2},
+            timeout=120,
+        )
+        image_bytes = base64.b64decode(response.data[0].b64_json)
+        img = Image.open(BytesIO(image_bytes))
+        img.load()
+        results.append(img.size)
+
+    threads = [
+        threading.Thread(target=_call_generate, args=("512x512",)),
+        threading.Thread(target=_call_generate, args=("768x512",)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert (512, 512) in results
+    assert (768, 512) in results
+
+
+### LoRA related
 def _write_zimage_lora(adapter_dir: Path, *, q_scale: float = 0.0, k_scale: float = 0.0, v_scale: float = 0.0):
     adapter_dir.mkdir(parents=True, exist_ok=True)
 
