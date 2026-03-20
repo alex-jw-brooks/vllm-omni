@@ -7,8 +7,8 @@ from tests.conftest import (
 )
 from tests.utils import hardware_marks
 
-SINGLE_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "L4"})
-PARALLEL_FEATURE_MARKS = hardware_marks(res={"cuda": "L4"}, num_cards=4)
+TWO_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "L4"}, num_cards=2)
+FOUR_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "L4"}, num_cards=4)
 POSITIVE_PROMPT = "A cat sitting on a windowsill"
 NEGATIVE_PROMPT = "blurry, low quality"
 
@@ -16,6 +16,7 @@ NEGATIVE_PROMPT = "blurry, low quality"
 # Currently Flux2 tests target Flux2 Klein.
 def _get_diffusion_feature_cases(model: str, gguf_model: str):
     return [
+        # CPU offload / HSDP
         pytest.param(
             OmniServerParams(
                 model,
@@ -23,9 +24,12 @@ def _get_diffusion_feature_cases(model: str, gguf_model: str):
                     "--cache-backend",
                     "cache_dit",
                     "--enable-cpu-offload",
+                    "--use-hsdp",
+                    "--hsdp-shard-size",
+                    "2",
                 ],
             ),
-            marks=SINGLE_CARD_FEATURE_MARKS,
+            marks=TWO_CARD_FEATURE_MARKS,
         ),
         # FP8 / Hybrid sequence parallelism
         pytest.param(
@@ -42,7 +46,7 @@ def _get_diffusion_feature_cases(model: str, gguf_model: str):
                     "fp8",
                 ],
             ),
-            marks=PARALLEL_FEATURE_MARKS,
+            marks=FOUR_CARD_FEATURE_MARKS,
         ),
         # GGUF / TP / CFG parallel
         pytest.param(
@@ -59,7 +63,7 @@ def _get_diffusion_feature_cases(model: str, gguf_model: str):
                     "2",
                 ],
             ),
-            marks=PARALLEL_FEATURE_MARKS,
+            marks=FOUR_CARD_FEATURE_MARKS,
         ),
     ]
 
