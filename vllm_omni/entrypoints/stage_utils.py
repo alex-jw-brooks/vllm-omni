@@ -37,7 +37,6 @@ def set_stage_devices(
                     devices: [0,1,2,3]
                     CUDA_VISIBLE_DEVICES -> [1, 3, 4, 5, 6]
             will leverage [1, 3, 4, 5]
-        device_type: Device type ("cuda" or "npu"). If None, auto-detects.
 
     Returns:
         The list of physical devices that were set for the given stage
