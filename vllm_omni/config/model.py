@@ -194,7 +194,7 @@ class OmniModelConfig(ModelConfig):
         # We should not have any uninitialized keys
         uninitialized_fields = omni_fields - omni_kwargs.keys()
         if len(uninitialized_fields):
-            logger.warning(f"The following OmniModelConfig keys were not initialized: {uninitialized_fields}")
+            logger.error(f"The following OmniModelConfig keys were not initialized: {uninitialized_fields}")
 
     @classmethod
     def add_defaults_to_omni_kwargs(cls, omni_kwargs):
