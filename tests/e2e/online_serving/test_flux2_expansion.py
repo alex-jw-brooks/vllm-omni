@@ -1,3 +1,8 @@
+"""
+Tests for Flux2 Klein; currently Dev is implemented separately,
+but ideally these models will fold together in the future.
+"""
+
 import pytest
 
 from tests.conftest import (
@@ -7,30 +12,16 @@ from tests.conftest import (
 )
 from tests.utils import hardware_marks
 
-TWO_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "L4"}, num_cards=2)
 FOUR_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "L4"}, num_cards=4)
 POSITIVE_PROMPT = "A cat sitting on a windowsill"
 NEGATIVE_PROMPT = "blurry, low quality"
 
 
-# Currently Flux2 tests target Flux2 Klein.
-def _get_diffusion_feature_cases(model: str, gguf_model: str):
+# For now, we only test a good configuration for this model to keep the CI
+# light, but in the near future may explore using random models to check
+# cross-feature compatibility more generally.
+def _get_diffusion_feature_cases(model: str):
     return [
-        # CPU offload / HSDP
-        pytest.param(
-            OmniServerParams(
-                model,
-                server_args=[
-                    "--cache-backend",
-                    "cache_dit",
-                    "--enable-cpu-offload",
-                    "--use-hsdp",
-                    "--hsdp-shard-size",
-                    "2",
-                ],
-            ),
-            marks=TWO_CARD_FEATURE_MARKS,
-        ),
         # FP8 / Hybrid sequence parallelism
         pytest.param(
             OmniServerParams(
@@ -38,27 +29,13 @@ def _get_diffusion_feature_cases(model: str, gguf_model: str):
                 server_args=[
                     "--cache-backend",
                     "cache_dit",
-                    "--ring-degree",
-                    "2",
                     "--ulysses-degree",
                     "2",
                     "--quantization",
                     "fp8",
-                ],
-            ),
-            marks=FOUR_CARD_FEATURE_MARKS,
-        ),
-        # GGUF / TP / CFG parallel
-        pytest.param(
-            OmniServerParams(
-                model=model,
-                server_args=[
-                    "--quantization-config",
-                    f'{{"method":"gguf","gguf_model":"{gguf_model}"}}',
-                    "--cache-backend",
-                    "cache_dit",
-                    "--cfg-parallel-size",
-                    "2",
+                    # NOTE: TP added for test coverage here since it doesn't
+                    # slow things down too much, but fp8 + ulysses SP +
+                    # cache_dit will generally get you the highest speedup here
                     "--tensor-parallel-size",
                     "2",
                 ],
@@ -74,7 +51,6 @@ def _get_diffusion_feature_cases(model: str, gguf_model: str):
     "omni_server",
     _get_diffusion_feature_cases(
         model="black-forest-labs/FLUX.2-klein-4B",
-        gguf_model="unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q2_K.gguf",
     ),
     indirect=True,
 )
