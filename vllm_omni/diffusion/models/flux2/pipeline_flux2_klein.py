@@ -15,7 +15,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import math
 import os
 from collections.abc import Callable, Iterable
@@ -44,7 +43,6 @@ from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
-from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
 
 logger = init_logger(__name__)
 
@@ -135,28 +133,6 @@ class Flux2ImageProcessor(VaeImageProcessor):
             x_offset += img.width
 
         return new_img
-
-
-def get_flux2_klein_post_process_func(
-    od_config: OmniDiffusionConfig,
-):
-    model_name = od_config.model
-    if os.path.exists(model_name):
-        model_path = model_name
-    else:
-        model_path = download_weights_from_hf_specific(model_name, None, ["*"])
-
-    vae_config_path = os.path.join(model_path, "vae/config.json")
-    with open(vae_config_path) as f:
-        vae_config = json.load(f)
-        vae_scale_factor = 2 ** (len(vae_config["block_out_channels"]) - 1) if "block_out_channels" in vae_config else 8
-
-    image_processor = Flux2ImageProcessor(vae_scale_factor=vae_scale_factor * 2)
-
-    def post_process_func(images: torch.Tensor):
-        return image_processor.postprocess(images)
-
-    return post_process_func
 
 
 # Copied from diffusers.pipelines.flux2.pipeline_flux2.compute_empirical_mu
