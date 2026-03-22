@@ -124,12 +124,12 @@ _DIFFUSION_MODELS = {
         "HunyuanImage3Pipeline",
     ),
     "Flux2KleinPipeline": (
-        "flux2_klein",
+        "flux2",
         "pipeline_flux2_klein",
         "Flux2KleinPipeline",
     ),
     "Flux2Pipeline": (
-        "flux2_klein",
+        "flux2",
         "pipeline_flux2",
         "Flux2Pipeline",
     ),

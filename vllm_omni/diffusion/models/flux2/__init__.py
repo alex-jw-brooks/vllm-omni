@@ -2,14 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Flux2 klein diffusion model components."""
 
-from vllm_omni.diffusion.models.flux2_klein.flux2_klein_transformer import (
+from vllm_omni.diffusion.models.flux2.flux2_transformer import (
     Flux2Transformer2DModel,
 )
-from vllm_omni.diffusion.models.flux2_klein.pipeline_flux2 import (
+from vllm_omni.diffusion.models.flux2.pipeline_flux2 import (
     Flux2Pipeline,
     get_flux2_post_process_func,
 )
-from vllm_omni.diffusion.models.flux2_klein.pipeline_flux2_klein import (
+from vllm_omni.diffusion.models.flux2.pipeline_flux2_klein import (
     Flux2KleinPipeline,
     get_flux2_klein_post_process_func,
 )
