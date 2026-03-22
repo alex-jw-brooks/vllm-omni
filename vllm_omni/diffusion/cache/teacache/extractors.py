@@ -753,6 +753,10 @@ def extract_longcat_context(
     fwd_context = get_forward_context()
     sp_size = module.parallel_config.sequence_parallel_size
     if sp_size is not None and sp_size > 1:
+        # NOTE: For now, we set this to False on the forward context
+        # to be consistent with LongCat Image's current behavior when
+        # TeaCache is enabled. We do not need to reset it in post process
+        # since we should never split text embed in sp for this model.
         fwd_context.split_text_embed_in_sp = False
 
     hidden_states = module.x_embedder(hidden_states)
