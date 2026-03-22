@@ -99,7 +99,7 @@ def _map_device_list(stage_id: int, device_list: list[str], visible_device_list:
 
     logical_ids = [int(device) for device in device_list]
     if min(logical_ids) < 0 or max(logical_ids) >= num_visible:
-        raise AssertionError(
+        raise ValueError(
             f"Stage {stage_id} has logical IDs {device_list}, one or more of which exceed the number of visible devices"
         )
     return [visible_device_list[idx] for idx in logical_ids]
