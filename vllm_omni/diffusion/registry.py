@@ -128,6 +128,11 @@ _DIFFUSION_MODELS = {
         "pipeline_flux2_klein",
         "Flux2KleinPipeline",
     ),
+    "Flux2Pipeline": (
+        "flux2_klein",
+        "pipeline_flux2",
+        "Flux2Pipeline",
+    ),
     "NextStep11Pipeline": (
         "nextstep_1_1",
         "pipeline_nextstep_1_1",
@@ -152,11 +157,6 @@ _DIFFUSION_MODELS = {
         "helios",
         "pipeline_helios",
         "HeliosPipeline",
-    ),
-    "Flux2Pipeline": (
-        "flux2",
-        "pipeline_flux2",
-        "Flux2Pipeline",
     ),
     "DreamIDOmniPipeline": (
         "dreamid_omni",
