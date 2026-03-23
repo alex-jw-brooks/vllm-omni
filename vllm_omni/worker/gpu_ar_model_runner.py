@@ -201,6 +201,16 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         finally:
             set_cudagraph_capturing_enabled(False)
 
+    def update_hidden_state_cache(self, hidden_states, num_tokens_unpadded):
+        """Updates the hidden cache state for prefix caching from
+        the current model's execution for the unpadded tokens.
+        """
+        assert self.hidden_state_cache is not None
+        slot_mapping = self.input_batch.block_table[0].slot_mapping.gpu[:num_tokens_unpadded]
+        # View the cache as 2D so that we can treat our slots as row indices
+        flat_cache = self.hidden_state_cache.view(-1, self.hidden_state_cache.shape[-1])
+        flat_cache[slot_mapping] = hidden_states[:num_tokens_unpadded]
+
     @torch.inference_mode()
     def execute_model(
         self,
@@ -476,6 +486,14 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
 
             hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
 
+            # Cache hidden states if we've enabled hidden state prefix caching
+            # unless this isn't the last pipeline parallelism rank.
+            if self.cache_hidden_states and self.hidden_state_cache is not None and get_pp_group().is_last_rank:
+                self.update_hidden_state_cache(
+                    hidden_states=hidden_states,
+                    num_tokens_unpadded=num_tokens_unpadded,
+                )
+
             if not self.broadcast_pp_output:
                 # Common case.
                 if not get_pp_group().is_last_rank:
@@ -749,6 +767,14 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                 dtype=np.int32,
             )
 
+        # Prior to applying the post-processing func, extract
+        # the prefix cached hidden states if it's enabled and
+        # we have them.
+        combined_hidden_states = self._get_merged_hidden_states(
+            hidden_states=hidden_states,
+            num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+        )
+
         self._process_additional_information_updates(
             hidden_states, multimodal_outputs, num_scheduled_tokens_np, scheduler_output
         )
@@ -787,8 +813,14 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             start = int(self.query_start_loc.cpu[idx])
             sched = int(num_scheduled_tokens_np[idx])
             end = start + sched
-            hidden_slice = hidden_states_cpu[start:end]
-            payload: dict[str, object] = {"hidden": hidden_slice}
+            # For prefix cache on hidden states - if it's a request
+            # in the combined hidden states, it's a cache hit, so we
+            # send the states that were already merged.
+            if combined_hidden_states and rid in combined_hidden_states:
+                req_hidden_states = combined_hidden_states[rid]
+            else:
+                req_hidden_states = hidden_states_cpu[start:end]
+            payload: dict[str, object] = {"hidden": req_hidden_states}
             if mm_cpu:
                 mm_payload: dict[str, object] = {}
                 for k, v in mm_cpu.items():
