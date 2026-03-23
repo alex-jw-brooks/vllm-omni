@@ -38,7 +38,14 @@ SEED = 42
 z_image_params = [
     OmniServerParams(
         model=MODEL,
-        server_args=["--num-gpus", "1", "--stage-init-timeout", str(DIFFUSION_INIT_TIMEOUT_S), "--init-timeout", str(DIFFUSION_INIT_TIMEOUT_S)],
+        server_args=[
+            "--num-gpus",
+            "1",
+            "--stage-init-timeout",
+            str(DIFFUSION_INIT_TIMEOUT_S),
+            "--init-timeout",
+            str(DIFFUSION_INIT_TIMEOUT_S),
+        ],
     )
 ]
 
