@@ -60,6 +60,10 @@ class OmniGPUModelRunner(GPUModelRunner):
         self.model_intermediate_buffer: dict[str, dict[str, Any]] = {}
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
+        # TODO add another gate for this
+        self.cache_hidden_states = self.cache_config.enable_prefix_caching
+        self.hidden_state_cache: torch.Tensor | None = None
+        self._new_req_cache_hit_ids: set[str] | None = None
 
     def initialize_metadata_builders(self, kv_cache_config, kernel_block_sizes):
         """Override to fix scheduler_metadata buffer size for FA3 + CUDA graph.
@@ -86,6 +90,60 @@ class OmniGPUModelRunner(GPUModelRunner):
                                 dtype=sm.dtype,
                                 device=sm.device,
                             )
+        # If we've enabled hidden state prefix caching, preallocate
+        # the cache; this is currently only used for the output hidden
+        # states of the stage.
+        # NOTE: hidden states are large; careful to ensure things are
+        # safely handled for memory in the future if this is expanded.
+        if self.cache_hidden_states:
+            # We don't handle hybrid cache types for hidden state caching yet;
+            # This does matter since
+            if len(kv_cache_config.kv_cache_groups) > 1:
+                logger.warning("Hidden state caching with multiple KV cache groups not yet supported, disabling.")
+                self.cache_hidden_states = False
+            else:
+                logger.info("Initializing hidden states prefix cache")
+                num_blocks = kv_cache_config.num_blocks
+                block_size = self.cache_config.block_size
+                hidden_size = self.model_config.get_hidden_size()
+                self.hidden_state_cache = torch.zeros(
+                    (num_blocks, block_size, hidden_size),
+                    dtype=self.dtype,
+                    device=self.device,
+                )
+
+    def _get_merged_hidden_states(self, hidden_states, num_scheduled_tokens):
+        """When hidden state caching is enabled, takes the input hidden_states,
+        which only correspond to the scheduled tokens, and returns a mapping
+        from request IDs to their full hidden states. This is accomplished by
+        looking up the block IDs & scheduled token counts to split the
+        hidden_states.
+
+        NOTE: We do not handle hybrid caches at the moment, which is why
+        we index into the first block table like this.
+        """
+        combined_hidden_states = {}
+        if self.cache_hidden_states and self._new_req_cache_hit_ids:
+            assert self.hidden_state_cache
+            for req_id in self._new_req_cache_hit_ids:
+                req_idx = self.input_batch.req_id_to_index[req_id]
+                num_computed = self.input_batch.num_computed_tokens_cpu[req_idx]
+                block_size = self.cache_config.block_size
+                # NOTE: vLLM only caches full blocks
+                num_cached_blocks = num_computed // block_size
+                # Get the block IDs attached to this cache hit and reindex into
+                # the flattened cached hidden states (i.e., 1 row per token).
+                block_ids = self.input_batch.block_table[0].block_table.gpu[req_idx, :num_cached_blocks]
+                cached_hs = self.hidden_state_cache[block_ids].reshape(-1, self.hidden_state_cache.shape[-1])
+
+                # Slice the hidden states corresponding to this request;
+                # we do this by using the query start
+                start = self.query_start_loc.gpu[req_idx]
+                new_hs = hidden_states[start : start + num_scheduled_tokens[req_id]]
+                # TODO: consider putting the actually hidden state cache on CPU
+                combined_hidden_states[req_id] = torch.cat([cached_hs, new_hs], dim=0).detach().to("cpu").contiguous()
+
+        return combined_hidden_states
 
     @instrument(span_name="Loading (GPU)")
     def load_model(self, *args, **kwargs) -> None:
@@ -253,6 +311,9 @@ class OmniGPUModelRunner(GPUModelRunner):
         The SamplingMetadata is updated and copied to the GPU if there is a
         new/resumed/paused/finished request in the batch.
         """
+        # Used for prefix cache
+        self._new_req_cache_hit_ids = set()
+
         # Remove finished requests from the cached states.
         for req_id in scheduler_output.finished_req_ids:
             self.requests.pop(req_id, None)
@@ -312,6 +373,13 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_state = self._update_streaming_request(req_id, new_req_data)
                 reqs_to_add.append(req_state)
                 continue
+
+            # Since this is the first time the request has been scheduled,
+            # num_computed_tokens > 0 means that we have a hit in prefix
+            # caching; mark it so that we can manage the hidden states
+            # later on as needed.
+            if self.cache_hidden_states and new_req_data.num_computed_tokens > 0:
+                self._new_req_cache_hit_ids.add(req_id)
 
             sampling_params = new_req_data.sampling_params
             pooling_params = new_req_data.pooling_params
