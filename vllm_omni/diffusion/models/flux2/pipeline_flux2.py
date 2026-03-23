@@ -5,7 +5,6 @@ import os
 from typing import Any
 
 import numpy as np
-import PIL.Image
 import torch
 from diffusers.pipelines.flux2.pipeline_flux2 import UPSAMPLING_MAX_IMAGE_SIZE
 from diffusers.pipelines.flux2.system_messages import (
@@ -14,7 +13,7 @@ from diffusers.pipelines.flux2.system_messages import (
     SYSTEM_MESSAGE_UPSAMPLING_T2I,
 )
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
-from transformers import AutoProcessor, Mistral3ForConditionalGeneration, PixtralProcessor
+from transformers import Mistral3ForConditionalGeneration, PixtralProcessor
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.utils import get_local_device
@@ -29,11 +28,10 @@ logger = logging.getLogger(__name__)
 get_flux2_post_process_func = get_flux2_post_process_func
 
 
-# Copied from diffusers.pipelines.flux2.pipeline_flux2.format_input
+# Adapted from diffusers.pipelines.flux2.pipeline_flux2.format_input
 def format_input(
     prompts: list[str],
     system_message: str = SYSTEM_MESSAGE,
-    images: list[PIL.Image.Image] | list[list[PIL.Image.Image]] = None,
 ) -> list[list[dict[str, Any]]]:
     """
     Format a batch of text prompts into the conversation format expected by apply_chat_template. Optionally, add images
@@ -42,7 +40,6 @@ def format_input(
     Args:
         prompts: List of text prompts
         system_message: System message to use (default: CREATIVE_SYSTEM_MESSAGE)
-        images (optional): List of images to add to the input.
 
     Returns:
         `list[list[dict[str, Any]]]`: List of conversations, where each conversation is a list of message dicts
@@ -52,47 +49,17 @@ def format_input(
     # if the count changes after truncation.
     cleaned_txt = [prompt.replace("[IMG]", "") for prompt in prompts]
 
-    if images is None or len(images) == 0:
-        return [
-            [
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": system_message}],
-                },
-                {"role": "user", "content": [{"type": "text", "text": prompt}]},
-            ]
-            for prompt in cleaned_txt
+    # Currently we assumes images is None
+    return [
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": system_message}],
+            },
+            {"role": "user", "content": [{"type": "text", "text": prompt}]},
         ]
-    else:
-        assert len(images) == len(prompts), "Number of images must match number of prompts"
-        messages = [
-            [
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": system_message}],
-                },
-            ]
-            for _ in cleaned_txt
-        ]
-
-        for i, (el, batch_images) in enumerate(zip(messages, images)):
-            # optionally add the images per batch element.
-            if batch_images is not None:
-                el.append(
-                    {
-                        "role": "user",
-                        "content": [{"type": "image", "image": image_obj} for image_obj in batch_images],
-                    }
-                )
-            # add the text.
-            el.append(
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": cleaned_txt[i]}],
-                }
-            )
-
-        return messages
+        for prompt in cleaned_txt
+    ]
 
 
 class Flux2Pipeline(Flux2PipelineBase):
@@ -124,26 +91,27 @@ class Flux2Pipeline(Flux2PipelineBase):
         self.system_message_upsampling_i2i = SYSTEM_MESSAGE_UPSAMPLING_I2I
         self.upsampling_max_image_size = UPSAMPLING_MAX_IMAGE_SIZE
 
-    @staticmethod
-    def _get_mistral_3_small_prompt_embeds(
-        text_encoder: Mistral3ForConditionalGeneration,
-        tokenizer: AutoProcessor,
+    def _get_prompt_embeds(
+        self,
         prompt: str | list[str],
         device: torch.device | None,
         max_sequence_length: int,
-        system_message: str,
-        hidden_states_layers: list[int],
+        hidden_states_layers: tuple[int, ...],
     ):
-        dtype = text_encoder.dtype
-        device = text_encoder.device if device is None else device
+        """Get the prompt embeddings for Mistral 3 small."""
+        dtype = self.text_encoder.dtype
+        device = self.text_encoder.device if device is None else device
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
         # Format input messages
-        messages_batch = format_input(prompts=prompt, system_message=system_message)
+        messages_batch = format_input(
+            prompts=prompt,
+            system_message=self.system_message,
+        )
 
         # Process all messages at once
-        inputs = tokenizer.apply_chat_template(
+        inputs = self.tokenizer.apply_chat_template(
             messages_batch,
             add_generation_prompt=False,
             tokenize=True,
@@ -159,7 +127,7 @@ class Flux2Pipeline(Flux2PipelineBase):
         attention_mask = inputs["attention_mask"].to(device)
 
         # Forward pass through the model
-        output = text_encoder(
+        output = self.text_encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
@@ -192,13 +160,10 @@ class Flux2Pipeline(Flux2PipelineBase):
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
         if prompt_embeds is None:
-            prompt_embeds = self._get_mistral_3_small_prompt_embeds(
-                text_encoder=self.text_encoder,
-                tokenizer=self.tokenizer,
+            prompt_embeds = self._get_prompt_embeds(
                 prompt=prompt,
                 device=device,
                 max_sequence_length=max_sequence_length,
-                system_message=self.system_message,
                 hidden_states_layers=text_encoder_out_layers,
             )
 
@@ -209,39 +174,6 @@ class Flux2Pipeline(Flux2PipelineBase):
         text_ids = self._prepare_text_ids(prompt_embeds)
         text_ids = text_ids.to(device)
         return prompt_embeds, text_ids
-
-    def check_inputs(
-        self,
-        prompt,
-        height,
-        width,
-        prompt_embeds,
-    ):
-        if (
-            height is not None
-            and height % (self.vae_scale_factor * 2) != 0
-            or width is not None
-            and width % (self.vae_scale_factor * 2) != 0
-        ):
-            logger.warning(
-                "`height` and `width` have to be divisible by %s but are %s and %s. "
-                "Dimensions will be resized accordingly",
-                self.vae_scale_factor * 2,
-                height,
-                width,
-            )
-
-        if prompt is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
-            )
-        elif prompt is None and prompt_embeds is None:
-            raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-            )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
 
     def forward(
         self,

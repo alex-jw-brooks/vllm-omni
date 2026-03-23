@@ -66,18 +66,16 @@ class Flux2KleinPipeline(Flux2PipelineBase):
             local_files_only=local_files_only,
         )
 
-    @staticmethod
-    def _get_qwen3_prompt_embeds(
-        text_encoder: Qwen3ForCausalLM,
-        tokenizer: Qwen2TokenizerFast,
+    def _get_prompt_embeds(
+        self,
         prompt: str | list[str],
-        dtype: torch.dtype | None = None,
-        device: torch.device | None = None,
-        max_sequence_length: int = 512,
-        hidden_states_layers: list[int] = (9, 18, 27),
+        device: torch.device | None,
+        max_sequence_length: int,
+        hidden_states_layers: tuple[int, ...],
     ):
-        dtype = text_encoder.dtype if dtype is None else dtype
-        device = text_encoder.device if device is None else device
+        """Get the prompt embeddings for Qwen3."""
+        dtype = self.text_encoder.dtype
+        device = self.text_encoder.device if device is None else device
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
@@ -86,13 +84,13 @@ class Flux2KleinPipeline(Flux2PipelineBase):
 
         for single_prompt in prompt:
             messages = [{"role": "user", "content": single_prompt}]
-            text = tokenizer.apply_chat_template(
+            text = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
                 enable_thinking=False,
             )
-            inputs = tokenizer(
+            inputs = self.tokenizer(
                 text,
                 return_tensors="pt",
                 padding="max_length",
@@ -107,7 +105,7 @@ class Flux2KleinPipeline(Flux2PipelineBase):
         attention_mask = torch.cat(all_attention_masks, dim=0).to(device)
 
         # Forward pass through the model
-        output = text_encoder(
+        output = self.text_encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
@@ -123,75 +121,15 @@ class Flux2KleinPipeline(Flux2PipelineBase):
 
         return prompt_embeds
 
-    def encode_prompt(
-        self,
-        prompt: str | list[str],
-        device: torch.device | None = None,
-        num_images_per_prompt: int = 1,
-        prompt_embeds: torch.Tensor | None = None,
-        max_sequence_length: int = 512,
-        text_encoder_out_layers: tuple[int, ...] = (9, 18, 27),
-    ):
-        device = device or self._execution_device
-
-        if prompt is None:
-            prompt = ""
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-
-        if prompt_embeds is None:
-            prompt_embeds = self._get_qwen3_prompt_embeds(
-                text_encoder=self.text_encoder,
-                tokenizer=self.tokenizer,
-                prompt=prompt,
-                device=device,
-                max_sequence_length=max_sequence_length,
-                hidden_states_layers=text_encoder_out_layers,
-            )
-
-        batch_size, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
-
-        text_ids = self._prepare_text_ids(prompt_embeds)
-        text_ids = text_ids.to(device)
-        return prompt_embeds, text_ids
-
     def check_inputs(
         self,
-        prompt,
-        height,
-        width,
-        prompt_embeds=None,
+        *args,
         guidance_scale=None,
+        **kwargs,
     ):
-        if (
-            height is not None
-            and height % (self.vae_scale_factor * 2) != 0
-            or width is not None
-            and width % (self.vae_scale_factor * 2) != 0
-        ):
-            logger.warning(
-                "`height` and `width` have to be divisible by %s but are %s and %s. "
-                "Dimensions will be resized accordingly",
-                self.vae_scale_factor * 2,
-                height,
-                width,
-            )
+        super().check_inputs(*args, **kwargs)
 
-        if prompt is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
-            )
-        elif prompt is None and prompt_embeds is None:
-            raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-            )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
-
-        if guidance_scale > 1.0 and self.is_distilled:
+        if guidance_scale is not None and guidance_scale > 1.0 and self.is_distilled:
             logger.warning(f"Guidance scale {guidance_scale} is ignored for step-wise distilled models.")
 
     @property

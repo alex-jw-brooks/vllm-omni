@@ -231,6 +231,48 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
         )
 
+    def check_inputs(
+        self,
+        prompt,
+        height,
+        width,
+        prompt_embeds=None,
+    ):
+        if (
+            height is not None
+            and height % (self.vae_scale_factor * 2) != 0
+            or width is not None
+            and width % (self.vae_scale_factor * 2) != 0
+        ):
+            logger.warning(
+                "`height` and `width` have to be divisible by %s but are %s and %s. "
+                "Dimensions will be resized accordingly",
+                self.vae_scale_factor * 2,
+                height,
+                width,
+            )
+
+        if prompt is not None and prompt_embeds is not None:
+            raise ValueError(
+                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
+                " only forward one of the two."
+            )
+        elif prompt is None and prompt_embeds is None:
+            raise ValueError(
+                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
+            )
+        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
+            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
+
+    def _get_prompt_embeds(
+        self,
+        prompt: str | list[str],
+        device: torch.device | None,
+        max_sequence_length: int,
+        hidden_states_layers: tuple[int, ...],
+    ):
+        raise NotImplementedError("Flux2 subclasses have different implementations for embedding prompts")
+
     def encode_prompt(
         self,
         prompt: str | list[str],
@@ -248,14 +290,10 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
         if prompt_embeds is None:
-            # TODO we should abstract this
-            prompt_embeds = self._get_mistral_3_small_prompt_embeds(
-                text_encoder=self.text_encoder,
-                tokenizer=self.tokenizer,
+            prompt_embeds = self._get_prompt_embeds(
                 prompt=prompt,
                 device=device,
                 max_sequence_length=max_sequence_length,
-                system_message=self.system_message,
                 hidden_states_layers=text_encoder_out_layers,
             )
 
