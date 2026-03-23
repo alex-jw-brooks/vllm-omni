@@ -20,6 +20,7 @@
 import json
 import math
 import os
+from collections.abc import Iterable
 
 import PIL.Image
 import torch
@@ -30,6 +31,7 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img impo
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
 from vllm.logger import init_logger
+from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
@@ -336,7 +338,7 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
 
     @staticmethod
     # Copied from diffusers.pipelines.flux2.pipeline_flux2.Flux2Pipeline._pack_latents
-    def _pack_latents(latents):
+    def _pack_latents(latents: torch.Tensor) -> torch.Tensor:
         """
         pack latents: (batch_size, num_channels, height, width) -> (batch_size, height * width, num_channels)
         """
@@ -451,7 +453,7 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         device,
         generator: torch.Generator,
         latents: torch.Tensor | None = None,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
         height = 2 * (int(height) // (self.vae_scale_factor * 2))
@@ -482,7 +484,7 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         generator: torch.Generator,
         device,
         dtype,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         image_latents = []
         for image in images:
             image = image.to(device=device, dtype=dtype)
@@ -518,13 +520,13 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         return self._attention_kwargs
 
     @property
-    def num_timesteps(self):
-        return self._num_timesteps
-
-    @property
-    def current_timestep(self):
-        return self._current_timestep
-
-    @property
     def interrupt(self):
         return self._interrupt
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        loader = AutoWeightsLoader(self)
+        loaded_weights = loader.load_weights(weights)
+        # Record components loaded by diffusers submodules to satisfy strict checks.
+        loaded_weights |= {f"vae.{name}" for name, _ in self.vae.named_parameters()}
+        loaded_weights |= {f"text_encoder.{name}" for name, _ in self.text_encoder.named_parameters()}
+        return loaded_weights
