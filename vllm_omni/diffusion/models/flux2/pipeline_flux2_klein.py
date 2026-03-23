@@ -17,25 +17,23 @@
 
 import os
 
-import numpy as np
 import torch
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
 from transformers import Qwen2TokenizerFast, Qwen3ForCausalLM
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.models.flux2.common import (
     Flux2PipelineBase,
-    compute_empirical_mu,
     get_flux2_post_process_func,
 )
-from vllm_omni.diffusion.request import OmniDiffusionRequest
 
 logger = init_logger(__name__)
 
 
 class Flux2KleinPipeline(Flux2PipelineBase):
     """Flux2 klein pipeline for text-to-image generation."""
+
+    _default_text_encoder_out_layers = (9, 18, 27)
 
     def __init__(
         self,
@@ -128,149 +126,24 @@ class Flux2KleinPipeline(Flux2PipelineBase):
             logger.warning(f"Guidance scale {guidance_scale} is ignored for step-wise distilled models.")
 
     @property
-    def do_classifier_free_guidance(self):
+    def do_classifier_free_guidance(self) -> bool:
         return self._guidance_scale is not None and self._guidance_scale > 1 and not self.is_distilled
 
-    def forward(
+    def _denoise(
         self,
-        req: OmniDiffusionRequest,
-    ) -> DiffusionOutput:
-        # NOTE: For now, flux2 klein pipeline doesn't support image edit
-
-        if len(req.prompts) > 1:
-            logger.warning(
-                "This model only supports a single prompt, not a batched request.Taking only the first image for now."
-            )
-        first_prompt = req.prompts[0]
-        prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
-        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
-
-        if any(p is not None for p in req_prompt_embeds):
-            # If at list one prompt is provided as an embedding,
-            # Then assume that the user wants to provide embeddings for all prompts, and enter this if block
-            # If the user in fact provides mixed input format, req_prompt_embeds will have some None's
-            # And `torch.stack` automatically raises an exception for us
-            prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
-        else:
-            prompt_embeds = None
-
-        req_negative_prompt_embeds = [
-            p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts
-        ]
-        if any(p is not None for p in req_negative_prompt_embeds):
-            negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore # intentionally expect TypeError
-        else:
-            negative_prompt_embeds = None
-
-        # Apply the default overrides for Flux2Kleins's sampling parameters
-        # TODO (Alex) we need to expose these more generically
-        num_inference_steps = 50
-        guidance_scale = 4.0
-        output_type = "pil"
-        max_sequence_length = 512
-        text_encoder_out_layers = (9, 18, 27)
-
-        height = req.sampling_params.height
-        width = req.sampling_params.width
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
-        guidance_scale = (
-            req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else guidance_scale
-        )
-        output_type = req.sampling_params.output_type or output_type
-        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
-        text_encoder_out_layers = req.sampling_params.extra_args.get(
-            "text_encoder_out_layers",
-            text_encoder_out_layers,
-        )
-
-        req_sigmas = req.sampling_params.sigmas
-        sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps) if req_sigmas is None else req_sigmas
-        if hasattr(self.scheduler.config, "use_flow_sigmas") and self.scheduler.config.use_flow_sigmas:
-            sigmas = None
-
-        generator = req.sampling_params.generator
-        num_images_per_prompt = (
-            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
-        )
-
-        # 1. Check inputs. Raise error if not correct
-        self.check_inputs(
-            prompt=prompt,
-            height=height,
-            width=width,
-            prompt_embeds=prompt_embeds,
-            guidance_scale=guidance_scale,
-        )
-
-        self._guidance_scale = guidance_scale
-        self._interrupt = False
-
-        # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        elif prompt_embeds is not None:
-            batch_size = prompt_embeds.shape[0]
-        else:  # Presumably prompt is None & str
-            batch_size = 1
-
-        device = self._execution_device
-
-        # 3. prepare text embeddings
-        prompt_embeds, text_ids = self.encode_prompt(
-            prompt=prompt,
-            prompt_embeds=prompt_embeds,
-            device=device,
-            num_images_per_prompt=num_images_per_prompt,
-            max_sequence_length=max_sequence_length,
-            text_encoder_out_layers=text_encoder_out_layers,
-        )
-
-        if self.do_classifier_free_guidance:
-            negative_prompt = ""
-            if prompt is not None and isinstance(prompt, list):
-                negative_prompt = [negative_prompt] * len(prompt)
-            negative_prompt_embeds, negative_text_ids = self.encode_prompt(
-                prompt=negative_prompt,
-                prompt_embeds=negative_prompt_embeds,
-                device=device,
-                num_images_per_prompt=num_images_per_prompt,
-                max_sequence_length=max_sequence_length,
-                text_encoder_out_layers=text_encoder_out_layers,
-            )
-
-        height = height or self.default_sample_size * self.vae_scale_factor
-        width = width or self.default_sample_size * self.vae_scale_factor
-
-        # 4. prepare latent variables
-        num_channels_latents = self.transformer.config.in_channels // 4
-        latents, latent_ids = self.prepare_latents(
-            batch_size=batch_size * num_images_per_prompt,
-            num_latents_channels=num_channels_latents,
-            height=height,
-            width=width,
-            dtype=prompt_embeds.dtype,
-            device=device,
-            generator=generator,
-        )
-
-        image_latents = None
-        image_latent_ids = None
-
-        # 5. Prepare timesteps
-        image_seq_len = latents.shape[1]
-        mu = compute_empirical_mu(image_seq_len=image_seq_len, num_steps=num_inference_steps)
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler,
-            num_inference_steps,
-            device,
-            sigmas=sigmas,
-            mu=mu,
-        )
-        self._num_timesteps = len(timesteps)
-
-        # 6. Denoising loop
-        # We set the index here to remove DtoH sync, helpful especially during compilation.
-        # Check out more details here: https://github.com/huggingface/diffusers/pull/11696
+        *,
+        latents,
+        latent_ids,
+        image_latents,
+        image_latent_ids,
+        prompt_embeds,
+        text_ids,
+        negative_prompt_embeds,
+        negative_text_ids,
+        timesteps,
+        guidance_scale,
+    ):
+        """Runs the denoising loop for Flux2 Klein (supports CFG)."""
         self.scheduler.set_begin_index(0)
         for i, t in enumerate(timesteps):
             if self.interrupt:
@@ -293,7 +166,7 @@ class Flux2KleinPipeline(Flux2PipelineBase):
                 "encoder_hidden_states": prompt_embeds,
                 "txt_ids": text_ids,
                 "img_ids": latent_image_ids,
-                "joint_attention_kwargs": self.attention_kwargs,
+                "joint_attention_kwargs": {},
                 "return_dict": False,
             }
             if self.do_classifier_free_guidance:
@@ -304,7 +177,7 @@ class Flux2KleinPipeline(Flux2PipelineBase):
                     "encoder_hidden_states": negative_prompt_embeds,
                     "txt_ids": negative_text_ids,
                     "img_ids": latent_image_ids,
-                    "joint_attention_kwargs": self.attention_kwargs,
+                    "joint_attention_kwargs": {},
                     "return_dict": False,
                 }
             else:
@@ -324,27 +197,7 @@ class Flux2KleinPipeline(Flux2PipelineBase):
 
             # Compute the previous noisy sample x_t -> x_t-1 with automatic CFG sync
             latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, self.do_classifier_free_guidance)
-
-        self._current_timestep = None
-
-        latents = self._unpack_latents_with_ids(latents, latent_ids)
-
-        latents_bn_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
-        latents_bn_std = torch.sqrt(self.vae.bn.running_var.view(1, -1, 1, 1) + self.vae.config.batch_norm_eps).to(
-            latents.device, latents.dtype
-        )
-        latents = latents * latents_bn_std + latents_bn_mean
-        latents = self._unpatchify_latents(latents)
-        if output_type == "latent":
-            image = latents
-        else:
-            if latents.dtype != self.vae.dtype:
-                latents = latents.to(self.vae.dtype)
-            image = self.vae.decode(latents, return_dict=False)[0]
-
-        return DiffusionOutput(
-            output=image, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
-        )
+        return latents
 
 
 # For now, explicitly re-export the shared flux2 to play nicely

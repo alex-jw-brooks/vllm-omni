@@ -22,18 +22,20 @@ import math
 import os
 from collections.abc import Iterable
 
+import numpy as np
 import PIL.Image
 import torch
 import torch.nn as nn
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import retrieve_latents
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
 from vllm.logger import init_logger
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
-from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
@@ -41,6 +43,7 @@ from vllm_omni.diffusion.models.flux2.flux2_transformer import Flux2Transformer2
 from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.quantization import get_vllm_quant_config_for_layers
+from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
 from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
 
@@ -189,7 +192,6 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         self.default_sample_size = 128
 
         self._guidance_scale = None
-        self._attention_kwargs = None
         self._num_timesteps = None
         self._current_timestep = None
         self._interrupt = False
@@ -197,12 +199,20 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
         )
 
+    # Subclasses must set this to their model-specific layer indices
+    _default_text_encoder_out_layers: tuple[int, ...] = ()
+
+    @property
+    def do_classifier_free_guidance(self) -> bool:
+        return False
+
     def check_inputs(
         self,
         prompt,
         height,
         width,
         prompt_embeds=None,
+        **kwargs,
     ):
         if (
             height is not None
@@ -520,10 +530,6 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         return self._guidance_scale
 
     @property
-    def attention_kwargs(self):
-        return self._attention_kwargs
-
-    @property
     def interrupt(self):
         return self._interrupt
 
@@ -534,3 +540,181 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         loaded_weights |= {f"vae.{name}" for name, _ in self.vae.named_parameters()}
         loaded_weights |= {f"text_encoder.{name}" for name, _ in self.text_encoder.named_parameters()}
         return loaded_weights
+
+    def _denoise(
+        self,
+        *,
+        latents,
+        latent_ids,
+        image_latents,
+        image_latent_ids,
+        prompt_embeds,
+        text_ids,
+        negative_prompt_embeds,
+        negative_text_ids,
+        timesteps,
+        guidance_scale,
+    ):
+        raise NotImplementedError
+
+    def _decode_latents(self, latents, latent_ids, output_type):
+        latents = self._unpack_latents_with_ids(latents, latent_ids)
+
+        latents_bn_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
+        latents_bn_std = torch.sqrt(self.vae.bn.running_var.view(1, -1, 1, 1) + self.vae.config.batch_norm_eps).to(
+            latents.device, latents.dtype
+        )
+        latents = latents * latents_bn_std + latents_bn_mean
+        latents = self._unpatchify_latents(latents)
+
+        if output_type == "latent":
+            image = latents
+        else:
+            if latents.dtype != self.vae.dtype:
+                latents = latents.to(self.vae.dtype)
+            image = self.vae.decode(latents, return_dict=False)[0]
+
+        return DiffusionOutput(
+            output=image, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
+        )
+
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
+        # NOTE: For now, flux2 pipeline doesn't support image edit
+
+        if len(req.prompts) > 1:
+            logger.warning(
+                "This model only supports a single prompt, not a batched request. Taking only the first prompt for now."
+            )
+        first_prompt = req.prompts[0]
+        prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
+        req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
+
+        if any(p is not None for p in req_prompt_embeds):
+            prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore # intentionally expect TypeError
+        else:
+            prompt_embeds = None
+
+        # Apply defaults, then override with request sampling parameters
+        ### FIXME - we need to pass the correct overrides through here.
+        num_inference_steps = req.sampling_params.num_inference_steps or 50
+        guidance_scale = req.sampling_params.guidance_scale if req.sampling_params.guidance_scale is not None else 4.0
+        output_type = req.sampling_params.output_type or "pil"
+        max_sequence_length = req.sampling_params.max_sequence_length or 512
+        text_encoder_out_layers = req.sampling_params.extra_args.get(
+            "text_encoder_out_layers",
+            self._default_text_encoder_out_layers,
+        )
+
+        height = req.sampling_params.height
+        width = req.sampling_params.width
+
+        req_sigmas = req.sampling_params.sigmas
+        sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps) if req_sigmas is None else req_sigmas
+        if hasattr(self.scheduler.config, "use_flow_sigmas") and self.scheduler.config.use_flow_sigmas:
+            sigmas = None
+
+        generator = req.sampling_params.generator
+        num_images_per_prompt = (
+            req.sampling_params.num_outputs_per_prompt if req.sampling_params.num_outputs_per_prompt > 0 else 1
+        )
+
+        # 1. Check inputs
+        self.check_inputs(
+            prompt=prompt,
+            height=height,
+            width=width,
+            prompt_embeds=prompt_embeds,
+            guidance_scale=guidance_scale,
+        )
+
+        self._guidance_scale = guidance_scale
+        self._interrupt = False
+
+        # 2. Batch size
+        if prompt is not None and isinstance(prompt, list):
+            batch_size = len(prompt)
+        elif prompt_embeds is not None:
+            batch_size = prompt_embeds.shape[0]
+        else:  # Presumably prompt is None & str
+            batch_size = 1
+
+        device = self._execution_device
+
+        # 3. Prepare text embeddings
+        prompt_embeds, text_ids = self.encode_prompt(
+            prompt=prompt,
+            prompt_embeds=prompt_embeds,
+            device=device,
+            num_images_per_prompt=num_images_per_prompt,
+            max_sequence_length=max_sequence_length,
+            text_encoder_out_layers=text_encoder_out_layers,
+        )
+
+        # 4. Negative prompt embeddings (Only for Klein, which supports CFG at the moment)
+        negative_prompt_embeds = None
+        negative_text_ids = None
+        if self.do_classifier_free_guidance:
+            req_neg = [p.get("negative_prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
+            neg_embeds_input = torch.stack(req_neg) if any(p is not None for p in req_neg) else None  # type: ignore
+
+            negative_prompt = ""
+            if prompt is not None and isinstance(prompt, list):
+                negative_prompt = [negative_prompt] * len(prompt)
+
+            negative_prompt_embeds, negative_text_ids = self.encode_prompt(
+                prompt=negative_prompt,
+                prompt_embeds=neg_embeds_input,
+                device=device,
+                num_images_per_prompt=num_images_per_prompt,
+                max_sequence_length=max_sequence_length,
+                text_encoder_out_layers=text_encoder_out_layers,
+            )
+
+        height = height or self.default_sample_size * self.vae_scale_factor
+        width = width or self.default_sample_size * self.vae_scale_factor
+
+        # 5. Prepare latent variables
+        num_channels_latents = self.transformer.config.in_channels // 4
+        latents, latent_ids = self.prepare_latents(
+            batch_size=batch_size * num_images_per_prompt,
+            num_latents_channels=num_channels_latents,
+            height=height,
+            width=width,
+            dtype=prompt_embeds.dtype,
+            device=device,
+            generator=generator,
+        )
+
+        image_latents = None
+        image_latent_ids = None
+
+        # 6. Prepare timesteps
+        image_seq_len = latents.shape[1]
+        mu = compute_empirical_mu(image_seq_len=image_seq_len, num_steps=num_inference_steps)
+        timesteps, num_inference_steps = retrieve_timesteps(
+            self.scheduler,
+            num_inference_steps,
+            device,
+            sigmas=sigmas,
+            mu=mu,
+        )
+        self._num_timesteps = len(timesteps)
+
+        # 7. Run the corresponding _denoise loop; this will vary depending
+        # on whether or not the subclass supports CFG or not.
+        latents = self._denoise(
+            latents=latents,
+            latent_ids=latent_ids,
+            image_latents=image_latents,
+            image_latent_ids=image_latent_ids,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            negative_prompt_embeds=negative_prompt_embeds,
+            negative_text_ids=negative_text_ids,
+            timesteps=timesteps,
+            guidance_scale=guidance_scale,
+        )
+        self._current_timestep = None
+
+        # 8. Decode
+        return self._decode_latents(latents, latent_ids, output_type)
