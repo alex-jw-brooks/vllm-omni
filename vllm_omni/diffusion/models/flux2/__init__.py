@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Flux2 klein diffusion model components."""
+"""Flux2 family diffusion model components."""
 
 from vllm_omni.diffusion.models.flux2.flux2_transformer import (
     Flux2Transformer2DModel,
