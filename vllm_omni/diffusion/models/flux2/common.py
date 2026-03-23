@@ -578,9 +578,40 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
             output=image, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
         )
 
-    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
-        # NOTE: For now, flux2 pipeline doesn't support image edit
+    def _extract_images(self, first_prompt) -> list[PIL.Image.Image] | None:
+        """Extract and validate reference images from a request prompt."""
+        if isinstance(first_prompt, str):
+            return None
+        raw_image = first_prompt.get("multi_modal_data", {}).get("image")
+        if raw_image is None:
+            return None
+        if not isinstance(raw_image, list):
+            raw_image = [raw_image]
+        return [PIL.Image.open(im) if isinstance(im, str) else im for im in raw_image]
 
+    def _preprocess_condition_images(
+        self,
+        images: list[PIL.Image.Image],
+        height: int | None,
+        width: int | None,
+    ) -> tuple[list[torch.Tensor], int | None, int | None]:
+        """Validate, resize, and preprocess reference images for VAE encoding."""
+        condition_images = []
+        for img in images:
+            self.image_processor.check_image_input(img)
+            img = self.image_processor._resize_to_target_area(img) if img.size[0] * img.size[1] > 1024 * 1024 else img
+            image_width, image_height = img.size
+
+            multiple_of = self.vae_scale_factor * 2
+            image_width = (image_width // multiple_of) * multiple_of
+            image_height = (image_height // multiple_of) * multiple_of
+            img = self.image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
+            condition_images.append(img)
+            height = height or image_height
+            width = width or image_width
+        return condition_images, height, width
+
+    def forward(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         if len(req.prompts) > 1:
             logger.warning(
                 "This model only supports a single prompt, not a batched request. Taking only the first prompt for now."
@@ -650,7 +681,7 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
             text_encoder_out_layers=text_encoder_out_layers,
         )
 
-        # 4. Negative prompt embeddings (Only for Klein, which supports CFG at the moment)
+        # 4. Negative prompt embeddings (only for Klein, which supports CFG at the moment)
         negative_prompt_embeds = None
         negative_text_ids = None
         if self.do_classifier_free_guidance:
@@ -670,10 +701,16 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
                 text_encoder_out_layers=text_encoder_out_layers,
             )
 
+        # 5. Process reference images (if provided for image editing)
+        images = self._extract_images(first_prompt)
+        condition_images = None
+        if images is not None:
+            condition_images, height, width = self._preprocess_condition_images(images, height, width)
+
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
-        # 5. Prepare latent variables
+        # 6. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels // 4
         latents, latent_ids = self.prepare_latents(
             batch_size=batch_size * num_images_per_prompt,
@@ -687,8 +724,16 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
 
         image_latents = None
         image_latent_ids = None
+        if condition_images is not None:
+            image_latents, image_latent_ids = self.prepare_image_latents(
+                images=condition_images,
+                batch_size=batch_size * num_images_per_prompt,
+                generator=generator,
+                device=device,
+                dtype=self.vae.dtype,
+            )
 
-        # 6. Prepare timesteps
+        # 7. Prepare timesteps
         image_seq_len = latents.shape[1]
         mu = compute_empirical_mu(image_seq_len=image_seq_len, num_steps=num_inference_steps)
         timesteps, num_inference_steps = retrieve_timesteps(
@@ -700,7 +745,7 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         )
         self._num_timesteps = len(timesteps)
 
-        # 7. Run the corresponding _denoise loop; this will vary depending
+        # 8. Run the corresponding _denoise loop; this will vary depending
         # on whether or not the subclass supports CFG or not.
         latents = self._denoise(
             latents=latents,
