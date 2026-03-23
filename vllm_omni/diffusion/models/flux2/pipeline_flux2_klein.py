@@ -24,7 +24,6 @@ from transformers import Qwen2TokenizerFast, Qwen3ForCausalLM
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.models.flux2.common import (
     Flux2PipelineBase,
     compute_empirical_mu,
@@ -33,13 +32,10 @@ from vllm_omni.diffusion.models.flux2.common import (
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 
 logger = init_logger(__name__)
-get_flux2_post_process_func = get_flux2_post_process_func
 
 
 class Flux2KleinPipeline(Flux2PipelineBase):
     """Flux2 klein pipeline for text-to-image generation."""
-
-    support_image_input = True
 
     def __init__(
         self,
@@ -51,7 +47,6 @@ class Flux2KleinPipeline(Flux2PipelineBase):
         super().__init__(od_config=od_config, prefix=prefix)
         self.is_distilled = is_distilled
 
-        self._execution_device = get_local_device()
         model = od_config.model
         local_files_only = os.path.exists(model)
 
@@ -144,8 +139,7 @@ class Flux2KleinPipeline(Flux2PipelineBase):
 
         if len(req.prompts) > 1:
             logger.warning(
-                """This model only supports a single prompt, not a batched request.""",
-                """Taking only the first image for now.""",
+                "This model only supports a single prompt, not a batched request.Taking only the first image for now."
             )
         first_prompt = req.prompts[0]
         prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
@@ -351,3 +345,11 @@ class Flux2KleinPipeline(Flux2PipelineBase):
         return DiffusionOutput(
             output=image, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
         )
+
+
+# For now, explicitly re-export the shared flux2 to play nicely
+# with the existing patterns
+__all__ = [
+    "Flux2KleinPipeline",
+    "get_flux2_post_process_func",
+]

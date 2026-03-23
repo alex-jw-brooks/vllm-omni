@@ -1,22 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-import logging
 import os
 from typing import Any
 
 import numpy as np
 import torch
-from diffusers.pipelines.flux2.pipeline_flux2 import UPSAMPLING_MAX_IMAGE_SIZE
 from diffusers.pipelines.flux2.system_messages import (
     SYSTEM_MESSAGE,
-    SYSTEM_MESSAGE_UPSAMPLING_I2I,
-    SYSTEM_MESSAGE_UPSAMPLING_T2I,
 )
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
 from transformers import Mistral3ForConditionalGeneration, PixtralProcessor
+from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.models.flux2.common import (
     Flux2PipelineBase,
     compute_empirical_mu,
@@ -24,8 +20,7 @@ from vllm_omni.diffusion.models.flux2.common import (
 )
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 
-logger = logging.getLogger(__name__)
-get_flux2_post_process_func = get_flux2_post_process_func
+logger = init_logger(__name__)
 
 
 # Adapted from diffusers.pipelines.flux2.pipeline_flux2.format_input
@@ -34,8 +29,7 @@ def format_input(
     system_message: str = SYSTEM_MESSAGE,
 ) -> list[list[dict[str, Any]]]:
     """
-    Format a batch of text prompts into the conversation format expected by apply_chat_template. Optionally, add images
-    to the input.
+    Format a batch of text prompts into the conversation format expected by apply_chat_template.
 
     Args:
         prompts: List of text prompts
@@ -65,8 +59,6 @@ def format_input(
 class Flux2Pipeline(Flux2PipelineBase):
     """Flux2 pipeline for text-to-image generation."""
 
-    support_image_input = True
-
     def __init__(
         self,
         *,
@@ -75,7 +67,6 @@ class Flux2Pipeline(Flux2PipelineBase):
     ):
         super().__init__(od_config=od_config, prefix=prefix)
 
-        self._execution_device = get_local_device()
         model = od_config.model
         local_files_only = os.path.exists(model)
 
@@ -87,9 +78,6 @@ class Flux2Pipeline(Flux2PipelineBase):
         )
 
         self.system_message = SYSTEM_MESSAGE
-        self.system_message_upsampling_t2i = SYSTEM_MESSAGE_UPSAMPLING_T2I
-        self.system_message_upsampling_i2i = SYSTEM_MESSAGE_UPSAMPLING_I2I
-        self.upsampling_max_image_size = UPSAMPLING_MAX_IMAGE_SIZE
 
     def _get_prompt_embeds(
         self,
@@ -143,38 +131,6 @@ class Flux2Pipeline(Flux2PipelineBase):
 
         return prompt_embeds
 
-    def encode_prompt(
-        self,
-        prompt: str | list[str],
-        device: torch.device | None,
-        num_images_per_prompt: int,
-        prompt_embeds: torch.Tensor | None,
-        max_sequence_length: int,
-        text_encoder_out_layers: tuple[int, ...],
-    ):
-        device = device or self._execution_device
-
-        if prompt is None:
-            prompt = ""
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-
-        if prompt_embeds is None:
-            prompt_embeds = self._get_prompt_embeds(
-                prompt=prompt,
-                device=device,
-                max_sequence_length=max_sequence_length,
-                hidden_states_layers=text_encoder_out_layers,
-            )
-
-        batch_size, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
-
-        text_ids = self._prepare_text_ids(prompt_embeds)
-        text_ids = text_ids.to(device)
-        return prompt_embeds, text_ids
-
     def forward(
         self,
         req: OmniDiffusionRequest,
@@ -183,8 +139,7 @@ class Flux2Pipeline(Flux2PipelineBase):
 
         if len(req.prompts) > 1:
             logger.warning(
-                """This model only supports a single prompt, not a batched request.""",
-                """Taking only the first image for now.""",
+                "This model only supports a single prompt, not a batched request.Taking only the first image for now."
             )
         first_prompt = req.prompts[0]
         prompt = first_prompt if isinstance(first_prompt, str) else (first_prompt.get("prompt") or "")
@@ -349,3 +304,11 @@ class Flux2Pipeline(Flux2PipelineBase):
         return DiffusionOutput(
             output=image, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
         )
+
+
+# For now, explicitly re-export the shared flux2 to play nicely
+# with the existing patterns
+__all__ = [
+    "Flux2Pipeline",
+    "get_flux2_post_process_func",
+]

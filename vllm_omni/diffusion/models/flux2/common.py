@@ -37,7 +37,7 @@ from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-from vllm_omni.diffusion.models.flux2 import Flux2Transformer2DModel
+from vllm_omni.diffusion.models.flux2.flux2_transformer import Flux2Transformer2DModel
 from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.quantization import get_vllm_quant_config_for_layers
@@ -141,40 +141,6 @@ class Flux2ImageProcessor(VaeImageProcessor):
         width = int(image_width * scale)
         height = int(image_height * scale)
         return image.resize((width, height), PIL.Image.Resampling.LANCZOS)
-
-    @staticmethod
-    def _resize_if_exceeds_area(image: PIL.Image.Image, target_area: int = 1024 * 1024) -> PIL.Image.Image:
-        image_width, image_height = image.size
-        if image_width * image_height <= target_area:
-            return image
-        return Flux2ImageProcessor._resize_to_target_area(image, target_area)
-
-    def _resize_and_crop(self, image: PIL.Image.Image, width: int, height: int) -> PIL.Image.Image:
-        image_width, image_height = image.size
-        left = (image_width - width) // 2
-        top = (image_height - height) // 2
-        right = left + width
-        bottom = top + height
-        return image.crop((left, top, right, bottom))
-
-    @staticmethod
-    def concatenate_images(images: list[PIL.Image.Image]) -> PIL.Image.Image:
-        if len(images) == 1:
-            return images[0].copy()
-
-        images = [img.convert("RGB") if img.mode != "RGB" else img for img in images]
-        total_width = sum(img.width for img in images)
-        max_height = max(img.height for img in images)
-        background_color = (255, 255, 255)
-        new_img = PIL.Image.new("RGB", (total_width, max_height), background_color)
-
-        x_offset = 0
-        for img in images:
-            y_offset = (max_height - img.height) // 2
-            new_img.paste(img, (x_offset, y_offset))
-            x_offset += img.width
-
-        return new_img
 
 
 # Flux2 / Flux2 Klein share the same feature support at the moment, largely because they share the DiT architecture
@@ -526,8 +492,8 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         image_latents = []
         for image in images:
             image = image.to(device=device, dtype=dtype)
-            imagge_latent = self._encode_vae_image(image=image, generator=generator)
-            image_latents.append(imagge_latent)  # (1, 128, 32, 32)
+            image_latent = self._encode_vae_image(image=image, generator=generator)
+            image_latents.append(image_latent)  # (1, 128, 32, 32)
 
         image_latent_ids = self._prepare_image_ids(image_latents)
 
