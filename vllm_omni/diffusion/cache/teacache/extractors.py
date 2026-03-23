@@ -724,6 +724,7 @@ def extract_flux2_klein_context(
         },
     )
 
+
 def extract_longcat_context(
     module: nn.Module,  # LongCatImageTransformer2DModel
     hidden_states,
