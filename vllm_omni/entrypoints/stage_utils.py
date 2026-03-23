@@ -79,12 +79,12 @@ def _parse_device_list(devices: str | int) -> list[str]:
 
 def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]):
     """Maps logical to physical devices if we have enough visible devices available.
-def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]) -> list[str]:
-    Args:
-        stage_id: The stage ID currently configuring devices.
-        device_list: List of (logical) devices to be used, which are strings
-            holding non-negative nums counting from 0, 1, ..., n devices needed.
-        visible_device_list: List of physical devices available.
+    def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]) -> list[str]:
+        Args:
+            stage_id: The stage ID currently configuring devices.
+            device_list: List of (logical) devices to be used, which are strings
+                holding non-negative nums counting from 0, 1, ..., n devices needed.
+            visible_device_list: List of physical devices available.
     """
     num_visible = len(visible_device_list)
     num_logical = len(device_list)
@@ -98,7 +98,7 @@ def _map_device_list(stage_id: int, device_list: list[str], visible_device_list:
         raise ValueError("Logical devices must be non-negative integers")
 
     logical_ids = [int(device) for device in device_list]
-    if min(logical_ids) < 0 or max(logical_ids) >= num_visible:
+    if max(logical_ids) >= num_visible:
         raise ValueError(
             f"Stage {stage_id} has logical IDs {device_list}, one or more of which exceed the number of visible devices"
         )
