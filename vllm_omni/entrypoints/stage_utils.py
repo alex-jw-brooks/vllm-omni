@@ -79,7 +79,7 @@ def _parse_device_list(devices: str | int) -> list[str]:
 
 def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]):
     """Maps logical to physical devices if we have enough visible devices available.
-
+def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]) -> list[str]:
     Args:
         stage_id: The stage ID currently configuring devices.
         device_list: List of (logical) devices to be used, which are strings
