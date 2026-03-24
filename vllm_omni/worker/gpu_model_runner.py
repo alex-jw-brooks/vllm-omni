@@ -64,6 +64,12 @@ class OmniGPUModelRunner(GPUModelRunner):
         self.cache_hidden_states = self.cache_config.enable_prefix_caching
         self.hidden_state_cache: torch.Tensor | None = None
         self._new_req_cache_hit_ids: set[str] | None = None
+        # HACK - for testing qwen3omni
+        self._cacheable_mm_keys: set[str] | None = None
+        self.mm_outputs_cache: dict[str, torch.Tensor] | None = None
+        if self.model_config.model_stage == "thinker":
+            logger.warning("HACK - for now cacheable mm keys are hardcoded to 0 & 24 for the thinker phase")
+            self._cacheable_mm_keys = {"0", "24"}
 
     def initialize_metadata_builders(self, kv_cache_config, kernel_block_sizes):
         """Override to fix scheduler_metadata buffer size for FA3 + CUDA graph.
@@ -96,6 +102,10 @@ class OmniGPUModelRunner(GPUModelRunner):
         # NOTE: hidden states are large; careful to ensure things are
         # safely handled for memory in the future if this is expanded.
         if self.cache_hidden_states:
+            num_blocks = kv_cache_config.num_blocks
+            block_size = self.cache_config.block_size
+            hidden_size = self.model_config.get_hidden_size()
+
             # We don't handle hybrid cache types for hidden state caching yet;
             # This does matter since
             if len(kv_cache_config.kv_cache_groups) > 1:
@@ -103,16 +113,24 @@ class OmniGPUModelRunner(GPUModelRunner):
                 self.cache_hidden_states = False
             else:
                 logger.info("Initializing hidden states prefix cache")
-                num_blocks = kv_cache_config.num_blocks
-                block_size = self.cache_config.block_size
-                hidden_size = self.model_config.get_hidden_size()
                 self.hidden_state_cache = torch.zeros(
                     (num_blocks, block_size, hidden_size),
                     dtype=self.dtype,
                     device=self.device,
                 )
+                # NOTE: For now we just use a dict of tensors even though all tensors are
+                # the same shape, since in the future this may not be the case
+                if self._cacheable_mm_keys is not None:
+                    self.mm_outputs_cache = {}
+                    for k in self._cacheable_mm_keys:
+                        logger.info("Initializing multimodal output cache for key: %s", k)
+                        self.mm_outputs_cache[k] = torch.zeros(
+                            (num_blocks, block_size, hidden_size),
+                            dtype=self.dtype,
+                            device=self.device,
+                        )
 
-    def _get_merged_hidden_states(self, hidden_states, num_scheduled_tokens):
+    def _get_merged_hidden_states(self, cache: torch.Tensor | None, hidden_states, num_scheduled_tokens):
         """When hidden state caching is enabled, takes the input hidden_states,
         which only correspond to the scheduled tokens, and returns a mapping
         from request IDs to their full hidden states. This is accomplished by
@@ -123,8 +141,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         we index into the first block table like this.
         """
         combined_hidden_states = {}
-        if self.cache_hidden_states and self._new_req_cache_hit_ids:
-            assert self.hidden_state_cache
+        if cache is not None and self._new_req_cache_hit_ids:
             for req_id in self._new_req_cache_hit_ids:
                 req_idx = self.input_batch.req_id_to_index[req_id]
                 num_computed = self.input_batch.num_computed_tokens_cpu[req_idx]
@@ -134,14 +151,20 @@ class OmniGPUModelRunner(GPUModelRunner):
                 # Get the block IDs attached to this cache hit and reindex into
                 # the flattened cached hidden states (i.e., 1 row per token).
                 block_ids = self.input_batch.block_table[0].block_table.gpu[req_idx, :num_cached_blocks]
-                cached_hs = self.hidden_state_cache[block_ids].reshape(-1, self.hidden_state_cache.shape[-1])
+                cached_hs = cache[block_ids].reshape(-1, cache.shape[-1])
 
                 # Slice the hidden states corresponding to this request;
                 # we do this by using the query start
                 start = self.query_start_loc.gpu[req_idx]
                 new_hs = hidden_states[start : start + num_scheduled_tokens[req_id]]
                 # TODO: consider putting the actually hidden state cache on CPU
-                combined_hidden_states[req_id] = torch.cat([cached_hs, new_hs], dim=0).detach().to("cpu").contiguous()
+                combined_hidden_states[req_id] = torch.cat([cached_hs, new_hs], dim=0)
+
+                logger.info(
+                    f"[Cache combine] req={req_id} cached_blocks={num_cached_blocks} "
+                    f"cached hidden states shape={cached_hs.shape} "
+                    f"new hidden states shape={new_hs.shape}"
+                )
 
         return combined_hidden_states
 
@@ -1097,6 +1120,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         multimodal_outputs: object,
         num_scheduled_tokens_np: np.ndarray,
         scheduler_output: "SchedulerOutput",
+        combined_hidden_states: torch.Tensor | None = None,
     ) -> None:
         """Process model-provided per-request updates and merge into model_intermediate_buffer."""
         try:
@@ -1105,11 +1129,14 @@ class OmniGPUModelRunner(GPUModelRunner):
             if hasattr(self.model, "has_postprocess") and self.model.has_postprocess:
                 for req_index, req_id in enumerate(self.input_batch.req_ids):
                     req_infos = self.model_intermediate_buffer.get(req_id, {})
-                    start_offset = int(self.query_start_loc.cpu[req_index])
-                    sched_tokens = int(num_scheduled_tokens_np[req_index])
-                    s, e = start_offset, start_offset + sched_tokens
-                    # only consider to store data into update dict.
-                    hidden_states_slice = hidden_states[s:e]
+                    if combined_hidden_states and req_id in combined_hidden_states:
+                        hidden_states_slice = combined_hidden_states[req_id]
+                    else:
+                        start_offset = int(self.query_start_loc.cpu[req_index])
+                        sched_tokens = int(num_scheduled_tokens_np[req_index])
+                        s, e = start_offset, start_offset + sched_tokens
+                        # only consider to store data into update dict.
+                        hidden_states_slice = hidden_states[s:e]
                     update_dict = self.model.postprocess(
                         hidden_states_slice, multimodal_outputs=multimodal_outputs, **req_infos
                     )
