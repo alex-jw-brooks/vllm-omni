@@ -175,18 +175,13 @@ def _get_sp_mode(ulysses_degree: int, ring_degree: int) -> str:
 @pytest.mark.parallel
 @hardware_test(res={"cuda": "L4", "rocm": "MI325"}, num_cards={"cuda": 2, "rocm": 2})
 @pytest.mark.parametrize("model_name", MODELS)
-def test_sp_correctness(model_name: str, monkeypatch):
+def test_sp_correctness(model_name: str):
     """Test that SP inference produces correct outputs and measure performance.
 
     Runs baseline once per unique (height, width), then tests all SP configs.
 
     Note: Run with `pytest -v -s` to see detailed output.
     """
-
-    def _clear_device_control_vars():
-        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
-
     device_count = current_omni_platform.get_device_count()
 
     # Cache baseline results by (height, width)
@@ -215,7 +210,6 @@ def test_sp_correctness(model_name: str, monkeypatch):
 
         # Get or compute baseline for this (height, width)
         if cache_key not in baseline_cache:
-            _clear_device_control_vars()
             print(f"\n--- Running baseline {height}x{width} (warmup={baseline_warmup}) ---")
             baseline = _run_inference(
                 model_name,
@@ -232,7 +226,6 @@ def test_sp_correctness(model_name: str, monkeypatch):
             baseline = baseline_cache[cache_key]
 
         # Run SP
-        _clear_device_control_vars()
         print(f"\n--- Running {sp_mode} (warmup={sp_warmup}) ---")
         sp_result = _run_inference(
             model_name,
@@ -305,18 +298,13 @@ def test_sp_correctness(model_name: str, monkeypatch):
 @pytest.mark.parallel
 @hardware_test(res={"cuda": "L4", "rocm": "MI325"}, num_cards={"cuda": 4, "rocm": 2})
 @pytest.mark.parametrize("model_name", MODELS)
-def test_sp_correctness_advanced(model_name: str, monkeypatch):
+def test_sp_correctness_advanced(model_name: str):
     """Test that SP inference produces correct outputs and measure performance.
 
     Runs baseline once per unique (height, width), then tests all SP configs.
 
     Note: Run with `pytest -v -s` to see detailed output.
     """
-
-    def _clear_device_control_vars():
-        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
-
     device_count = current_omni_platform.get_device_count()
 
     # Cache baseline results by (height, width)
@@ -345,7 +333,6 @@ def test_sp_correctness_advanced(model_name: str, monkeypatch):
 
         # Get or compute baseline for this (height, width)
         if cache_key not in baseline_cache:
-            _clear_device_control_vars()
             print(f"\n--- Running baseline {height}x{width} (warmup={baseline_warmup}) ---")
             baseline = _run_inference(
                 model_name,
@@ -362,7 +349,6 @@ def test_sp_correctness_advanced(model_name: str, monkeypatch):
             baseline = baseline_cache[cache_key]
 
         # Run SP
-        _clear_device_control_vars()
         print(f"\n--- Running {sp_mode} (warmup={sp_warmup}) ---")
         sp_result = _run_inference(
             model_name,
