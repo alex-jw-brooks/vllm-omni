@@ -201,7 +201,7 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         finally:
             set_cudagraph_capturing_enabled(False)
 
-    def update_hidden_state_cache(self, hidden_states, num_tokens_unpadded):
+    def update_hidden_state_cache(self, hidden_states, multimodal_outputs, num_tokens_unpadded):
         """Updates the hidden cache state for prefix caching from
         the current model's execution for the unpadded tokens.
         """
@@ -210,6 +210,19 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         # View the cache as 2D so that we can treat our slots as row indices
         flat_cache = self.hidden_state_cache.view(-1, self.hidden_state_cache.shape[-1])
         flat_cache[slot_mapping] = hidden_states[:num_tokens_unpadded]
+        logger.info(f"[HS Cache WRITE] tokens={num_tokens_unpadded}")
+
+        # Do the same for the cached multimodal outputs for this stage;
+        # for now we assume that all of the multimodal outputs cached
+        # are exactly the same size as the hidden states.
+        # TODO (Alex) make this more flexible.
+        if self.mm_outputs_cache is not None:
+            for mm_out_key, mm_cache in self.mm_outputs_cache.items():
+                assert mm_out_key in multimodal_outputs
+                mm_state = multimodal_outputs[mm_out_key]
+                flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
+                flat_cache[slot_mapping] = mm_state[:num_tokens_unpadded]
+            logger.info(f"[multimodal output Cache WRITE] tokens={num_tokens_unpadded}")
 
     @torch.inference_mode()
     def execute_model(
@@ -491,6 +504,7 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             if self.cache_hidden_states and self.hidden_state_cache is not None and get_pp_group().is_last_rank:
                 self.update_hidden_state_cache(
                     hidden_states=hidden_states,
+                    multimodal_outputs=multimodal_outputs,
                     num_tokens_unpadded=num_tokens_unpadded,
                 )
 
@@ -771,12 +785,36 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         # the prefix cached hidden states if it's enabled and
         # we have them.
         combined_hidden_states = self._get_merged_hidden_states(
+            cache=self.hidden_state_cache,
             hidden_states=hidden_states,
             num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
         )
 
+        # Do the same for multimodal outputs
+        # TODO (Alex) clean this up
+        combined_multimodal_outputs = {}
+        if (
+            self._cacheable_mm_keys
+            and self.mm_outputs_cache
+            and multimodal_outputs
+            and isinstance(multimodal_outputs, dict)
+        ):
+            for mm_key in self._cacheable_mm_keys:
+                if mm_key in multimodal_outputs:
+                    combined_multimodal_outputs[mm_key] = self._get_merged_hidden_states(
+                        cache=self.mm_outputs_cache[mm_key],
+                        hidden_states=multimodal_outputs[mm_key],
+                        num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+                    )
+                else:
+                    logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
+
         self._process_additional_information_updates(
-            hidden_states, multimodal_outputs, num_scheduled_tokens_np, scheduler_output
+            hidden_states,
+            multimodal_outputs,
+            num_scheduled_tokens_np,
+            scheduler_output,
+            combined_hidden_states,
         )
 
         # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
@@ -817,14 +855,29 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             # in the combined hidden states, it's a cache hit, so we
             # send the states that were already merged.
             if combined_hidden_states and rid in combined_hidden_states:
-                req_hidden_states = combined_hidden_states[rid]
+                # TODO cleanup device management
+                req_hidden_states = combined_hidden_states[rid].detach().to("cpu").contiguous()
             else:
                 req_hidden_states = hidden_states_cpu[start:end]
             payload: dict[str, object] = {"hidden": req_hidden_states}
+
+            logger.info(
+                f"[HS] req={rid} hidden_shape={req_hidden_states.shape} "
+                f"cache_hit={rid in combined_hidden_states if combined_hidden_states else False}"
+            )
+
             if mm_cpu:
                 mm_payload: dict[str, object] = {}
                 for k, v in mm_cpu.items():
-                    if isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
+                    if (
+                        combined_multimodal_outputs
+                        and k in combined_multimodal_outputs
+                        and rid in combined_multimodal_outputs[k]
+                    ):
+                        mm_payload[k] = combined_multimodal_outputs[k][rid].detach().to("cpu").contiguous()
+                        logger.info(f"Cached mm key {k} | shape: {combined_multimodal_outputs[k][rid].shape}")
+
+                    elif isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
                         mm_payload[k] = v[start:end].contiguous()
                     elif isinstance(v, dict):
                         mm_payload[k] = {sk: sv[start:end].contiguous() for sk, sv in v.items()}
