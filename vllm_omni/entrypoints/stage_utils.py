@@ -77,14 +77,14 @@ def _parse_device_list(devices: str | int) -> list[str]:
     return [t.strip() for t in devices.split(",") if t.strip() != ""]
 
 
-def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]):
+def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]) -> list[str]:
     """Maps logical to physical devices if we have enough visible devices available.
-    def _map_device_list(stage_id: int, device_list: list[str], visible_device_list: list[str]) -> list[str]:
-        Args:
-            stage_id: The stage ID currently configuring devices.
-            device_list: List of (logical) devices to be used, which are strings
-                holding non-negative nums counting from 0, 1, ..., n devices needed.
-            visible_device_list: List of physical devices available.
+
+    Args:
+        stage_id: The stage ID currently configuring devices.
+        device_list: List of (logical) devices to be used, which are strings
+            holding non-negative nums counting from 0, 1, ..., n devices needed.
+        visible_device_list: List of physical devices available.
     """
     num_visible = len(visible_device_list)
     num_logical = len(device_list)
