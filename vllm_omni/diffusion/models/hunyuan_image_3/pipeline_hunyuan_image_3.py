@@ -20,6 +20,7 @@ from vllm.transformers_utils.config import get_config
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm_omni.diffusion.models.interface import VllmDiffusionPipeline
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import DiffusionParamOverrides
 
@@ -62,7 +63,7 @@ def to_device(data, device):
         return data
 
 
-class HunyuanImage3Pipeline(HunyuanImage3PreTrainedModel, GenerationMixin):
+class HunyuanImage3Pipeline(HunyuanImage3PreTrainedModel, VllmDiffusionPipeline, GenerationMixin):
     @property
     def sampling_param_defaults(self):
         return DiffusionParamOverrides(

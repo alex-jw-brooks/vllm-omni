@@ -19,7 +19,6 @@ from diffusers.pipelines.ltx2.vocoder import LTX2Vocoder
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg, retrieve_timesteps
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
-from torch import nn
 from transformers import AutoTokenizer, Gemma3ForConditionalGeneration
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
@@ -32,6 +31,7 @@ from vllm_omni.diffusion.distributed.parallel_state import (
 )
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm_omni.diffusion.models.interface import VllmDiffusionPipeline
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import DiffusionParamOverrides
 
@@ -115,7 +115,7 @@ def calculate_shift(
     return mu
 
 
-class LTX2Pipeline(nn.Module, CFGParallelMixin):
+class LTX2Pipeline(VllmDiffusionPipeline, CFGParallelMixin):
     @property
     def sampling_param_defaults(self):
         return DiffusionParamOverrides(

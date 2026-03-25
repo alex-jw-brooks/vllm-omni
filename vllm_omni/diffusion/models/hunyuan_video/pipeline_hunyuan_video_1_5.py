@@ -15,7 +15,6 @@ from diffusers import AutoencoderKLHunyuanVideo15
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
-from torch import nn
 from transformers import AutoConfig, ByT5Tokenizer, Qwen2_5_VLTextModel, Qwen2Tokenizer
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
@@ -24,6 +23,7 @@ from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.hunyuan_video.hunyuan_video_15_transformer import HunyuanVideo15Transformer3DModel
+from vllm_omni.diffusion.models.interface import VllmDiffusionPipeline
 from vllm_omni.diffusion.models.t5_encoder import T5EncoderModel
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
@@ -82,7 +82,7 @@ def get_hunyuan_video_15_post_process_func(od_config: OmniDiffusionConfig):
     return post_process_func
 
 
-class HunyuanVideo15Pipeline(nn.Module, CFGParallelMixin):
+class HunyuanVideo15Pipeline(VllmDiffusionPipeline, CFGParallelMixin):
     @property
     def sampling_param_defaults(self):
         return DiffusionParamOverrides(
