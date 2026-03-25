@@ -6,6 +6,7 @@ import os
 import re
 import time
 from collections.abc import Generator, Iterable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import cast
 
@@ -258,7 +259,15 @@ class DiffusersPipelineLoader:
         custom_pipeline_name: str | None = None,
         device: torch.device | None = None,
     ) -> nn.Module:
-        """Load a model with the given configurations."""
+        """Load a model with the given configurations.
+
+        Args:
+            od_config: Omni Diffusion config for the current model.
+            load_device: Where we should init our weights.
+            load_format: The format of the pipeline being loaded (e.g., default vs custom)
+            custom_pipeline_name: Optional name of the pipeline w/ custom load format
+            device: The worker's actual device.
+        """
         # CPU offload + FP8: load weights on device for FP8 quantization
         if load_device == "cpu" and od_config.quantization_config is not None:
             load_device = device.type
@@ -268,15 +277,19 @@ class DiffusersPipelineLoader:
         with set_default_torch_dtype(od_config.dtype):
             if od_config.parallel_config.use_hsdp:
                 model = self._load_model_with_hsdp(
-                    od_config, load_format=load_format, custom_pipeline_name=custom_pipeline_name
+                    od_config,
+                    target_device=target_device,
+                    load_format=load_format,
+                    custom_pipeline_name=custom_pipeline_name,
                 )
             else:
-                with target_device:
-                    if load_format == "default":
-                        model = initialize_model(od_config)
-                    elif load_format == "custom_pipeline":
-                        model_cls = resolve_obj_by_qualname(custom_pipeline_name)
-                        model = model_cls(od_config=od_config)
+                model = self._initialize_model(
+                    od_config,
+                    target_device=target_device,
+                    load_format=load_format,
+                    custom_pipeline_name=custom_pipeline_name,
+                )
+
                 logger.debug("Loading weights on %s ...", load_device)
                 if self._is_gguf_quantization(od_config):
                     self._load_weights_with_gguf(model, od_config)
@@ -461,6 +474,7 @@ class DiffusersPipelineLoader:
     def _load_model_with_hsdp(
         self,
         od_config: OmniDiffusionConfig,
+        target_device: torch.device,
         load_format: str = "default",
         custom_pipeline_name: str | None = None,
     ) -> nn.Module:
@@ -482,16 +496,25 @@ class DiffusersPipelineLoader:
             param_dtype=od_config.dtype,
         )
 
-        # Initialize model WITHOUT device context (weights start on CPU).
-        # Unlike the non-HSDP path which uses `with target_device:` to create weights
-        # directly on GPU, HSDP needs weights on CPU first so they can be redistributed
-        # across GPUs by apply_hsdp_to_model. The model's load_weights handles weight
-        # mapping (QKV fusion, etc.).
-        if load_format == "default":
-            model = initialize_model(od_config)
-        elif load_format == "custom_pipeline":
-            model_cls = resolve_obj_by_qualname(custom_pipeline_name)
-            model = model_cls(od_config=od_config)
+        # HACK - if we have a quant config, init the model on the target
+        # device; this is needed for cases like fp8, where trying to init
+        # on CPU will crash the model, but not ideal because it does
+        # increase the peak memory at load time.
+        #
+        # TODO (Alex) find a better way to handle this
+        has_quant = od_config.quantization is not None
+        if has_quant:
+            logger.warning(
+                "Quant with HSDP currently requires loading all weights on the target devices at initialization time, which will cause higher initial peak memory usage."
+            )
+
+        model = self._initialize_model(
+            od_config,
+            target_device=target_device if has_quant else None,
+            load_format=load_format,
+            custom_pipeline_name=custom_pipeline_name,
+        )
+        # Quantization does not happen in `load_weights` but after it
         self.load_weights(model)
 
         # Collect all transformers to shard (some models have transformer_2 for MoE)
@@ -506,8 +529,49 @@ class DiffusersPipelineLoader:
         if transformer_2 is not None:
             transformers_to_shard.append(("transformer_2", transformer_2))
 
-        # Apply HSDP sharding to all transformers
-        for name, trans in transformers_to_shard:
+        # Apply HSDP sharding to all transformers.
+        # FP8 quantization stores weights as .t() (column-major for cutlass),
+        # which is non-contiguous. FSDP2 requires contiguous parameters.
+        # We un-transpose before sharding, then re-transpose after.
+        for name, transformer in transformers_to_shard:
+            transposed_weights = set()
+            for weight_name, param in transformer.named_parameters():
+                if param.ndim == 2 and not param.is_contiguous():
+                    transposed = param.data.t()
+                    if not transposed.is_contiguous():
+                        raise RuntimeError("This probably will not work")
+                    else:
+                        param.data = transposed
+                        transposed_weights.add(weight_name)
+
             logger.debug("Applying HSDP to %s", name)
-            apply_hsdp_to_model(trans, hsdp_config)
+            apply_hsdp_to_model(transformer, hsdp_config)
+
+            for weight_name, param in transformer.named_parameters():
+                if weight_name in transposed_weights:
+                    # We should only retranspose the local shard
+                    local = param._local_tensor
+                    local.data = local.data.t()
+
+        return model
+
+    def _initialize_model(
+        self,
+        od_config: OmniDiffusionConfig,
+        target_device: torch.device | None,
+        load_format: str,
+        custom_pipeline_name: str | None,
+    ) -> torch.nn.Module:
+        # Initialize model WITHOUT device context (weights start on CPU).
+        # Unlike the non-HSDP path which uses `with target_device:` to create weights
+        # directly on GPU, HSDP needs weights on CPU first so they can be redistributed
+        # across GPUs by apply_hsdp_to_model. The model's load_weights handles weight
+        # mapping (QKV fusion, etc.).
+        device_ctx = target_device if target_device is not None else nullcontext()
+        with device_ctx:
+            if load_format == "default":
+                model = initialize_model(od_config)
+            elif load_format == "custom_pipeline":
+                model_cls = resolve_obj_by_qualname(custom_pipeline_name)
+                model = model_cls(od_config=od_config)
         return model
