@@ -21,6 +21,7 @@ from vllm.transformers_utils.config import get_config
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.inputs.data import DiffusionParamOverrides
 
 from .autoencoder import AutoencoderKLConv3D
 from .hunyuan_image_3_tokenizer import TokenizerWrapper
@@ -62,6 +63,12 @@ def to_device(data, device):
 
 
 class HunyuanImage3Pipeline(HunyuanImage3PreTrainedModel, GenerationMixin):
+    @property
+    def sampling_param_defaults(self):
+        return DiffusionParamOverrides(
+            num_inference_steps=50,
+        )
+
     def __init__(self, od_config: OmniDiffusionConfig) -> None:
         self.hf_config = get_config(od_config.model, trust_remote_code=True)
         super().__init__(self.hf_config)
@@ -969,17 +976,15 @@ class HunyuanImage3Pipeline(HunyuanImage3PreTrainedModel, GenerationMixin):
         image_size="auto",
         height: int = 1024,
         width: int = 1024,
-        num_inference_steps: int = 50,
         guidance_scale: float = 5.0,
         system_prompt: str | None = None,
-        generator: torch.Generator | list[torch.Generator] | None = None,
         **kwargs,
     ) -> DiffusionOutput:
         prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
-        generator = req.sampling_params.generator or generator
+        generator = req.sampling_params.generator
         height = req.sampling_params.height or height
         width = req.sampling_params.width or width
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        num_inference_steps = req.sampling_params.num_inference_steps
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
         if guidance_scale <= 1.0:
