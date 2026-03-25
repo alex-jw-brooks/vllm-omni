@@ -41,7 +41,7 @@ from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
-from vllm_omni.inputs.data import OmniTextPrompt
+from vllm_omni.inputs.data import DiffusionParamOverrides, OmniTextPrompt
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
@@ -170,6 +170,13 @@ def get_qwen_image_edit_plus_post_process_func(
 class QwenImageEditPlusPipeline(
     nn.Module, SupportImageInput, QwenImageCFGParallelMixin, DiffusionPipelineProfilerMixin
 ):
+    # Overrides for default diffusion sampling params when using this pipeline
+    @property
+    def sampling_param_defaults(self):
+        return DiffusionParamOverrides(
+            num_inference_steps=50,
+        )
+
     def __init__(
         self,
         *,
@@ -543,7 +550,6 @@ class QwenImageEditPlusPipeline(
         true_cfg_scale: float = 4.0,
         height: int | None = None,
         width: int | None = None,
-        num_inference_steps: int = 50,
         sigmas: list[float] | None = None,
         guidance_scale: float = 1.0,
         num_images_per_prompt: int = 1,
@@ -624,7 +630,7 @@ class QwenImageEditPlusPipeline(
                 condition_images.append(self.image_processor.resize(img, condition_height, condition_width))
                 vae_images.append(self.image_processor.preprocess(img, vae_height, vae_width).unsqueeze(2))
 
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        num_inference_steps = req.sampling_params.num_inference_steps
         sigmas = req.sampling_params.sigmas or sigmas
         max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
         generator = req.sampling_params.generator or generator

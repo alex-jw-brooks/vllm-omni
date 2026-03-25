@@ -37,7 +37,7 @@ from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
-from vllm_omni.inputs.data import OmniTextPrompt
+from vllm_omni.inputs.data import DiffusionParamOverrides, OmniTextPrompt
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
@@ -199,6 +199,13 @@ def retrieve_latents(
 
 class QwenImageLayeredPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMixin, DiffusionPipelineProfilerMixin):
     color_format = "RGBA"
+
+    # Overrides for default diffusion sampling params when using this pipeline
+    @property
+    def sampling_param_defaults(self):
+        return DiffusionParamOverrides(
+            num_inference_steps=50,
+        )
 
     def __init__(
         self,
@@ -590,7 +597,6 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         negative_prompt: str | list[str] | None = None,
         true_cfg_scale: float = 4.0,
         layers: int | None = 4,
-        num_inference_steps: int = 50,
         sigmas: list[float] | None = None,
         guidance_scale: float | None = None,
         num_images_per_prompt: int = 1,
@@ -631,7 +637,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         use_en_prompt = (
             req.sampling_params.use_en_prompt if req.sampling_params.use_en_prompt is not None else use_en_prompt
         )
-        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        num_inference_steps = req.sampling_params.num_inference_steps
         sigmas = req.sampling_params.sigmas or sigmas
         generator = req.sampling_params.generator or generator
         true_cfg_scale = req.sampling_params.true_cfg_scale or true_cfg_scale
