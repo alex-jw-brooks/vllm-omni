@@ -263,9 +263,25 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 not getattr(req, "skip_cache_refresh", False)
                 and self.cache_backend is not None
                 and self.cache_backend.is_enabled()
-                and req.sampling_params.num_inference_steps is not None
             ):
-                self.cache_backend.refresh(self.pipeline, req.sampling_params.num_inference_steps)
+                # FIXME (Alex): When num_inference_steps is None, we defer to
+                # pipelines for default, but don't refresh the cache; the right
+                # way to do this is to merge the sampling params first, but
+                # for now we allow teacache to refresh either way since it does
+                # not depend on the num_inference_steps.
+                num_inference_steps = (
+                    req.sampling_params.num_inference_steps or 0
+                    if self.od_config.cache_backend == "tea_cache"
+                    else req.sampling_params.num_inference_steps
+                )
+                if num_inference_steps is not None:
+                    self.cache_backend.refresh(self.pipeline, num_inference_steps)
+                else:
+                    logger.warning(
+                        "Failed to refresh the diffusion transformer cache; backend %s "
+                        "currently requires num_inference_steps to be passed explicitly",
+                        self.cache_backend,
+                    )
 
             is_primary = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
             if is_primary:
