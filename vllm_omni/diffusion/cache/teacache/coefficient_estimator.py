@@ -13,10 +13,13 @@ from vllm_omni.diffusion.cache.teacache.extractors import get_extractor
 from vllm_omni.diffusion.data import OmniDiffusionConfig, TransformerConfig
 from vllm_omni.diffusion.hooks import HookRegistry, ModelHook
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+<<<<<<< HEAD
 from vllm_omni.diffusion.models.bagel.pipeline_bagel import BagelPipeline
 from vllm_omni.diffusion.models.flux2.pipeline_flux2 import Flux2Pipeline
 from vllm_omni.diffusion.models.longcat_image.pipeline_longcat_image import LongCatImagePipeline
 from vllm_omni.diffusion.models.stable_audio.pipeline_stable_audio import StableAudioPipeline
+=======
+>>>>>>> 79e29eaa (make teacache estimator common)
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
@@ -57,14 +60,31 @@ class DataCollectionHook(ModelHook):
         return list(self.current_trajectory)
 
 
-class BagelAdapter:
-    """Adapter for Bagel model."""
+class DefaultAdapter:
+    """Default adapter for standard diffusers pipelines."""
 
-    @staticmethod
-    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> BagelPipeline:
-        od_config = OmniDiffusionConfig.from_kwargs(model=model_path, dtype=dtype)
-        od_config.model_class_name = "BagelPipeline"
-        # No hack needed for tf_model_config since Bagel doesn't use it
+    model_class_name = None
+    uses_tf_config = True
+
+    @classmethod
+    def load_pipeline(cls, model_path: str, device: str, dtype: torch.dtype) -> Any:
+        if cls.model_class_name is None:
+            raise ValueError("Adapter doesn't have a set class name.")
+
+        od_config = OmniDiffusionConfig.from_kwargs(
+            model_class_name=cls.model_class_name,
+            model=model_path,
+            dtype=dtype,
+        )
+
+        if cls.uses_tf_config:
+            # TODO (Alex): Refactor to handle tf_model_config in OmniDiffusionConfig
+            # instead of OmniDiffusion and remove the manual population here
+            tf_config_dict = get_hf_file_to_dict(
+                os.path.join("transformer", "config.json"),
+                od_config.model,
+            )
+            od_config.tf_model_config = TransformerConfig.from_dict(tf_config_dict)
 
         loader = DiffusersPipelineLoader(LoadConfig(), od_config=od_config)
         # load_model will handle dtypes / device placement, put in .eval() mode
@@ -72,6 +92,7 @@ class BagelAdapter:
 
     @staticmethod
     def get_transformer(pipeline: Any) -> tuple[Any, str]:
+<<<<<<< HEAD
         return pipeline.bagel, "Bagel"
 
     @staticmethod
@@ -140,6 +161,8 @@ class DefaultAdapter:
 
     @staticmethod
     def get_transformer(pipeline: Any) -> tuple[Any, str]:
+=======
+>>>>>>> 79e29eaa (make teacache estimator common)
         return pipeline.transformer, pipeline.transformer.__class__.__name__
 
     @staticmethod
@@ -148,27 +171,37 @@ class DefaultAdapter:
         registry.register_hook(hook._HOOK_NAME, hook)
 
 
+class BagelAdapter(DefaultAdapter):
+    """Adapter for Bagel model."""
+
+    model_class_name = "BagelPipeline"
+    # Skip the hack for loading the tf model config,
+    # because bagel doesn't use it.
+    uses_tf_config = False
+
+    @staticmethod
+    def get_transformer(pipeline: Any) -> tuple[Any, str]:
+        return pipeline.bagel, "Bagel"
+
+    @staticmethod
+    def install_hook(transformer: Any, hook: DataCollectionHook) -> None:
+        registry = HookRegistry.get_or_create(transformer)
+        registry.register_hook(hook._HOOK_NAME, hook)
+
+
 class LongCatAdapter(DefaultAdapter):
-    """Adapter for LongCat Image - NOTE: currently this models needs the vLLM
+    """Adapter for LongCat Image - NOTE: currently this model needs the vLLM
     context to be correctly configured to actually run the estimation, since it
     uses vLLM norm layers etc.
     """
 
-    @staticmethod
-    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> LongCatImagePipeline:
-        od_config = OmniDiffusionConfig.from_kwargs(model=model_path, dtype=dtype)
-        od_config.model_class_name = "LongCatImagePipeline"
-        # TODO (Alex): Refactor to handle tf_model_config in OmniDiffusionConfig
-        # instead of OmniDiffusion and remove the manual population here
-        tf_config_dict = get_hf_file_to_dict(
-            os.path.join("transformer", "config.json"),
-            od_config.model,
-        )
-        od_config.tf_model_config = TransformerConfig.from_dict(tf_config_dict)
+    model_class_name = "LongCatImagePipeline"
 
-        loader = DiffusersPipelineLoader(LoadConfig(), od_config=od_config)
-        # load_model will handle dtypes / device placement, put in .eval() mode
-        return loader.load_model(od_config=od_config, load_device=device)
+
+class StableAudioAdapter(DefaultAdapter):
+    """Adapter for Stable Audio Open 1.0 coefficient estimation."""
+
+    model_class_name = "StableAudioPipeline"
 
 
 _MODEL_ADAPTERS: dict[str, type] = {
@@ -222,7 +255,6 @@ class TeaCacheCoefficientEstimator:
         device: str = "cuda",
         dtype: torch.dtype = torch.bfloat16,
     ):
-        # Add validation here ⬇️
         if model_type not in _MODEL_ADAPTERS:
             available_types = list(_MODEL_ADAPTERS.keys())
             raise ValueError(
@@ -231,7 +263,7 @@ class TeaCacheCoefficientEstimator:
                 f"To add support for a new model, add an entry to _MODEL_ADAPTERS."
             )
 
-        adapter = _MODEL_ADAPTERS.get(model_type, DefaultAdapter)
+        adapter = _MODEL_ADAPTERS[model_type]
         self.pipeline = adapter.load_pipeline(model_path, device, dtype)
         self.transformer, self.transformer_type = adapter.get_transformer(self.pipeline)
         self.hook = DataCollectionHook(self.transformer_type)
