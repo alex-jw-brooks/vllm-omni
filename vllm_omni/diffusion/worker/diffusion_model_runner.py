@@ -280,7 +280,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                     logger.warning(
                         "Failed to refresh the diffusion transformer cache; backend %s "
                         "currently requires num_inference_steps to be passed explicitly",
-                        self.cache_backend,
+                        self.od_config.cache_backend,
                     )
 
             is_primary = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
