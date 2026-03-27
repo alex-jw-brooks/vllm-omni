@@ -130,6 +130,26 @@ class OmniGPUModelRunner(GPUModelRunner):
                             device=self.device,
                         )
 
+    def _get_merged_multimodal_states(self, multimodal_outputs, num_scheduled_tokens):
+        """Get the merged multimodal states if hidden state prefix caching is enabled."""
+        combined_multimodal_outputs = {}
+        if (
+            self._cacheable_mm_keys
+            and self.mm_outputs_cache
+            and multimodal_outputs
+            and isinstance(multimodal_outputs, dict)
+        ):
+            for mm_key in self._cacheable_mm_keys:
+                if mm_key in multimodal_outputs:
+                    combined_multimodal_outputs[mm_key] = self._get_merged_hidden_states(
+                        cache=self.mm_outputs_cache[mm_key],
+                        hidden_states=multimodal_outputs[mm_key],
+                        num_scheduled_tokens=num_scheduled_tokens,
+                    )
+                else:
+                    logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
+        return combined_multimodal_outputs
+
     def _get_merged_hidden_states(self, cache: torch.Tensor | None, hidden_states, num_scheduled_tokens):
         """When hidden state caching is enabled, takes the input hidden_states,
         which only correspond to the scheduled tokens, and returns a mapping
