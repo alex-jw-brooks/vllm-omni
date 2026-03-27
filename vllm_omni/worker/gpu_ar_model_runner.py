@@ -782,32 +782,17 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             )
 
         # Prior to applying the post-processing func, extract
-        # the prefix cached hidden states if it's enabled and
-        # we have them.
+        # the prefix cached hidden states and multimodal states.
         combined_hidden_states = self._get_merged_hidden_states(
             cache=self.hidden_state_cache,
             hidden_states=hidden_states,
             num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
         )
 
-        # Do the same for multimodal outputs
-        # TODO (Alex) clean this up
-        combined_multimodal_outputs = {}
-        if (
-            self._cacheable_mm_keys
-            and self.mm_outputs_cache
-            and multimodal_outputs
-            and isinstance(multimodal_outputs, dict)
-        ):
-            for mm_key in self._cacheable_mm_keys:
-                if mm_key in multimodal_outputs:
-                    combined_multimodal_outputs[mm_key] = self._get_merged_hidden_states(
-                        cache=self.mm_outputs_cache[mm_key],
-                        hidden_states=multimodal_outputs[mm_key],
-                        num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
-                    )
-                else:
-                    logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
+        combined_multimodal_outputs = self._get_merged_multimodal_states(
+            multimodal_outputs,
+            num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+        )
 
         self._process_additional_information_updates(
             hidden_states,
