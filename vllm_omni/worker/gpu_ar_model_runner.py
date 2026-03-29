@@ -501,11 +501,12 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
 
             # Cache hidden states if we've enabled hidden state prefix caching
             # unless this isn't the last pipeline parallelism rank.
-            if self.cache_hidden_states and self.hidden_state_cache is not None and get_pp_group().is_last_rank:
-                self.update_hidden_state_cache(
+            if self.omni_prefix_cache is not None and get_pp_group().is_last_rank:
+                self.omni_prefix_cache.update_omni_tensor_prefix_cache(
                     hidden_states=hidden_states,
                     multimodal_outputs=multimodal_outputs,
                     num_tokens_unpadded=num_tokens_unpadded,
+                    input_batch=self.input_batch,
                 )
 
             if not self.broadcast_pp_output:
@@ -783,16 +784,16 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
 
         # Prior to applying the post-processing func, extract
         # the prefix cached hidden states and multimodal states.
-        combined_hidden_states = self._get_merged_hidden_states(
-            cache=self.hidden_state_cache,
-            hidden_states=hidden_states,
-            num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
-        )
-
-        combined_multimodal_outputs = self._get_merged_multimodal_states(
-            multimodal_outputs,
-            num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
-        )
+        if self.omni_prefix_cache is None:
+            combined_hidden_states, combined_multimodal_outputs = None, None
+        else:
+            combined_hidden_states, combined_multimodal_outputs = self.omni_prefix_cache._get_combined_states(
+                query_start_loc=self.query_start_loc,
+                input_batch=self.input_batch,
+                hidden_states=hidden_states,
+                multimodal_outputs=multimodal_outputs,
+                num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+            )
 
         self._process_additional_information_updates(
             hidden_states,
