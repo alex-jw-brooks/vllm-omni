@@ -21,6 +21,7 @@ from vllm.v1.worker.gpu_input_batch import CachedRequestState
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner, IntermediateTensors, PerLayerAttnMetadata
 from vllm.v1.worker.ubatch_utils import maybe_create_ubatch_slices
 
+from vllm_omni.core.prefix_cache_utils import OmniTensorPrefixCache
 from vllm_omni.engine.serialization import deserialize_additional_information
 from vllm_omni.model_executor.layers.rotary_embedding.mrope import OmniMRotaryEmbedding as MRotaryEmbedding
 from vllm_omni.model_executor.models.output_templates import OmniOutput
@@ -60,16 +61,9 @@ class OmniGPUModelRunner(GPUModelRunner):
         self.model_intermediate_buffer: dict[str, dict[str, Any]] = {}
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
-        # TODO add another gate for this
-        self.cache_hidden_states = self.cache_config.enable_prefix_caching
-        self.hidden_state_cache: torch.Tensor | None = None
-        self._new_req_cache_hit_ids: set[str] | None = None
-        # HACK - for testing qwen3omni
-        self._cacheable_mm_keys: set[str] | None = None
-        self.mm_outputs_cache: dict[str, torch.Tensor] | None = None
-        if self.model_config.model_stage == "thinker":
-            logger.warning("HACK - for now cacheable mm keys are hardcoded to 0 & 24 for the thinker phase")
-            self._cacheable_mm_keys = {"0", "24"}
+        # The Omni tensor prefix cache will be allocated
+        # when we initialize the metadata builders if enabled
+        self.omni_prefix_cache = None
 
     def initialize_metadata_builders(self, kv_cache_config, kernel_block_sizes):
         """Override to fix scheduler_metadata buffer size for FA3 + CUDA graph.
@@ -96,39 +90,17 @@ class OmniGPUModelRunner(GPUModelRunner):
                                 dtype=sm.dtype,
                                 device=sm.device,
                             )
-        # If we've enabled hidden state prefix caching, preallocate
-        # the cache; this is currently only used for the output hidden
-        # states of the stage.
-        # NOTE: hidden states are large; careful to ensure things are
-        # safely handled for memory in the future if this is expanded.
-        if self.cache_hidden_states:
-            num_blocks = kv_cache_config.num_blocks
-            block_size = self.cache_config.block_size
-            hidden_size = self.model_config.get_hidden_size()
 
-            # We don't handle hybrid cache types for hidden state caching yet;
-            # This does matter since
-            if len(kv_cache_config.kv_cache_groups) > 1:
-                logger.warning("Hidden state caching with multiple KV cache groups not yet supported, disabling.")
-                self.cache_hidden_states = False
-            else:
-                logger.info("Initializing hidden states prefix cache")
-                self.hidden_state_cache = torch.zeros(
-                    (num_blocks, block_size, hidden_size),
-                    dtype=self.dtype,
-                    device=self.device,
-                )
-                # NOTE: For now we just use a dict of tensors even though all tensors are
-                # the same shape, since in the future this may not be the case
-                if self._cacheable_mm_keys is not None:
-                    self.mm_outputs_cache = {}
-                    for k in self._cacheable_mm_keys:
-                        logger.info("Initializing multimodal output cache for key: %s", k)
-                        self.mm_outputs_cache[k] = torch.zeros(
-                            (num_blocks, block_size, hidden_size),
-                            dtype=self.dtype,
-                            device=self.device,
-                        )
+        # Initialize the wrapper for both multimodal output tensors
+        # and for hidden states to be passed between stages
+        if self.cache_config.enable_prefix_caching:
+            self.omni_prefix_cache = OmniTensorPrefixCache(
+                num_blocks=kv_cache_config.num_blocks,
+                block_size=self.cache_config.block_size,
+                hidden_size=self.model_config.get_hidden_size(),
+                dtype=self.dtype,
+                device=self.device,
+            )
 
     def _get_merged_multimodal_states(self, multimodal_outputs, num_scheduled_tokens):
         """Get the merged multimodal states if hidden state prefix caching is enabled."""
@@ -421,7 +393,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             # num_computed_tokens > 0 means that we have a hit in prefix
             # caching; mark it so that we can manage the hidden states
             # later on as needed.
-            if self.cache_hidden_states and new_req_data.num_computed_tokens > 0:
+            if self.omni_prefix_cache is not None and new_req_data.num_computed_tokens > 0:
                 self._new_req_cache_hit_ids.add(req_id)
 
             sampling_params = new_req_data.sampling_params
@@ -1140,7 +1112,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         multimodal_outputs: object,
         num_scheduled_tokens_np: np.ndarray,
         scheduler_output: "SchedulerOutput",
-        combined_hidden_states: torch.Tensor | None = None,
+        combined_hidden_states: dict[str, torch.Tensor] | None = None,
     ) -> None:
         """Process model-provided per-request updates and merge into model_intermediate_buffer."""
         try:
