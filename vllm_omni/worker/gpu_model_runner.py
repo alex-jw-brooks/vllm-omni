@@ -85,64 +85,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                 device=self.device,
             )
 
-    def _get_merged_multimodal_states(self, multimodal_outputs, num_scheduled_tokens):
-        """Get the merged multimodal states if hidden state prefix caching is enabled."""
-        combined_multimodal_outputs = {}
-        if (
-            self._cacheable_mm_keys
-            and self.mm_outputs_cache
-            and multimodal_outputs
-            and isinstance(multimodal_outputs, dict)
-        ):
-            for mm_key in self._cacheable_mm_keys:
-                if mm_key in multimodal_outputs:
-                    combined_multimodal_outputs[mm_key] = self._get_merged_hidden_states(
-                        cache=self.mm_outputs_cache[mm_key],
-                        hidden_states=multimodal_outputs[mm_key],
-                        num_scheduled_tokens=num_scheduled_tokens,
-                    )
-                else:
-                    logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
-        return combined_multimodal_outputs
-
-    def _get_merged_hidden_states(self, cache: torch.Tensor | None, hidden_states, num_scheduled_tokens):
-        """When hidden state caching is enabled, takes the input hidden_states,
-        which only correspond to the scheduled tokens, and returns a mapping
-        from request IDs to their full hidden states. This is accomplished by
-        looking up the block IDs & scheduled token counts to split the
-        hidden_states.
-
-        NOTE: We do not handle hybrid caches at the moment, which is why
-        we index into the first block table like this.
-        """
-        combined_hidden_states = {}
-        if cache is not None and self._new_req_cache_hit_ids:
-            for req_id in self._new_req_cache_hit_ids:
-                req_idx = self.input_batch.req_id_to_index[req_id]
-                num_computed = self.input_batch.num_computed_tokens_cpu[req_idx]
-                block_size = self.cache_config.block_size
-                # NOTE: vLLM only caches full blocks
-                num_cached_blocks = num_computed // block_size
-                # Get the block IDs attached to this cache hit and reindex into
-                # the flattened cached hidden states (i.e., 1 row per token).
-                block_ids = self.input_batch.block_table[0].block_table.gpu[req_idx, :num_cached_blocks]
-                cached_hs = cache[block_ids].reshape(-1, cache.shape[-1])
-
-                # Slice the hidden states corresponding to this request;
-                # we do this by using the query start
-                start = self.query_start_loc.gpu[req_idx]
-                new_hs = hidden_states[start : start + num_scheduled_tokens[req_id]]
-                # TODO: consider putting the actually hidden state cache on CPU
-                combined_hidden_states[req_id] = torch.cat([cached_hs, new_hs], dim=0)
-
-                logger.info(
-                    f"[Cache combine] req={req_id} cached_blocks={num_cached_blocks} "
-                    f"cached hidden states shape={cached_hs.shape} "
-                    f"new hidden states shape={new_hs.shape}"
-                )
-
-        return combined_hidden_states
-
     @instrument(span_name="Loading (GPU)")
     def load_model(self, *args, **kwargs) -> None:
         super().load_model(*args, **kwargs)
@@ -310,7 +252,8 @@ class OmniGPUModelRunner(GPUModelRunner):
         new/resumed/paused/finished request in the batch.
         """
         # Used for prefix cache
-        self._new_req_cache_hit_ids = set()
+        if self.omni_prefix_cache is not None:
+            self.omni_prefix_cache.reset_prefix_cached_new_req_ids()
 
         # Remove finished requests from the cached states.
         for req_id in scheduler_output.finished_req_ids:
@@ -377,7 +320,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             # caching; mark it so that we can manage the hidden states
             # later on as needed.
             if self.omni_prefix_cache is not None and new_req_data.num_computed_tokens > 0:
-                self._new_req_cache_hit_ids.add(req_id)
+                self.omni_prefix_cache.add_prefix_cached_new_req_id(req_id)
 
             sampling_params = new_req_data.sampling_params
             pooling_params = new_req_data.pooling_params
