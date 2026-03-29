@@ -692,7 +692,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
 
         self._process_additional_information_updates(
             hidden_states,
-            multimodal_outputs,
             num_scheduled_tokens_np,
             scheduler_output,
             combined_hidden_states,

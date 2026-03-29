@@ -1109,7 +1109,6 @@ class OmniGPUModelRunner(GPUModelRunner):
     def _process_additional_information_updates(
         self,
         hidden_states: torch.Tensor,
-        multimodal_outputs: object,
         num_scheduled_tokens_np: np.ndarray,
         scheduler_output: "SchedulerOutput",
         combined_hidden_states: dict[str, torch.Tensor] | None = None,
@@ -1129,16 +1128,10 @@ class OmniGPUModelRunner(GPUModelRunner):
                         s, e = start_offset, start_offset + sched_tokens
                         # only consider to store data into update dict.
                         hidden_states_slice = hidden_states[s:e]
-                    update_dict = self.model.postprocess(
-                        hidden_states_slice, multimodal_outputs=multimodal_outputs, **req_infos
-                    )
+                    update_dict = self.model.postprocess(hidden_states_slice, **req_infos)
                     self._update_intermediate_buffer(req_id, update_dict)
         except Exception as e:
-            logger.error(
-                f"Error merging for requests:{self.input_batch.req_ids} "
-                f"additional information update: {e}, with the multimodal_outputs "
-                f"as {multimodal_outputs}"
-            )
+            logger.error(f"Error merging for requests:{self.input_batch.req_ids} additional information update: {e}")
             import traceback
 
             traceback.print_exc()
