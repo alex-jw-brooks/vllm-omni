@@ -7,11 +7,6 @@ from vllm.logger import init_logger
 
 logger = init_logger(__name__)
 
-"""
-NOTE for tomorrow - working on pulling the equivalent functionality out here. also, we should make sure
-that we clear new requests, since I don't think we currently are + make sure that we pass the combined
-multimodal states since we are not right now
-"""
 
 # TODO - Make this configurable and factor in the number
 # of multimodal tensors.
@@ -60,7 +55,7 @@ class OmniTensorPrefixCache:
             for cacheable_key in CACHEABLE_KEYS
         }
 
-        self._new_req_cache_hit_ids: set[str] | None = None
+        self._new_req_cache_hit_ids: set[str] = set()
 
     @property
     def hidden_states_cache(self) -> torch.Tensor:
@@ -71,6 +66,12 @@ class OmniTensorPrefixCache:
     def mm_outputs_cache(self) -> dict[str, torch.Tensor]:
         """Returns the model specific multimodal outputs cache."""
         return {k: v for k, v in self.omni_tensor_cache.items() if k != OMNI_HS_CACHE_KEY}
+
+    def add_prefix_cached_new_req_id(self, req_id):
+        self._new_req_cache_hit_ids.add(req_id)
+
+    def reset_prefix_cached_new_req_ids(self):
+        self._new_req_cache_hit_ids.clear()
 
     def update_omni_tensor_prefix_cache(self, hidden_states, multimodal_outputs, num_tokens_unpadded, input_batch):
         """Updates the hidden cache state for for hidden states and multimodal outputs."""
