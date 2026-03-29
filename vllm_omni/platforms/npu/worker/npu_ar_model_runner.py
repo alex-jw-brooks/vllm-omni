@@ -639,7 +639,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
             )
 
         self._process_additional_information_updates(
-            hidden_states, multimodal_outputs, num_scheduled_tokens_np, scheduler_output
+            hidden_states, num_scheduled_tokens_np, scheduler_output
         )
 
         # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
