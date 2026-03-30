@@ -2,20 +2,11 @@
 Utilities for Prefix Caching in Omni models.
 """
 
-from typing import TypeAlias
-
 import torch
 from vllm.logger import init_logger
-from vllm.model_executor.model_loader.utils import get_model_architecture
 from vllm.v1.worker.gpu_input_batch import InputBatch
 
-from vllm_omni.config.model import OmniModelConfig
-
 logger = init_logger(__name__)
-
-
-StageMMCacheKeys: TypeAlias = list[str] | dict[str, int | None]
-ModelMMCacheKeys: TypeAlias = dict[str, StageMMCacheKeys] | None
 
 
 class OmniTensorPrefixCache:
@@ -41,65 +32,43 @@ class OmniTensorPrefixCache:
         block_size: int,
         hidden_size: int,
         dtype: torch.dtype,
-        model_config: OmniModelConfig,
     ):
         self.num_blocks = num_blocks
         self.block_size = block_size
         self.default_hidden_size = hidden_size
         self.dtype = dtype
 
-        self.mm_cache_keys = self._resolve_mm_cache_keys(model_config)
-        self._initialize_omni_tensor_caches(self.mm_cache_keys)
-        self._new_req_cache_hit_ids: set[str] = set()
-
-    def _resolve_mm_cache_keys(self, model_config: OmniModelConfig) -> StageMMCacheKeys | None:
-        """Determined the configuration for multimodal caching for the current model
-        architecture and stage."""
-        model_stage = model_config.model_stage
-        arch, arch_str = get_model_architecture(model_config)
-        if hasattr(arch, "_model_mm_cache_keys"):
-            model_mm_cache_keys = getattr(arch, "_model_mm_cache_keys")
-            if model_stage in model_mm_cache_keys:
-                stage_mm_cache_keys = model_mm_cache_keys[model_stage]
-                logger.info(f"Resolved mm_cache_keys for stage {model_stage} - {stage_mm_cache_keys}")
-                return stage_mm_cache_keys
-
-        # TODO: Move have_multimodal_outputs to class property and set this log to
-        # only go off for models that support have_multimodal_outputs, since the
-        # hidden states caching is generic
-        logger.warning(
-            f"Model architecture {arch_str} does not have defined _mm_cache_keys and will"
-            " therefore not able leverage prefix caching for multimodal outputs. "
-            " As such, prefix caching may not be supported."
-        )
-
-    def _initialize_omni_tensor_caches(self, mm_cache_keys: StageMMCacheKeys | None):
-        """Initialize the Omni Tensor cache tensors; this handles both the
-        hidden states cache and the multimodal outputs cache.
-
-        The hidden_states cache is a tensor with shape:
-                (num_blocks, block_size, self.default_hidden_size)
-
-        While the mm_outputs_cache is dict mapping keys to tensors of shape:
-                (num_blocks, block_size, feature_size)
-
-        By default, if mm_cache_keys is a list, feature_size is set to the
-        default hidden size for all mm_output_keys. We also accept a dict
-        mapping to feature sizes on a per key basis, falling back to
-        self.default_hidden_size. for any keys that are None.
-        """
+        # Initialize the hidden states cache immediately
         self.hidden_states_cache = self._get_cache_tensor()
 
+        # Defer initialization of the mm_outputs_cache until we
+        # actually see mm output tensors dependent on num tokens.
         self.mm_outputs_cache = {}
-        if mm_cache_keys:
-            if isinstance(mm_cache_keys, dict):
-                for cache_key, hidden_size in mm_cache_keys.items():
-                    self.mm_outputs_cache[cache_key] = self._get_cache_tensor(
-                        hidden_size=hidden_size,
-                    )
-            else:
-                for cache_key in mm_cache_keys:
-                    self.mm_outputs_cache[cache_key] = self._get_cache_tensor()
+        self.mm_cache_keys = set()
+        self._new_req_cache_hit_ids: set[str] = set()
+
+    def maybe_init_missing_mm_cache_keys(self, multimodal_outputs: dict, seq_len: int):
+        """Given multimodal outputs from executing the model, dynamically
+        determine which multimodal outputs are tensors depending on sequence
+        length and should be cached, and initialize the cache tensors
+        accordingly.
+
+        NOTE: This is done to avoid the need for explicit specification of
+        cache keys for every model/stage and aligns with the current way
+        that we slice the multimodal outputs based on the first dimension.
+
+        This will usually be called by the first forward pass, i.e.,
+        determined by the warmup.
+        """
+        for key, val in multimodal_outputs.items():
+            if isinstance(val, torch.Tensor) and val.shape[0] == seq_len and key not in self.mm_cache_keys:
+                feat_dim = val.shape[-1]
+                self.mm_outputs_cache[key] = self._get_cache_tensor(
+                    hidden_size=feat_dim,
+                )
+                self.mm_cache_keys.add(key)
+                new_tensor_shape = self.mm_outputs_cache[key].shape
+                logger.info("Initializing multimodal output cache of size %s for key: %s", list(new_tensor_shape), key)
 
     def _get_cache_tensor(self, hidden_size: int | None = None) -> torch.Tensor:
         """Allocate a CPU cache tensor for a specific key."""
@@ -179,7 +148,7 @@ class OmniTensorPrefixCache:
                     num_scheduled_tokens=num_scheduled_tokens,
                 )
             else:
-                # Note an mm_cache_keys; pass through normally
+                # Not an mm cache key; pass it normally
                 combined_multimodal_outputs[mm_key] = mm_val
         return combined_multimodal_outputs
 
