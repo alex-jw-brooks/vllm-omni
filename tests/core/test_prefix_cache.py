@@ -79,7 +79,6 @@ def test_update_no_multimodal():
     cache = build_cache_with_mm_keys(mm_cache_keys=None)
 
     num_tokens_unpadded = 8
-    # Map the hidden states to valid & unique slots
     slot_offset = 8
     slot_mapping = torch.arange(slot_offset, slot_offset + num_tokens_unpadded)
     new_hidden_states = torch.rand((num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE, device=DEVICE)
@@ -111,7 +110,6 @@ def test_update_with_multimodal_outputs(mm_cache_keys):
     cache = build_cache_with_mm_keys(mm_cache_keys)
 
     num_tokens_unpadded = 8
-    # Map the hidden states to valid & unique slots
     slot_offset = 8
     slot_mapping = torch.arange(slot_offset, slot_offset + num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
@@ -132,10 +130,10 @@ def test_update_with_multimodal_outputs(mm_cache_keys):
 
         # Similar to hidden states, but for each key in the dict;
         # Different tensors may have different feature dims
-        new_mm_states = mm_outputs[mm_key]
-        for slot_idx, new_states in zip(slot_mapping, new_mm_states):
+        new_mm_outputs = mm_outputs[mm_key]
+        for slot_idx, new_output in zip(slot_mapping, new_mm_outputs):
             slot_states = mm_state_rows[slot_idx]
-            assert torch.all(slot_states == new_states)
+            assert torch.all(slot_states == new_output)
 
 
 ### Tests for Merging
@@ -160,7 +158,6 @@ def test_get_merged_hidden_states():
 
     orig_num_tokens_unpadded = 8
     slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
-    # Map the hidden states to valid & unique slots
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
     orig_hidden_states = torch.rand((orig_num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE, device=DEVICE)
 
@@ -205,7 +202,7 @@ def test_get_merged_hidden_states():
     req1_merged_states = merged_states["req1"]
     req2_merged_states = merged_states["req2"]
 
-    # First, check the partial cache hit case
+    # First, check the cache hit case
     assert req1_merged_states.shape == torch.Size([orig_num_tokens_unpadded + num_new_toks_req1, HIDDEN_SIZE])
     # Ensure that the req1 merged states are the cached states + the new req1 states
     assert torch.all(req1_merged_states[:orig_num_tokens_unpadded] == orig_hidden_states)
@@ -214,3 +211,94 @@ def test_get_merged_hidden_states():
     # Next, ensure that the cache miss case only has the new states
     assert req2_merged_states.shape == torch.Size([num_new_toks_req2, HIDDEN_SIZE])
     assert torch.all(req2_merged_states == req2_new_states)
+
+
+@pytest.mark.parametrize(
+    "mm_cache_keys",
+    [
+        ("foo", "bar"),  # All same feature dim (HIDDEN_SIZE)
+        {"foo": 100, "bar": 50, "baz": None},  # different feature dims
+    ],
+)
+def test_get_merged_multimodal_outputs(mm_cache_keys):
+    cache = build_cache_with_mm_keys(mm_cache_keys)
+
+    orig_num_tokens_unpadded = 8
+    slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
+    orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
+    feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
+    orig_mm_outputs = {
+        key: torch.rand((orig_num_tokens_unpadded, feature_dims[key]), dtype=DTYPE, device=DEVICE)
+        for key in mm_cache_keys
+    }
+
+    cache.update_omni_tensor_prefix_cache(
+        hidden_states=None,
+        multimodal_outputs=orig_mm_outputs,
+        num_tokens_unpadded=orig_num_tokens_unpadded,
+        slot_mapping=orig_slot_mapping,
+    )
+
+    # Similar to hs test- say that we have two requests, but only one of them is a cache hit
+    num_new_toks_req1 = 3
+    num_new_toks_req2 = 2
+    cache.add_prefix_cached_new_req_id("req1")
+
+    num_scheduled_tokens = {
+        "req1": num_new_toks_req1,
+        "req2": num_new_toks_req2,
+    }
+
+    new_mm_outputs = {}
+    for mm_key in mm_cache_keys:
+        new_mm_outputs[mm_key] = torch.rand(
+            (num_new_toks_req1 + num_new_toks_req2, feature_dims[mm_key]),
+            dtype=DTYPE,
+            device=DEVICE,
+        )
+    # We also want to make sure passthrough data (outside of our keys) isn't dropped
+    new_mm_outputs["passthrough_data"] = "Something else"
+
+    input_batch = MockInputBatch(num_computed_tokens_cpu=torch.Tensor([orig_num_tokens_unpadded, 0]))
+
+    with patch(
+        "vllm_omni.core.prefix_cache.OmniTensorPrefixCache._get_cached_block_ids",
+        new=fake_get_cached_block_ids,
+    ):
+        merged_mm_outputs = cache.get_merged_multimodal_states(
+            query_start_loc=[0, num_new_toks_req1],
+            input_batch=input_batch,
+            multimodal_outputs=new_mm_outputs,
+            num_scheduled_tokens=num_scheduled_tokens,
+        )
+
+    # Ensure the passthrough data wasn't dropped
+    assert "passthrough_data" in merged_mm_outputs
+
+    for mm_key, mm_output in merged_mm_outputs.items():
+        # Ensure passthrough data is just forwarded normally and not duplicated
+        if mm_key == "passthrough_data":
+            assert new_mm_outputs[mm_key] == mm_output
+            assert new_mm_outputs[mm_key] == mm_output
+        else:
+            assert mm_key in mm_cache_keys
+            assert isinstance(mm_output, dict)
+            assert "req1" in mm_output and "req2" in mm_output
+            curr_feat_dim = feature_dims[mm_key]
+            # Ensure that req1 (cache hit) merged the mm data
+            req1_merged_mm_outputs = mm_output["req1"]
+            req1_new_mm_outputs = new_mm_outputs[mm_key][:num_new_toks_req1]
+
+            assert req1_merged_mm_outputs.shape == torch.Size(
+                [orig_num_tokens_unpadded + num_new_toks_req1, curr_feat_dim]
+            )
+            # Ensure that the req1 merged mm data are the cached data + the new data
+            assert torch.all(req1_merged_mm_outputs[:orig_num_tokens_unpadded] == orig_mm_outputs[mm_key])
+            assert torch.all(req1_merged_mm_outputs[-num_new_toks_req1:] == req1_new_mm_outputs)
+
+            # Ensure that req2 (cache miss) only has the new mm data
+            req2_merged_mm_outputs = mm_output["req2"]
+            req2_new_mm_outputs = new_mm_outputs[mm_key][-num_new_toks_req2:]
+
+            assert req2_merged_mm_outputs.shape == torch.Size([num_new_toks_req2, curr_feat_dim])
+            assert torch.all(req2_merged_mm_outputs == req2_new_mm_outputs)
