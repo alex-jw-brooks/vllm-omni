@@ -4,6 +4,7 @@ Utilities for Prefix Caching in Omni models.
 
 import torch
 from vllm.logger import init_logger
+from vllm.v1.worker.gpu_input_batch import InputBatch
 
 logger = init_logger(__name__)
 
@@ -12,9 +13,7 @@ logger = init_logger(__name__)
 # of multimodal tensors.
 NUM_GPU_BLOCKS = 2048
 # TODO Make this generic, these are specific for qwen3 omni.
-OMNI_HS_CACHE_KEY = "_OMNI_HIDDEN_STATES_KEY"
 MM_CACHE_KEYS = ["0", "24"]
-CACHEABLE_KEYS = MM_CACHE_KEYS + [OMNI_HS_CACHE_KEY]
 
 
 class OmniTensorPrefixCache:
@@ -31,71 +30,103 @@ class OmniTensorPrefixCache:
     and translate it to rows in the 3D tensor of shape:
             (num_blocks, block_size, feature_size)
 
-    The above is generally a large tensor, especially since
-    multiple multimodal output tensors may be cached. To reduce
-    GPU pressure, we implement this as a two-tier cache, where the
-    keeping the large tensor offloaded on CPU, and transferring hot
-    blocks to a GPU buffer of size
-            (num_gpu_blocks, block_size, feature_size)
-    while maintaining a layer of indirection mapping the indices of
-    the CPU slot mappings to the GPU slot mappings.
+    Currently all tensors are stored on device.
     """
 
-    def __init__(self, num_blocks: int, block_size: int, hidden_size: int, dtype, device):
-        self.new_req_cache_hit_ids: set[str] | None = None
-
+    def __init__(
+        self,
+        num_blocks: int,
+        block_size: int,
+        hidden_size: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        mm_cache_keys: list[str] | dict[str, int | None] | None = MM_CACHE_KEYS,
+    ):
+        self.num_blocks = num_blocks
         self.block_size = block_size
-        # TODO: Support CPU offload and combine these.
-        self.omni_tensor_cache = {
-            cacheable_key: torch.zeros(
-                (num_blocks, block_size, hidden_size),
-                dtype=dtype,
-                device=device,
-            )
-            for cacheable_key in CACHEABLE_KEYS
-        }
+        self.default_hidden_size = hidden_size
+        self.dtype = dtype
+        self.device = device
 
+        # TODO: Support CPU offload
+        self._initialize_omni_tensor_caches(mm_cache_keys)
         self._new_req_cache_hit_ids: set[str] = set()
 
-    @property
-    def hidden_states_cache(self) -> torch.Tensor:
-        """Returns the hidden states cache."""
-        return self.omni_tensor_cache[OMNI_HS_CACHE_KEY]
+    def _initialize_omni_tensor_caches(self, mm_cache_keys: list[str] | dict[str, int | None] | None):
+        """Initialize the Omni Tensor cache tensors; this handles both the
+        hidden states cache and the multimodal outputs cache.
 
-    @property
-    def mm_outputs_cache(self) -> dict[str, torch.Tensor]:
-        """Returns the model specific multimodal outputs cache."""
-        return {k: v for k, v in self.omni_tensor_cache.items() if k != OMNI_HS_CACHE_KEY}
+        The hidden_states cache is a tensor with shape:
+                (num_blocks, block_size, self.default_hidden_size)
 
-    def add_prefix_cached_new_req_id(self, req_id):
+        While the mm_outputs_cache is dict mapping keys to tensors of shape:
+                (num_blocks, block_size, feature_size)
+
+        By default, if mm_cache_keys is a list, feature_size is set to the
+        default hidden size for all mm_output_keys. We also accept a dict
+        mapping to feature sizes on a per key basis, falling back to
+        self.default_hidden_size. for any keys that are None.
+        """
+        self.hidden_states_cache = self._get_cache_tensor()
+
+        self.mm_outputs_cache = {}
+        if mm_cache_keys:
+            if isinstance(mm_cache_keys, dict):
+                for cache_key, hidden_size in mm_cache_keys.items():
+                    self.mm_outputs_cache[cache_key] = self._get_cache_tensor(
+                        hidden_size=hidden_size,
+                    )
+            else:
+                for cache_key in mm_cache_keys:
+                    self.mm_outputs_cache[cache_key] = self._get_cache_tensor()
+
+    def _get_cache_tensor(self, hidden_size: int | None = None) -> torch.Tensor:
+        """Allocate a cache tensor for a specific key."""
+        actual_hidden_size = hidden_size if hidden_size is not None else self.default_hidden_size
+        return torch.zeros(
+            (self.num_blocks, self.block_size, actual_hidden_size),
+            dtype=self.dtype,
+            device=self.device,
+        )
+
+    def add_prefix_cached_new_req_id(self, req_id: str):
+        """Adds a new request ID to the set of prefix cache hits on the batch."""
         self._new_req_cache_hit_ids.add(req_id)
 
     def reset_prefix_cached_new_req_ids(self):
+        """Clears the cache hit IDs to prepare for a new engine step."""
         self._new_req_cache_hit_ids.clear()
 
-    def update_omni_tensor_prefix_cache(self, hidden_states, multimodal_outputs, num_tokens_unpadded, input_batch):
-        """Updates the hidden cache state for for hidden states and multimodal outputs."""
-        assert self.hidden_states_cache is not None
-        slot_mapping = input_batch.block_table[0].slot_mapping.gpu[:num_tokens_unpadded]
-        # View the cache as 2D so that we can treat our slots as row indices
-        flat_cache = self.hidden_states_cache.view(-1, self.hidden_states_cache.shape[-1])
-        flat_cache[slot_mapping] = hidden_states[:num_tokens_unpadded]
-        logger.info(f"[HS Cache WRITE] tokens={num_tokens_unpadded}")
+    def update_omni_tensor_prefix_cache(
+        self,
+        hidden_states: torch.Tensor | None,
+        multimodal_outputs: dict[str, torch.Tensor] | None,
+        num_tokens_unpadded: int,
+        slot_mapping: torch.Tensor,
+    ):
+        """Updates the hidden cache state for the provided hidden states and multimodal outputs."""
+        unpadded_slot_mapping = slot_mapping[:num_tokens_unpadded]
+        if hidden_states is not None:
+            # View the cache as 2D so that we can treat our slots as row indices
+            flat_cache = self.hidden_states_cache.view(-1, self.hidden_states_cache.shape[-1])
+            flat_cache[unpadded_slot_mapping] = hidden_states[:num_tokens_unpadded]
 
-        # Do the same for the cached multimodal outputs for this stage;
-        # for now we assume that all of the multimodal outputs cached
-        # are exactly the same size as the hidden states.
-        # TODO (Alex) make this more flexible.
-        if self.mm_outputs_cache is not None:
+        # Do the same for the stage's cached multimodal outputs
+        if multimodal_outputs is not None:
             for mm_out_key, mm_cache in self.mm_outputs_cache.items():
                 assert mm_out_key in multimodal_outputs
                 mm_state = multimodal_outputs[mm_out_key]
                 flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
-                flat_cache[slot_mapping] = mm_state[:num_tokens_unpadded]
+                flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
             logger.info(f"[multimodal output Cache WRITE] tokens={num_tokens_unpadded}")
 
     def _get_combined_states(
-        self, query_start_loc, input_batch, hidden_states, multimodal_outputs, num_scheduled_tokens
+        self,
+        query_start_loc: torch.Tensor,
+        input_batch: InputBatch,
+        hidden_states: torch.Tensor,
+        multimodal_outputs: dict,
+        num_scheduled_tokens: dict[str, int],
     ):
         combined_mm_states = self._get_merged_multimodal_states(
             query_start_loc, input_batch, multimodal_outputs, num_scheduled_tokens
@@ -105,9 +136,16 @@ class OmniTensorPrefixCache:
         )
         return combined_hidden_states, combined_mm_states
 
-    def _get_merged_multimodal_states(self, query_start_loc, input_batch, multimodal_outputs, num_scheduled_tokens):
+    def _get_merged_multimodal_states(
+        self,
+        query_start_loc: torch.Tensor,
+        input_batch: InputBatch,
+        multimodal_outputs: dict,
+        num_scheduled_tokens: dict[str, int],
+    ):
         """Get the merged multimodal states if hidden state prefix caching is enabled."""
         combined_multimodal_outputs = {}
+        # TODO Ensure non cached keys are properly handled.
         for mm_key in MM_CACHE_KEYS:
             if mm_key in multimodal_outputs:
                 combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
@@ -121,7 +159,13 @@ class OmniTensorPrefixCache:
                 logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
         return combined_multimodal_outputs
 
-    def _get_merged_hidden_states(self, query_start_loc, input_batch, hidden_states, num_scheduled_tokens):
+    def _get_merged_hidden_states(
+        self,
+        query_start_loc: torch.Tensor,
+        input_batch: InputBatch,
+        hidden_states: torch.Tensor,
+        num_scheduled_tokens: dict[str, int],
+    ):
         return self._get_merged_tensors(
             query_start_loc=query_start_loc,
             input_batch=input_batch,
@@ -131,7 +175,12 @@ class OmniTensorPrefixCache:
         )
 
     def _get_merged_tensors(
-        self, query_start_loc, input_batch, cache: torch.Tensor, hidden_states: torch.Tensor, num_scheduled_tokens
+        self,
+        query_start_loc: torch.Tensor,
+        input_batch: InputBatch,
+        cache: torch.Tensor,
+        hidden_states: torch.Tensor,
+        num_scheduled_tokens: dict[str, int],
     ) -> dict[str, torch.Tensor]:
         """When hidden state caching is enabled, takes the input hidden_states,
         which only correspond to the scheduled tokens, and returns a mapping
@@ -156,9 +205,8 @@ class OmniTensorPrefixCache:
 
                 # Slice the hidden states corresponding to this request;
                 # we do this by using the query start
-                start = query_start_loc.gpu[req_idx]
+                start = query_start_loc[req_idx]
                 new_hs = hidden_states[start : start + num_scheduled_tokens[req_id]]
-                # TODO: consider putting the actually hidden state cache on CPU
                 combined_hidden_states[req_id] = torch.cat([cached_hs, new_hs], dim=0)
 
                 logger.info(
