@@ -158,25 +158,25 @@ class OmniTensorPrefixCache:
     ):
         """Get the merged multimodal states if hidden state prefix caching is enabled."""
         combined_multimodal_outputs = {}
-        # TODO Ensure non cached keys are properly handled.
-        if self.mm_cache_keys is not None:
-            for mm_key in self.mm_cache_keys:
-                if mm_key in multimodal_outputs:
-                    combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
-                        query_start_loc=query_start_loc,
-                        input_batch=input_batch,
-                        cache=self.mm_outputs_cache[mm_key],
-                        hidden_states=multimodal_outputs[mm_key],
-                        num_scheduled_tokens=num_scheduled_tokens,
-                    )
-                else:
-                    logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
-        elif multimodal_outputs:
+        if self.mm_cache_keys is None and multimodal_outputs:
             logger.warning(
                 " A model stage produced multimodal outputs, but has no defined mm_cache_keys; "
                 " this probably means that prefix caching is not fully supported for all stages "
                 "in this model"
             )
+
+        for mm_key, mm_val in multimodal_outputs.items():
+            if self.mm_cache_keys is not None and mm_key in self.mm_cache_keys:
+                combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
+                    query_start_loc=query_start_loc,
+                    input_batch=input_batch,
+                    cache=self.mm_outputs_cache[mm_key],
+                    hidden_states=mm_val,
+                    num_scheduled_tokens=num_scheduled_tokens,
+                )
+            else:
+                # Note an mm_cache_keys; pass through normally
+                combined_multimodal_outputs[mm_key] = mm_val
         return combined_multimodal_outputs
 
     def get_merged_hidden_states(self, *args, **kwargs) -> dict[str, torch.Tensor]:
