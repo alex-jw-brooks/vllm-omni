@@ -17,10 +17,6 @@ logger = init_logger(__name__)
 # TODO - Make this configurable and factor in the number
 # of multimodal tensors.
 NUM_GPU_BLOCKS = 2048
-# TODO Make this generic, these are specific for qwen3 omni.
-MM_CACHE_KEYS = ["0", "24"]
-# NEXT ^ let's make this generic, we need to pull it off the model
-# by getting the class before we initialize this class
 
 StageMMCacheKeys: TypeAlias = list[str] | dict[str, int | None]
 ModelMMCacheKeys: TypeAlias = dict[str, StageMMCacheKeys] | None
