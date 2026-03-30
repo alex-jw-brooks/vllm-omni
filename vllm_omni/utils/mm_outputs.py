@@ -8,7 +8,7 @@ from vllm.logger import init_logger
 logger = init_logger(__name__)
 
 
-def build_mm_cpu(multimodal_outputs: dict, seq_len: int | None) -> dict[str, object]:
+def build_mm_cpu(multimodal_outputs: dict) -> dict[str, object]:
     """Pre-copies multimodal tensor to CPU once (not per-request) to avoid
     redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
 
@@ -24,6 +24,11 @@ def build_mm_cpu(multimodal_outputs: dict, seq_len: int | None) -> dict[str, obj
     # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
     # redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
     mm_cpu: dict[str, object] = {}
+    # Currently there are some cases where this is true at the
+    # moment, which should be fixed.
+    if not isinstance(multimodal_outputs, dict):
+        logger.warning("Multimodal outputs are not a dict and will not be passed")
+
     if multimodal_outputs:
         for k, v in multimodal_outputs.items():
             if isinstance(v, torch.Tensor):
@@ -48,7 +53,7 @@ def build_mm_cpu(multimodal_outputs: dict, seq_len: int | None) -> dict[str, obj
     return mm_cpu
 
 
-def to_payload_element(element, idx: int, start: int, end: int, seq_len: int | None = None):
+def to_payload_element(element: object, idx: int, start: int, end: int, seq_len: int | None = None):
     """Build an mm payload element corresponding to one request index
     from an element containing 0 or more CPU tensors.
 
