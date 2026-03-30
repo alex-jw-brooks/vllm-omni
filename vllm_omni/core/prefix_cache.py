@@ -204,10 +204,14 @@ class OmniTensorPrefixCache:
         from request IDs to their full hidden states. This is accomplished by
         looking up the block IDs & scheduled token counts to split the
         hidden_states.
-
-        NOTE: We do not handle hybrid caches at the moment, which is why
-        we index into the first block table like this.
         """
+        # We do not support hybrid caches at the moment.
+        if len(input_batch.block_table.block_tables) > 1:
+            logger.warning_once(
+                "Omni prefix caching is enabled, but the batch block table appears to"
+                " have multiple kv groups; only the first group will be used!"
+            )
+
         combined_hidden_states = {}
         hidden_states = OmniTensorPrefixCache._coerce_to_cpu_tensor(hidden_states)
         for req_id in input_batch.req_ids:
