@@ -1,23 +1,10 @@
+from unittest.mock import patch
+
 import pytest
 import torch
 
 from vllm_omni.core.prefix_cache import OmniTensorPrefixCache
 
-"""
-Things to test:
-
-1. Merging for hidden states
-2. Merging for multimodal
-    -> Happy path
-    -> No hit cache (different stage)
-    -> Invalid key path (stage has wrong keys)
-3. End to end?
-4. CPU offload
-    -> It's all on the CPU
-    -> It's all on the GPU
-    -> It's a mix of on the CPU and GPU
-5.
-"""
 NUM_BLOCKS = 10
 BLOCK_SIZE = 4
 HIDDEN_SIZE = 2
@@ -27,14 +14,20 @@ DEFAULT_SHAPE = torch.Size([NUM_BLOCKS, BLOCK_SIZE, HIDDEN_SIZE])
 
 
 def build_cache_with_mm_keys(mm_cache_keys) -> OmniTensorPrefixCache:
-    return OmniTensorPrefixCache(
-        num_blocks=NUM_BLOCKS,
-        block_size=BLOCK_SIZE,
-        hidden_size=HIDDEN_SIZE,
-        device=DEVICE,
-        dtype=DTYPE,
-        mm_cache_keys=mm_cache_keys,
-    )
+    with patch(
+        "vllm_omni.core.prefix_cache.OmniTensorPrefixCache._resolve_mm_cache_keys",
+        return_value=mm_cache_keys,
+    ):
+        # Model config is only used for resolving the mm_cache_keys,
+        # so the value passed here doesn't matter since it's patched.
+        return OmniTensorPrefixCache(
+            num_blocks=NUM_BLOCKS,
+            block_size=BLOCK_SIZE,
+            hidden_size=HIDDEN_SIZE,
+            device=DEVICE,
+            dtype=DTYPE,
+            model_config=None,
+        )
 
 
 ### Tests for initialization
