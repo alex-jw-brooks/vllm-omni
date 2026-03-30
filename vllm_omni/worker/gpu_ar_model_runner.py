@@ -522,6 +522,54 @@ class GPUARModelRunner(OmniGPUModelRunner):
 
         return super()._sample(logits, spec_decode_metadata)
 
+    @staticmethod
+    def _build_mm_cpu(multimodal_outputs, seq_len) -> dict[str, object]:
+        # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
+        # redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
+        mm_cpu: dict[str, object] = {}
+        if isinstance(multimodal_outputs, dict) and multimodal_outputs:
+            for k, v in multimodal_outputs.items():
+                try:
+                    if isinstance(v, torch.Tensor) and v.shape[0] == seq_len:
+                        mm_cpu[k] = v.detach().to("cpu").contiguous()
+                    elif isinstance(v, dict):
+                        sub_dict: dict[str, torch.Tensor] = {}
+                        for sk, sv in v.items():
+                            if isinstance(sv, torch.Tensor) and sv.shape[0] == seq_len:
+                                sub_dict[str(sk)] = sv.detach().to("cpu").contiguous()
+                        if sub_dict:
+                            mm_cpu[k] = sub_dict
+                    elif isinstance(v, list):
+                        if len(v) == 0:
+                            continue
+                        cpu_list = []
+                        for elem in v:
+                            if isinstance(elem, torch.Tensor):
+                                cpu_list.append(elem.detach().to("cpu").contiguous())
+                            else:
+                                cpu_list.append(elem)
+                        mm_cpu[k] = cpu_list
+                except Exception as e:
+                    logger.error(f"Error in merge multimodal outputs: {e}")
+        return mm_cpu
+
+    @staticmethod
+    def _resolve_req_hidden_states(
+        hidden_states_cpu: torch.Tensor,
+        combined_hidden_states: dict[str, torch.Tensor] | None,
+        rid: str,
+        start: int,
+        end: int,
+    ):
+        if combined_hidden_states is not None:
+            # We always have all request IDs for prefix cache, even for
+            # partial cache misses, so this should never happen.
+            if rid not in combined_hidden_states:
+                raise RuntimeError("Request IDs in the batch are missing from the merged states!")
+            return combined_hidden_states[rid]
+        # Prefix caching is disabled
+        return hidden_states_cpu[start:end]
+
     @torch.inference_mode()
     def sample_tokens(
         self,
@@ -707,33 +755,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
             combined_hidden_states,
         )
 
-        # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
-        # redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
-        mm_cpu: dict[str, object] = {}
-        if isinstance(multimodal_outputs, dict) and multimodal_outputs:
-            for k, v in multimodal_outputs.items():
-                try:
-                    if isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
-                        mm_cpu[k] = v.detach().to("cpu").contiguous()
-                    elif isinstance(v, dict):
-                        sub_dict: dict[str, torch.Tensor] = {}
-                        for sk, sv in v.items():
-                            if isinstance(sv, torch.Tensor) and sv.shape[0] == hidden_states_cpu.shape[0]:
-                                sub_dict[str(sk)] = sv.detach().to("cpu").contiguous()
-                        if sub_dict:
-                            mm_cpu[k] = sub_dict
-                    elif isinstance(v, list):
-                        if len(v) == 0:
-                            continue
-                        cpu_list = []
-                        for elem in v:
-                            if isinstance(elem, torch.Tensor):
-                                cpu_list.append(elem.detach().to("cpu").contiguous())
-                            else:
-                                cpu_list.append(elem)
-                        mm_cpu[k] = cpu_list
-                except Exception as e:
-                    logger.error(f"Error in merge multimodal outputs: {e}")
+        mm_cpu = self._build_mm_cpu(multimodal_outputs, seq_len=hidden_states_cpu.shape[0])
 
         pooler_output: list[dict[str, object]] = []
         for rid in req_ids_output_copy:
@@ -741,14 +763,15 @@ class GPUARModelRunner(OmniGPUModelRunner):
             start = int(self.query_start_loc.cpu[idx])
             sched = int(num_scheduled_tokens_np[idx])
             end = start + sched
-            # For prefix cache on hidden states - if it's a request
-            # in the combined hidden states, it's a cache hit, so we
-            # send the states that were already merged.
-            if combined_hidden_states and rid in combined_hidden_states:
-                # TODO cleanup device management
-                req_hidden_states = combined_hidden_states[rid].detach().to("cpu").contiguous()
-            else:
-                req_hidden_states = hidden_states_cpu[start:end]
+            # If prefix cache is enabled, we have already split everything
+            # by request and converted the states to CPU tensors
+            req_hidden_states = self._resolve_req_hidden_states(
+                hidden_states_cpu,
+                combined_hidden_states,
+                rid,
+                start,
+                end,
+            )
             payload: dict[str, object] = {"hidden": req_hidden_states}
 
             logger.info(
@@ -767,7 +790,9 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         mm_payload[k] = combined_multimodal_outputs[k][rid].detach().to("cpu").contiguous()
                         logger.info(f"Cached mm key {k} | shape: {combined_multimodal_outputs[k][rid].shape}")
 
-                    elif isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
+                    # We probably need to handle the passthrough data correctly here,
+                    # since for now we just pass it as is.
+                    if isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
                         mm_payload[k] = v[start:end].contiguous()
                     elif isinstance(v, dict):
                         mm_payload[k] = {sk: sv[start:end].contiguous() for sk, sv in v.items()}
