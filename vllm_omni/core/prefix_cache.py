@@ -65,14 +65,15 @@ class OmniTensorPrefixCache:
         model_stage = model_config.model_stage
         arch, arch_str = get_model_architecture(model_config)
         if hasattr(arch, "_model_mm_cache_keys"):
-            model_mm_cache_keys = arch._model_mm_cache_keys
+            model_mm_cache_keys = getattr(arch, "_model_mm_cache_keys")
             if model_stage in model_mm_cache_keys:
                 stage_mm_cache_keys = model_mm_cache_keys[model_stage]
                 logger.info(f"Resolved mm_cache_keys for stage {model_stage} - {stage_mm_cache_keys}")
                 return stage_mm_cache_keys
 
         # TODO: Move have_multimodal_outputs to class property and set this log to
-        # error level & to only go off if we actually have mm outputs.
+        # only go off for models that support have_multimodal_outputs, since the
+        # hidden states caching is generic
         logger.warning(
             f"Model architecture {arch_str} does not have defined _mm_cache_keys and will"
             " therefore not able leverage prefix caching for multimodal outputs. "
