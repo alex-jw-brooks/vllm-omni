@@ -682,10 +682,15 @@ class GPUARModelRunner(OmniGPUModelRunner):
         if self.omni_prefix_cache is None:
             combined_hidden_states, combined_multimodal_outputs = None, None
         else:
-            combined_hidden_states, combined_multimodal_outputs = self.omni_prefix_cache._get_combined_states(
+            combined_hidden_states = self.omni_prefix_cache.get_merged_hidden_states(
                 query_start_loc=self.query_start_loc.gpu,
                 input_batch=self.input_batch,
                 hidden_states=hidden_states,
+                num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+            )
+            combined_multimodal_outputs = self.omni_prefix_cache.get_merged_multimodal_states(
+                query_start_loc=self.query_start_loc.gpu,
+                input_batch=self.input_batch,
                 multimodal_outputs=multimodal_outputs,
                 num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
             )
