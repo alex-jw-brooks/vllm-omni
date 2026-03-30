@@ -82,7 +82,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                 block_size=self.cache_config.block_size,
                 hidden_size=self.model_config.get_hidden_size(),
                 dtype=self.dtype,
-                device=self.device,
                 model_config=self.model_config,
             )
 

@@ -8,7 +8,6 @@ from vllm_omni.core.prefix_cache import OmniTensorPrefixCache
 NUM_BLOCKS = 10
 BLOCK_SIZE = 4
 HIDDEN_SIZE = 2
-DEVICE = torch.device("cuda")
 DTYPE = torch.float32
 DEFAULT_SHAPE = torch.Size([NUM_BLOCKS, BLOCK_SIZE, HIDDEN_SIZE])
 
@@ -31,7 +30,6 @@ def build_cache_with_mm_keys(mm_cache_keys) -> OmniTensorPrefixCache:
             num_blocks=NUM_BLOCKS,
             block_size=BLOCK_SIZE,
             hidden_size=HIDDEN_SIZE,
-            device=DEVICE,
             dtype=DTYPE,
             model_config=None,
         )
@@ -81,7 +79,7 @@ def test_update_no_multimodal():
     num_tokens_unpadded = 8
     slot_offset = 8
     slot_mapping = torch.arange(slot_offset, slot_offset + num_tokens_unpadded)
-    new_hidden_states = torch.rand((num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE, device=DEVICE)
+    new_hidden_states = torch.rand((num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE)
 
     cache.update_omni_tensor_prefix_cache(
         hidden_states=new_hidden_states,
@@ -113,9 +111,7 @@ def test_update_with_multimodal_outputs(mm_cache_keys):
     slot_offset = 8
     slot_mapping = torch.arange(slot_offset, slot_offset + num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
-    mm_outputs = {
-        key: torch.rand((num_tokens_unpadded, feature_dims[key]), dtype=DTYPE, device=DEVICE) for key in mm_cache_keys
-    }
+    mm_outputs = {key: torch.rand((num_tokens_unpadded, feature_dims[key]), dtype=DTYPE) for key in mm_cache_keys}
     cache.update_omni_tensor_prefix_cache(
         hidden_states=None,
         multimodal_outputs=mm_outputs,
@@ -159,7 +155,7 @@ def test_get_merged_hidden_states():
     orig_num_tokens_unpadded = 8
     slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
-    orig_hidden_states = torch.rand((orig_num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE, device=DEVICE)
+    orig_hidden_states = torch.rand((orig_num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE)
 
     cache.update_omni_tensor_prefix_cache(
         hidden_states=orig_hidden_states,
@@ -180,7 +176,6 @@ def test_get_merged_hidden_states():
     new_hidden_states = torch.rand(
         (num_new_toks_req1 + num_new_toks_req2, HIDDEN_SIZE),
         dtype=DTYPE,
-        device=DEVICE,
     )
     req1_new_states = new_hidden_states[:num_new_toks_req1]
     req2_new_states = new_hidden_states[-num_new_toks_req2:]
@@ -228,8 +223,7 @@ def test_get_merged_multimodal_outputs(mm_cache_keys):
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
     orig_mm_outputs = {
-        key: torch.rand((orig_num_tokens_unpadded, feature_dims[key]), dtype=DTYPE, device=DEVICE)
-        for key in mm_cache_keys
+        key: torch.rand((orig_num_tokens_unpadded, feature_dims[key]), dtype=DTYPE) for key in mm_cache_keys
     }
 
     cache.update_omni_tensor_prefix_cache(
@@ -254,7 +248,6 @@ def test_get_merged_multimodal_outputs(mm_cache_keys):
         new_mm_outputs[mm_key] = torch.rand(
             (num_new_toks_req1 + num_new_toks_req2, feature_dims[mm_key]),
             dtype=DTYPE,
-            device=DEVICE,
         )
     # We also want to make sure passthrough data (outside of our keys) isn't dropped
     new_mm_outputs["passthrough_data"] = "Something else"
