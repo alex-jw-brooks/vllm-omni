@@ -13,6 +13,13 @@ DTYPE = torch.float32
 DEFAULT_SHAPE = torch.Size([NUM_BLOCKS, BLOCK_SIZE, HIDDEN_SIZE])
 
 
+class MockInputBatch:
+    def __init__(self, num_computed_tokens_cpu):
+        self.req_ids = ["req1", "req2"]
+        self.req_id_to_index = {req_id: i for i, req_id in enumerate(self.req_ids)}
+        self.num_computed_tokens_cpu = num_computed_tokens_cpu
+
+
 def build_cache_with_mm_keys(mm_cache_keys) -> OmniTensorPrefixCache:
     with patch(
         "vllm_omni.core.prefix_cache.OmniTensorPrefixCache._resolve_mm_cache_keys",
@@ -73,7 +80,7 @@ def test_update_no_multimodal():
 
     num_tokens_unpadded = 8
     # Map the hidden states to valid & unique slots
-    slot_offset = 6  # We'll put our states in slots 6, 7, 8, ..., 13
+    slot_offset = 8
     slot_mapping = torch.arange(slot_offset, slot_offset + num_tokens_unpadded)
     new_hidden_states = torch.rand((num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE, device=DEVICE)
 
@@ -105,7 +112,7 @@ def test_update_with_multimodal_outputs(mm_cache_keys):
 
     num_tokens_unpadded = 8
     # Map the hidden states to valid & unique slots
-    slot_offset = 6  # We'll put our states in slots 6, 7, 8, ..., 13
+    slot_offset = 8
     slot_mapping = torch.arange(slot_offset, slot_offset + num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
     mm_outputs = {
@@ -129,3 +136,81 @@ def test_update_with_multimodal_outputs(mm_cache_keys):
         for slot_idx, new_states in zip(slot_mapping, new_mm_states):
             slot_states = mm_state_rows[slot_idx]
             assert torch.all(slot_states == new_states)
+
+
+### Tests for Merging
+def fake_get_cached_block_ids(self, req_idx, *args, **kwargs):
+    """Fake block table lookup.
+
+    Assumption:
+        req_idx 0 is a cache hit with slots 8, 9, ..., 15
+        req_idx 1 is a cache miss
+    """
+    assert req_idx < 2
+    if req_idx == 0:
+        # With the slot offset we provided (8), the corresponding
+        # blocks IDs are 2 & 3 because the block size is 4.
+        return torch.tensor([2, 3], dtype=torch.long)
+    return torch.tensor([], dtype=torch.long)
+
+
+def test_get_merged_hidden_states():
+    """Ensure that hidden states are merged correctly."""
+    cache = build_cache_with_mm_keys(mm_cache_keys=None)
+
+    orig_num_tokens_unpadded = 8
+    slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
+    # Map the hidden states to valid & unique slots
+    orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
+    orig_hidden_states = torch.rand((orig_num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE, device=DEVICE)
+
+    cache.update_omni_tensor_prefix_cache(
+        hidden_states=orig_hidden_states,
+        multimodal_outputs=None,
+        num_tokens_unpadded=orig_num_tokens_unpadded,
+        slot_mapping=orig_slot_mapping,
+    )
+
+    # Say that we have two requests, but only one of them is a cache hit
+    num_new_toks_req1 = 3
+    num_new_toks_req2 = 2
+    cache.add_prefix_cached_new_req_id("req1")
+
+    num_scheduled_tokens = {
+        "req1": num_new_toks_req1,
+        "req2": num_new_toks_req2,
+    }
+    new_hidden_states = torch.rand(
+        (num_new_toks_req1 + num_new_toks_req2, HIDDEN_SIZE),
+        dtype=DTYPE,
+        device=DEVICE,
+    )
+    req1_new_states = new_hidden_states[:num_new_toks_req1]
+    req2_new_states = new_hidden_states[-num_new_toks_req2:]
+
+    input_batch = MockInputBatch(num_computed_tokens_cpu=torch.Tensor([orig_num_tokens_unpadded, 0]))
+
+    with patch(
+        "vllm_omni.core.prefix_cache.OmniTensorPrefixCache._get_cached_block_ids",
+        new=fake_get_cached_block_ids,
+    ):
+        merged_states = cache.get_merged_hidden_states(
+            query_start_loc=[0, num_new_toks_req1],
+            input_batch=input_batch,
+            hidden_states=new_hidden_states,
+            num_scheduled_tokens=num_scheduled_tokens,
+        )
+
+    assert "req1" in merged_states and "req2" in merged_states
+    req1_merged_states = merged_states["req1"]
+    req2_merged_states = merged_states["req2"]
+
+    # First, check the partial cache hit case
+    assert req1_merged_states.shape == torch.Size([orig_num_tokens_unpadded + num_new_toks_req1, HIDDEN_SIZE])
+    # Ensure that the req1 merged states are the cached states + the new req1 states
+    assert torch.all(req1_merged_states[:orig_num_tokens_unpadded] == orig_hidden_states)
+    assert torch.all(req1_merged_states[-num_new_toks_req1:] == req1_new_states)
+
+    # Next, ensure that the cache miss case only has the new states
+    assert req2_merged_states.shape == torch.Size([num_new_toks_req2, HIDDEN_SIZE])
+    assert torch.all(req2_merged_states == req2_new_states)
