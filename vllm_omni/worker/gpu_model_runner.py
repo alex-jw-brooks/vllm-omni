@@ -100,6 +100,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                 hidden_size=self.model_config.get_hidden_size(),
                 dtype=self.dtype,
                 device=self.device,
+                model_config=self.model_config,
             )
 
     @instrument(span_name="Loading (GPU)")
