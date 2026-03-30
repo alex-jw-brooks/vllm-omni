@@ -14,10 +14,6 @@ from vllm_omni.config.model import OmniModelConfig
 logger = init_logger(__name__)
 
 
-# TODO - Make this configurable and factor in the number
-# of multimodal tensors.
-NUM_GPU_BLOCKS = 2048
-
 StageMMCacheKeys: TypeAlias = list[str] | dict[str, int | None]
 ModelMMCacheKeys: TypeAlias = dict[str, StageMMCacheKeys] | None
 
@@ -35,8 +31,6 @@ class OmniTensorPrefixCache:
 
     and translate it to rows in the 3D tensor of shape:
             (num_blocks, block_size, feature_size)
-
-    Currently all tensors are stored on device.
     """
 
     def __init__(
@@ -45,16 +39,13 @@ class OmniTensorPrefixCache:
         block_size: int,
         hidden_size: int,
         dtype: torch.dtype,
-        device: torch.device,
         model_config: OmniModelConfig,
     ):
         self.num_blocks = num_blocks
         self.block_size = block_size
         self.default_hidden_size = hidden_size
         self.dtype = dtype
-        self.device = device
 
-        # TODO: Support CPU offload
         self.mm_cache_keys = self._resolve_mm_cache_keys(model_config)
         self._initialize_omni_tensor_caches(self.mm_cache_keys)
         self._new_req_cache_hit_ids: set[str] = set()
@@ -109,12 +100,12 @@ class OmniTensorPrefixCache:
                     self.mm_outputs_cache[cache_key] = self._get_cache_tensor()
 
     def _get_cache_tensor(self, hidden_size: int | None = None) -> torch.Tensor:
-        """Allocate a cache tensor for a specific key."""
+        """Allocate a CPU cache tensor for a specific key."""
         actual_hidden_size = hidden_size if hidden_size is not None else self.default_hidden_size
         return torch.zeros(
             (self.num_blocks, self.block_size, actual_hidden_size),
             dtype=self.dtype,
-            device=self.device,
+            device="cpu",
         )
 
     def add_prefix_cached_new_req_id(self, req_id: str):
@@ -125,6 +116,11 @@ class OmniTensorPrefixCache:
         """Clears the cache hit IDs to prepare for a new engine step."""
         self._new_req_cache_hit_ids.clear()
 
+    @staticmethod
+    def _coerce_to_cpu_tensor(maybe_gpu_tensor: torch.Tensor) -> torch.Tensor:
+        """Convert GPU tensors -> contiguous CPU tensors if needed."""
+        return maybe_gpu_tensor.detach().cpu().contiguous()
+
     def update_omni_tensor_prefix_cache(
         self,
         hidden_states: torch.Tensor | None,
@@ -133,8 +129,13 @@ class OmniTensorPrefixCache:
         slot_mapping: torch.Tensor,
     ):
         """Updates the hidden cache state for the provided hidden states and multimodal outputs."""
+        if hidden_states is not None:
+            hidden_states = OmniTensorPrefixCache._coerce_to_cpu_tensor(hidden_states)
+
         unpadded_slot_mapping = slot_mapping[:num_tokens_unpadded]
         if hidden_states is not None:
+            # Ensure that hidden states are on the CPU
+            hidden_states = OmniTensorPrefixCache._coerce_to_cpu_tensor(hidden_states)
             # View the cache as 2D so that we can treat our slots as row indices
             flat_cache = self.hidden_states_cache.view(-1, self.hidden_states_cache.shape[-1])
             flat_cache[unpadded_slot_mapping] = hidden_states[:num_tokens_unpadded]
@@ -145,6 +146,7 @@ class OmniTensorPrefixCache:
             for mm_out_key, mm_cache in self.mm_outputs_cache.items():
                 assert mm_out_key in multimodal_outputs
                 mm_state = multimodal_outputs[mm_out_key]
+                mm_state = OmniTensorPrefixCache._coerce_to_cpu_tensor(mm_state)
                 flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
                 flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
             logger.debug("Writing to mm output cache for %s tokens", num_tokens_unpadded)
@@ -205,6 +207,7 @@ class OmniTensorPrefixCache:
         we index into the first block table like this.
         """
         combined_hidden_states = {}
+        hidden_states = OmniTensorPrefixCache._coerce_to_cpu_tensor(hidden_states)
         for req_id in input_batch.req_ids:
             req_idx = input_batch.req_id_to_index[req_id]
 
@@ -234,4 +237,4 @@ class OmniTensorPrefixCache:
         num_cached_blocks = num_computed // self.block_size
         # Get the block IDs attached to this cache hit and reindex into
         # the flattened cached hidden states (i.e., 1 row per token).
-        return input_batch.block_table[0].block_table.gpu[req_idx, :num_cached_blocks]
+        return input_batch.block_table[0].block_table.cpu[req_idx, :num_cached_blocks]

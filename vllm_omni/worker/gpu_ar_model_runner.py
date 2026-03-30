@@ -401,7 +401,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                     hidden_states=hidden_states,
                     multimodal_outputs=multimodal_outputs,
                     num_tokens_unpadded=num_tokens_unpadded,
-                    slot_mapping=self.input_batch.block_table[0].slot_mapping.gpu,
+                    slot_mapping=self.input_batch.block_table[0].slot_mapping.cpu,
                 )
 
             if not self.broadcast_pp_output:
@@ -683,13 +683,13 @@ class GPUARModelRunner(OmniGPUModelRunner):
             combined_hidden_states, combined_multimodal_outputs = None, None
         else:
             combined_hidden_states = self.omni_prefix_cache.get_merged_hidden_states(
-                query_start_loc=self.query_start_loc.gpu,
+                query_start_loc=self.query_start_loc.cpu,
                 input_batch=self.input_batch,
                 hidden_states=hidden_states,
                 num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
             )
             combined_multimodal_outputs = self.omni_prefix_cache.get_merged_multimodal_states(
-                query_start_loc=self.query_start_loc.gpu,
+                query_start_loc=self.query_start_loc.cpu,
                 input_batch=self.input_batch,
                 multimodal_outputs=multimodal_outputs,
                 num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
