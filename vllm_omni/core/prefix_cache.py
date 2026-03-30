@@ -19,18 +19,20 @@ ModelMMCacheKeys: TypeAlias = dict[str, StageMMCacheKeys] | None
 
 
 class OmniTensorPrefixCache:
-    """Prefix cache for hidden states (model outputs)
-    and model specific multimodal outputs.
+    """Prefix cache for hidden states (model outputs) and model specific
+    multimodal outputs.
 
-    This class implements prefix caching in a non-invasive
-    way on top of vLLM by leveraging the same slot mappings
-    that the vLLM scheduler uses for the KV Cache
+    This class implements prefix caching in a non-invasive way on top of
+    vLLM by leveraging the same slot mappings that the vLLM scheduler uses
+    for the KV Cache.
 
-    Conceptually, we are vLLM's mapping from:
-            (num_blocks, block_size)
+    Conceptually, this means we are mapping vLLM's cache mapping:
+                        (num_blocks, block_size)
 
-    and translate it to rows in the 3D tensor of shape:
-            (num_blocks, block_size, feature_size)
+    to 3D tensors of shape:
+                   (num_blocks, block_size, feature_size)
+
+    Note that feature_size may vary across multimodal_outputs.
     """
 
     def __init__(
