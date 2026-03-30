@@ -26,12 +26,12 @@ def build_mm_cpu(multimodal_outputs: dict, seq_len: int | None) -> dict[str, obj
     mm_cpu: dict[str, object] = {}
     if multimodal_outputs:
         for k, v in multimodal_outputs.items():
-            if isinstance(v, torch.Tensor) and v.shape[0] == seq_len:
+            if isinstance(v, torch.Tensor):
                 mm_cpu[k] = v.detach().to("cpu").contiguous()
             elif isinstance(v, dict):
                 sub_dict: dict[str, torch.Tensor] = {}
                 for sk, sv in v.items():
-                    if isinstance(sv, torch.Tensor) and sv.shape[0] == seq_len:
+                    if isinstance(sv, torch.Tensor):
                         sub_dict[str(sk)] = sv.detach().to("cpu").contiguous()
                 if sub_dict:
                     mm_cpu[k] = sub_dict
@@ -43,6 +43,8 @@ def build_mm_cpu(multimodal_outputs: dict, seq_len: int | None) -> dict[str, obj
                     else:
                         cpu_list.append(elem)
                 mm_cpu[k] = cpu_list
+            else:
+                mm_cpu[k] = v
     return mm_cpu
 
 
