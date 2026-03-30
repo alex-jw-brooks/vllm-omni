@@ -36,7 +36,6 @@ from vllm.v1.outputs import SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
-from vllm_omni.core.prefix_cache import ModelMMCacheKeys
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.qwen3_omni.qwen3_omni_moe_thinker import (
@@ -99,11 +98,6 @@ class Qwen3OmniMoeForConditionalGeneration(
     """
 
     realtime_max_tokens = 64
-    # Currently, we only support prefix caching for the thinker stage
-    _model_mm_cache_keys: ModelMMCacheKeys = {
-        # keys 0 & 24 for the thinker have the same dimensionality as hidden states
-        "thinker": ["0", "24"]
-    }
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
