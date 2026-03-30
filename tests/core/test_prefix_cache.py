@@ -1,10 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 import torch
 
 from vllm_omni.core.prefix_cache import OmniTensorPrefixCache
 
+DEFAULT_SEQ_LEN = 15
 NUM_BLOCKS = 10
 BLOCK_SIZE = 4
 HIDDEN_SIZE = 2
@@ -17,64 +18,94 @@ class MockInputBatch:
         self.req_ids = ["req1", "req2"]
         self.req_id_to_index = {req_id: i for i, req_id in enumerate(self.req_ids)}
         self.num_computed_tokens_cpu = num_computed_tokens_cpu
+        # Block table is only mocked for validation of length;
+        # we don't actually need to add valid values here since
+        # we patch the table when testing.
+        self.block_table = Mock()
+        self.block_table.block_tables = [None]
 
 
-def build_cache_with_mm_keys(mm_cache_keys) -> OmniTensorPrefixCache:
-    with patch(
-        "vllm_omni.core.prefix_cache.OmniTensorPrefixCache._resolve_mm_cache_keys",
-        return_value=mm_cache_keys,
-    ):
-        # Model config is only used for resolving the mm_cache_keys,
-        # so the value passed here doesn't matter since it's patched.
-        return OmniTensorPrefixCache(
-            num_blocks=NUM_BLOCKS,
-            block_size=BLOCK_SIZE,
-            hidden_size=HIDDEN_SIZE,
-            dtype=DTYPE,
-            model_config=None,
-        )
+def get_omni_pcache_with_mm_tensors(feat_dims, seq_len) -> OmniTensorPrefixCache:
+    """Build an OmniTensorPrefixCache and init mm tensors."""
+    cache = get_omni_pcache()
+    mm_outputs = get_multimodal_outputs(feat_dims, seq_len)
+    cache.maybe_init_missing_mm_cache_keys(mm_outputs, seq_len)
+    return cache
+
+
+def get_omni_pcache() -> OmniTensorPrefixCache:
+    """Build an OmniTensorPrefixCache, but don't init mm tensors."""
+    cache = OmniTensorPrefixCache(
+        num_blocks=NUM_BLOCKS,
+        block_size=BLOCK_SIZE,
+        hidden_size=HIDDEN_SIZE,
+        dtype=DTYPE,
+    )
+    return cache
+
+
+def get_multimodal_outputs(feat_dims: dict[str, int], seq_len: int) -> dict[str, torch.Tensor]:
+    fake_mm_inputs = {}
+    for mm_key, feat_dim in feat_dims.items():
+        fake_mm_inputs[mm_key] = torch.rand((seq_len, feat_dim), dtype=DTYPE)
+    return fake_mm_inputs
 
 
 ### Tests for initialization
-def test_initialization_from_list_of_cache_keys():
-    """Ensure that hidden states / mm outputs cache are created with the
-    correct sizes by default.
-    """
-    mm_cache_keys = ["foo", "bar"]
-    cache = build_cache_with_mm_keys(mm_cache_keys)
+def test_initialization_simple():
+    """Check default initialization only creates the hidden states."""
+    cache = get_omni_pcache()
     assert isinstance(cache.hidden_states_cache, torch.Tensor)
     assert cache.hidden_states_cache.shape == DEFAULT_SHAPE
-    assert set(mm_cache_keys) == set(cache.mm_outputs_cache.keys())
-    for val in cache.mm_outputs_cache.values():
-        assert isinstance(val, torch.Tensor)
-        assert val.shape == DEFAULT_SHAPE
+    assert len(cache.mm_outputs_cache) == 0
+    assert len(cache.mm_cache_keys) == 0
 
 
-def test_initialization_from_dict_of_cache_keys():
-    """Ensure that keys in the mm outputs cache can have their own feature
-    sizes and fall back to the hidden states cache size if they map to None.
-    """
-    mm_cache_keys = {
-        "foo": 100,
-        "bar": 50,
-        "baz": None,
-    }
-    cache = build_cache_with_mm_keys(mm_cache_keys)
-    assert isinstance(cache.hidden_states_cache, torch.Tensor)
-    assert cache.hidden_states_cache.shape == DEFAULT_SHAPE
-    assert set(mm_cache_keys) == set(cache.mm_outputs_cache.keys())
+def test_initialization_with_multimodal():
+    """Check initialization + registration of multimodal outputs."""
+    cache = get_omni_pcache()
+    feat_dims = {"foo": 100, "bar": 50, "baz": 10}
+    mm_outputs = get_multimodal_outputs(
+        feat_dims,
+        seq_len=DEFAULT_SEQ_LEN,
+    )
+    cache.maybe_init_missing_mm_cache_keys(mm_outputs, DEFAULT_SEQ_LEN)
+    assert len(cache.mm_cache_keys) == 3
+    assert set(cache.mm_cache_keys) == set(feat_dims.keys())
+    for mm_key in cache.mm_cache_keys:
+        cache_tensor = cache.mm_outputs_cache[mm_key]
+        assert isinstance(cache_tensor, torch.Tensor)
+        assert cache_tensor.shape[-1] == feat_dims[mm_key]
 
-    for key, val in cache.mm_outputs_cache.items():
-        assert isinstance(val, torch.Tensor)
-        hs_override = mm_cache_keys[key] if mm_cache_keys[key] is not None else HIDDEN_SIZE
-        expected_shape = torch.Size([NUM_BLOCKS, BLOCK_SIZE, hs_override])
-        assert val.shape == expected_shape
+
+def test_init_missing_mm_cache_keys_is_idempotent():
+    """Ensure that the cache doesn't reinitialize old keys."""
+    cache = get_omni_pcache()
+    mm_key = "foo"
+    feat_dims = {mm_key: 100}
+    mm_outputs = get_multimodal_outputs(
+        feat_dims,
+        seq_len=DEFAULT_SEQ_LEN,
+    )
+    cache.maybe_init_missing_mm_cache_keys(mm_outputs, DEFAULT_SEQ_LEN)
+    assert len(cache.mm_cache_keys) == 1
+    assert mm_key in cache.mm_cache_keys
+
+    # Cache is initialized to 0 - fill it with 1s
+    cache.mm_outputs_cache[mm_key].fill_(1)
+
+    # Ensure that running another initialization
+    # doesn't zero out our cache values
+    cache.maybe_init_missing_mm_cache_keys(mm_outputs, DEFAULT_SEQ_LEN)
+    assert len(cache.mm_cache_keys) == 1
+    assert mm_key in cache.mm_cache_keys
+    assert torch.all(cache.mm_outputs_cache[mm_key] == 1)
 
 
 ### Tests for Update
 def test_update_no_multimodal():
     """Test that slot mappings act as row indices hidden states."""
-    cache = build_cache_with_mm_keys(mm_cache_keys=None)
+    cache = get_omni_pcache()
 
     num_tokens_unpadded = 8
     slot_offset = 8
@@ -97,21 +128,21 @@ def test_update_no_multimodal():
 
 
 @pytest.mark.parametrize(
-    "mm_cache_keys",
+    "feat_dims",
     [
-        ("foo", "bar"),  # All same feature dim (HIDDEN_SIZE)
-        {"foo": 100, "bar": 50, "baz": None},  # different feature dims
+        {"foo": 100, "bar": 100},
+        {"foo": 100, "bar": 50, "baz": 10},
     ],
 )
-def test_update_with_multimodal_outputs(mm_cache_keys):
+def test_update_with_multimodal_outputs(feat_dims):
     """Test that slot mappings are correct for multimodal tensors."""
-    cache = build_cache_with_mm_keys(mm_cache_keys)
+    cache = get_omni_pcache_with_mm_tensors(feat_dims, seq_len=DEFAULT_SEQ_LEN)
 
     num_tokens_unpadded = 8
     slot_offset = 8
     slot_mapping = torch.arange(slot_offset, slot_offset + num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
-    mm_outputs = {key: torch.rand((num_tokens_unpadded, feature_dims[key]), dtype=DTYPE) for key in mm_cache_keys}
+    mm_outputs = {key: torch.rand((num_tokens_unpadded, feature_dims[key]), dtype=DTYPE) for key in cache.mm_cache_keys}
     cache.update_omni_tensor_prefix_cache(
         hidden_states=None,
         multimodal_outputs=mm_outputs,
@@ -119,7 +150,7 @@ def test_update_with_multimodal_outputs(mm_cache_keys):
         slot_mapping=slot_mapping,
     )
 
-    for mm_key in mm_cache_keys:
+    for mm_key in feat_dims.keys():
         assert mm_key in cache.mm_outputs_cache
         key_feat_dim = feature_dims[mm_key]
         mm_state_rows = cache.mm_outputs_cache[mm_key].view(NUM_BLOCKS * BLOCK_SIZE, key_feat_dim)
@@ -150,7 +181,7 @@ def fake_get_cached_block_ids(self, req_idx, *args, **kwargs):
 
 def test_get_merged_hidden_states():
     """Ensure that hidden states are merged correctly."""
-    cache = build_cache_with_mm_keys(mm_cache_keys=None)
+    cache = get_omni_pcache()
 
     orig_num_tokens_unpadded = 8
     slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
@@ -209,21 +240,21 @@ def test_get_merged_hidden_states():
 
 
 @pytest.mark.parametrize(
-    "mm_cache_keys",
+    "feat_dims",
     [
-        ("foo", "bar"),  # All same feature dim (HIDDEN_SIZE)
-        {"foo": 100, "bar": 50, "baz": None},  # different feature dims
+        {"foo": 100, "bar": 100},
+        {"foo": 100, "bar": 50, "baz": 10},
     ],
 )
-def test_get_merged_multimodal_outputs(mm_cache_keys):
-    cache = build_cache_with_mm_keys(mm_cache_keys)
+def test_get_merged_multimodal_outputs(feat_dims):
+    cache = get_omni_pcache_with_mm_tensors(feat_dims, seq_len=DEFAULT_SEQ_LEN)
 
     orig_num_tokens_unpadded = 8
     slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
     orig_mm_outputs = {
-        key: torch.rand((orig_num_tokens_unpadded, feature_dims[key]), dtype=DTYPE) for key in mm_cache_keys
+        key: torch.rand((orig_num_tokens_unpadded, feature_dims[key]), dtype=DTYPE) for key in cache.mm_cache_keys
     }
 
     cache.update_omni_tensor_prefix_cache(
@@ -244,7 +275,7 @@ def test_get_merged_multimodal_outputs(mm_cache_keys):
     }
 
     new_mm_outputs = {}
-    for mm_key in mm_cache_keys:
+    for mm_key in cache.mm_cache_keys:
         new_mm_outputs[mm_key] = torch.rand(
             (num_new_toks_req1 + num_new_toks_req2, feature_dims[mm_key]),
             dtype=DTYPE,
@@ -274,7 +305,7 @@ def test_get_merged_multimodal_outputs(mm_cache_keys):
             assert new_mm_outputs[mm_key] == mm_output
             assert new_mm_outputs[mm_key] == mm_output
         else:
-            assert mm_key in mm_cache_keys
+            assert mm_key in cache.mm_cache_keys
             assert isinstance(mm_output, dict)
             assert "req1" in mm_output and "req2" in mm_output
             curr_feat_dim = feature_dims[mm_key]
