@@ -301,13 +301,14 @@ def test_get_merged_multimodal_outputs(feat_dims):
 
     for mm_key, mm_output in merged_mm_outputs.items():
         # Ensure passthrough data is just forwarded normally and not duplicated
+        assert isinstance(mm_output, dict)
+        assert "req1" in mm_output and "req2" in mm_output
         if mm_key == "passthrough_data":
-            assert new_mm_outputs[mm_key] == mm_output
-            assert new_mm_outputs[mm_key] == mm_output
+            assert mm_key not in cache.mm_cache_keys
+            assert new_mm_outputs[mm_key] == mm_output["req1"]
+            assert new_mm_outputs[mm_key] == mm_output["req2"]
         else:
             assert mm_key in cache.mm_cache_keys
-            assert isinstance(mm_output, dict)
-            assert "req1" in mm_output and "req2" in mm_output
             curr_feat_dim = feature_dims[mm_key]
             # Ensure that req1 (cache hit) merged the mm data
             req1_merged_mm_outputs = mm_output["req1"]
