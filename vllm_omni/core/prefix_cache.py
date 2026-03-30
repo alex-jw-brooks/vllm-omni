@@ -175,10 +175,8 @@ class OmniTensorPrefixCache:
         # the subdicts mapping request IDs -> payload objects
         passthrough_keys = set(multimodal_outputs.keys()) - self.mm_cache_keys
         passthrough_mm_data = {k: v for k, v in multimodal_outputs.items() if k in passthrough_keys}
-        mm_cpu = build_mm_cpu(
-            multimodal_outputs=passthrough_mm_data,
-            seq_len=None,
-        )
+        mm_cpu = build_mm_cpu(multimodal_outputs=passthrough_mm_data)
+
         for mm_key, mm_val in mm_cpu.items():
             combined_multimodal_outputs[mm_key] = self._coerce_to_payload_dict(
                 element=mm_val,
