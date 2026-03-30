@@ -2,9 +2,14 @@
 Utilities for Prefix Caching in Omni models.
 """
 
+from typing import TypeAlias
+
 import torch
 from vllm.logger import init_logger
+from vllm.model_executor.model_loader.utils import get_model_architecture
 from vllm.v1.worker.gpu_input_batch import InputBatch
+
+from vllm_omni.config.model import OmniModelConfig
 
 logger = init_logger(__name__)
 
@@ -14,6 +19,11 @@ logger = init_logger(__name__)
 NUM_GPU_BLOCKS = 2048
 # TODO Make this generic, these are specific for qwen3 omni.
 MM_CACHE_KEYS = ["0", "24"]
+# NEXT ^ let's make this generic, we need to pull it off the model
+# by getting the class before we initialize this class
+
+StageMMCacheKeys: TypeAlias = list[str] | dict[str, int | None]
+ModelMMCacheKeys: TypeAlias = dict[str, StageMMCacheKeys] | None
 
 
 class OmniTensorPrefixCache:
@@ -40,7 +50,7 @@ class OmniTensorPrefixCache:
         hidden_size: int,
         dtype: torch.dtype,
         device: torch.device,
-        mm_cache_keys: list[str] | dict[str, int | None] | None = MM_CACHE_KEYS,
+        model_config: OmniModelConfig,
     ):
         self.num_blocks = num_blocks
         self.block_size = block_size
@@ -49,10 +59,31 @@ class OmniTensorPrefixCache:
         self.device = device
 
         # TODO: Support CPU offload
-        self._initialize_omni_tensor_caches(mm_cache_keys)
+        self.mm_cache_keys = self._resolve_mm_cache_keys(model_config)
+        self._initialize_omni_tensor_caches(self.mm_cache_keys)
         self._new_req_cache_hit_ids: set[str] = set()
 
-    def _initialize_omni_tensor_caches(self, mm_cache_keys: list[str] | dict[str, int | None] | None):
+    def _resolve_mm_cache_keys(self, model_config: OmniModelConfig) -> StageMMCacheKeys | None:
+        """Determined the configuration for multimodal caching for the current model
+        architecture and stage."""
+        model_stage = model_config.model_stage
+        arch, arch_str = get_model_architecture(model_config)
+        if hasattr(arch, "_model_mm_cache_keys"):
+            model_mm_cache_keys = arch._model_mm_cache_keys
+            if model_stage in model_mm_cache_keys:
+                stage_mm_cache_keys = model_mm_cache_keys[model_stage]
+                logger.info(f"Resolved mm_cache_keys for stage {model_stage} - {stage_mm_cache_keys}")
+                return stage_mm_cache_keys
+
+        # TODO: Move have_multimodal_outputs to class property and set this log to
+        # error level & to only go off if we actually have mm outputs.
+        logger.warning(
+            f"Model architecture {arch_str} does not have defined _mm_cache_keys and will"
+            " therefore not able leverage prefix caching for multimodal outputs. "
+            " As such, prefix caching may not be supported."
+        )
+
+    def _initialize_omni_tensor_caches(self, mm_cache_keys: StageMMCacheKeys | None):
         """Initialize the Omni Tensor cache tensors; this handles both the
         hidden states cache and the multimodal outputs cache.
 
@@ -110,6 +141,7 @@ class OmniTensorPrefixCache:
             # View the cache as 2D so that we can treat our slots as row indices
             flat_cache = self.hidden_states_cache.view(-1, self.hidden_states_cache.shape[-1])
             flat_cache[unpadded_slot_mapping] = hidden_states[:num_tokens_unpadded]
+            logger.debug("Writing to hidden states for %s tokens", num_tokens_unpadded)
 
         # Do the same for the stage's cached multimodal outputs
         if multimodal_outputs is not None:
@@ -118,7 +150,7 @@ class OmniTensorPrefixCache:
                 mm_state = multimodal_outputs[mm_out_key]
                 flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
                 flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
-            logger.info(f"[multimodal output Cache WRITE] tokens={num_tokens_unpadded}")
+            logger.debug("Writing to mm output cache for %s tokens", num_tokens_unpadded)
 
     def _get_combined_states(
         self,
@@ -146,17 +178,24 @@ class OmniTensorPrefixCache:
         """Get the merged multimodal states if hidden state prefix caching is enabled."""
         combined_multimodal_outputs = {}
         # TODO Ensure non cached keys are properly handled.
-        for mm_key in MM_CACHE_KEYS:
-            if mm_key in multimodal_outputs:
-                combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
-                    query_start_loc=query_start_loc,
-                    input_batch=input_batch,
-                    cache=self.mm_outputs_cache[mm_key],
-                    hidden_states=multimodal_outputs[mm_key],
-                    num_scheduled_tokens=num_scheduled_tokens,
-                )
-            else:
-                logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
+        if self.mm_cache_keys is not None:
+            for mm_key in self.mm_cache_keys:
+                if mm_key in multimodal_outputs:
+                    combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
+                        query_start_loc=query_start_loc,
+                        input_batch=input_batch,
+                        cache=self.mm_outputs_cache[mm_key],
+                        hidden_states=multimodal_outputs[mm_key],
+                        num_scheduled_tokens=num_scheduled_tokens,
+                    )
+                else:
+                    logger.error("Cacheable multimodal key %s is not present in multimodal outputs", mm_key)
+        elif multimodal_outputs:
+            logger.warning(
+                " A model stage produced multimodal outputs, but has no defined mm_cache_keys; "
+                " this probably means that prefix caching is not fully supported for all stages "
+                "in this model"
+            )
         return combined_multimodal_outputs
 
     def _get_merged_hidden_states(
