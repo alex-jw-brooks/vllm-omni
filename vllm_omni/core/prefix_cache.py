@@ -149,23 +149,7 @@ class OmniTensorPrefixCache:
                 flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
             logger.debug("Writing to mm output cache for %s tokens", num_tokens_unpadded)
 
-    def _get_combined_states(
-        self,
-        query_start_loc: torch.Tensor,
-        input_batch: InputBatch,
-        hidden_states: torch.Tensor,
-        multimodal_outputs: dict,
-        num_scheduled_tokens: dict[str, int],
-    ):
-        combined_mm_states = self._get_merged_multimodal_states(
-            query_start_loc, input_batch, multimodal_outputs, num_scheduled_tokens
-        )
-        combined_hidden_states = self._get_merged_hidden_states(
-            query_start_loc, input_batch, hidden_states, num_scheduled_tokens
-        )
-        return combined_hidden_states, combined_mm_states
-
-    def _get_merged_multimodal_states(
+    def get_merged_multimodal_states(
         self,
         query_start_loc: torch.Tensor,
         input_batch: InputBatch,
@@ -195,19 +179,12 @@ class OmniTensorPrefixCache:
             )
         return combined_multimodal_outputs
 
-    def _get_merged_hidden_states(
-        self,
-        query_start_loc: torch.Tensor,
-        input_batch: InputBatch,
-        hidden_states: torch.Tensor,
-        num_scheduled_tokens: dict[str, int],
-    ):
+    def get_merged_hidden_states(self, *args, **kwargs) -> dict[str, torch.Tensor]:
+        """Get the merged hidden states."""
         return self._get_merged_tensors(
-            query_start_loc=query_start_loc,
-            input_batch=input_batch,
+            *args,
+            **kwargs,
             cache=self.hidden_states_cache,
-            hidden_states=hidden_states,
-            num_scheduled_tokens=num_scheduled_tokens,
         )
 
     def _get_merged_tensors(
@@ -228,15 +205,11 @@ class OmniTensorPrefixCache:
         we index into the first block table like this.
         """
         combined_hidden_states = {}
-        if cache is not None and self._new_req_cache_hit_ids:
-            for req_id in self._new_req_cache_hit_ids:
-                req_idx = input_batch.req_id_to_index[req_id]
-                num_computed = input_batch.num_computed_tokens_cpu[req_idx]
-                # NOTE: vLLM only caches full blocks
-                num_cached_blocks = num_computed // self.block_size
-                # Get the block IDs attached to this cache hit and reindex into
-                # the flattened cached hidden states (i.e., 1 row per token).
-                block_ids = input_batch.block_table[0].block_table.gpu[req_idx, :num_cached_blocks]
+        for req_id in input_batch.req_ids:
+            req_idx = input_batch.req_id_to_index[req_id]
+
+            if req_id in self._new_req_cache_hit_ids:
+                block_ids = self._get_cached_block_ids(req_idx, input_batch)
                 cached_hs = cache[block_ids].reshape(-1, cache.shape[-1])
 
                 # Slice the hidden states corresponding to this request;
@@ -244,11 +217,21 @@ class OmniTensorPrefixCache:
                 start = query_start_loc[req_idx]
                 new_hs = hidden_states[start : start + num_scheduled_tokens[req_id]]
                 combined_hidden_states[req_id] = torch.cat([cached_hs, new_hs], dim=0)
-
-                logger.info(
-                    f"[Cache combine] req={req_id} cached_blocks={num_cached_blocks} "
-                    f"cached hidden states shape={cached_hs.shape} "
-                    f"new hidden states shape={new_hs.shape}"
-                )
+            else:
+                # cache miss for this request, pass through normally
+                start = query_start_loc[req_idx]
+                new_hs = hidden_states[start : start + num_scheduled_tokens[req_id]]
+                combined_hidden_states[req_id] = new_hs
 
         return combined_hidden_states
+
+    def _get_cached_block_ids(self, req_idx: int, input_batch: InputBatch) -> torch.Tensor:
+        """Given an input batch and request index in the batch (not ID), get the
+        block IDs corresponding to the cache hit.
+        """
+        num_computed = input_batch.num_computed_tokens_cpu[req_idx]
+        # NOTE: vLLM only caches full blocks
+        num_cached_blocks = num_computed // self.block_size
+        # Get the block IDs attached to this cache hit and reindex into
+        # the flattened cached hidden states (i.e., 1 row per token).
+        return input_batch.block_table[0].block_table.gpu[req_idx, :num_cached_blocks]
