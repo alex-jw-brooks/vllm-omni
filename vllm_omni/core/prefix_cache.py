@@ -6,6 +6,8 @@ import torch
 from vllm.logger import init_logger
 from vllm.v1.worker.gpu_input_batch import InputBatch
 
+from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
+
 logger = init_logger(__name__)
 
 
@@ -122,6 +124,26 @@ class OmniTensorPrefixCache:
                 flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
             logger.debug("Writing to mm output cache for %s tokens", num_tokens_unpadded)
 
+    def _coerce_to_payload_dict(
+        self,
+        element: object,
+        query_start_loc: torch.Tensor,
+        input_batch: InputBatch,
+        num_scheduled_tokens: dict[str, int],
+    ) -> dict[str, object]:
+        """Build the multimodal passthrough data per request for
+        the object under consideration. This is identical to the case
+        for no prefix cache when we tensor does have a first dimension
+        matching the seq len.
+        """
+        elem_dict = {}
+        for req_id in input_batch.req_ids:
+            req_idx = input_batch.req_id_to_index[req_id]
+            start = query_start_loc[req_idx]
+            end = start + num_scheduled_tokens[req_id]
+            elem_dict[req_id] = to_payload_element(element, req_idx, start=start, end=end, seq_len=None)
+        return elem_dict
+
     def get_merged_multimodal_states(
         self,
         query_start_loc: torch.Tensor,
@@ -137,19 +159,33 @@ class OmniTensorPrefixCache:
                 " this probably means that prefix caching is not fully supported for all stages "
                 "in this model"
             )
-
-        for mm_key, mm_val in multimodal_outputs.items():
+        # First get the prefix cached tensors
+        for mm_key in self.mm_cache_keys:
             if self.mm_cache_keys is not None and mm_key in self.mm_cache_keys:
                 combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
                     query_start_loc=query_start_loc,
                     input_batch=input_batch,
                     cache=self.mm_outputs_cache[mm_key],
-                    hidden_states=mm_val,
+                    hidden_states=multimodal_outputs[mm_key],
                     num_scheduled_tokens=num_scheduled_tokens,
                 )
-            else:
-                # Not an mm cache key; pass it normally
-                combined_multimodal_outputs[mm_key] = mm_val
+
+        # Then, get everything else (passthrough data); first, convert to CPU
+        # tensors similarly to the non prefix cached path, and then populate
+        # the subdicts mapping request IDs -> payload objects
+        passthrough_keys = set(multimodal_outputs.keys()) - self.mm_cache_keys
+        passthrough_mm_data = {k: v for k, v in multimodal_outputs.items() if k in passthrough_keys}
+        mm_cpu = build_mm_cpu(
+            multimodal_outputs=passthrough_mm_data,
+            seq_len=None,
+        )
+        for mm_key, mm_val in mm_cpu.items():
+            combined_multimodal_outputs[mm_key] = self._coerce_to_payload_dict(
+                element=mm_val,
+                query_start_loc=query_start_loc,
+                input_batch=input_batch,
+                num_scheduled_tokens=num_scheduled_tokens,
+            )
         return combined_multimodal_outputs
 
     def get_merged_hidden_states(self, *args, **kwargs) -> dict[str, torch.Tensor]:
