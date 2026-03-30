@@ -724,7 +724,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
             )
         else:
-            mm_cpu = build_mm_cpu(multimodal_outputs, seq_len=seq_len)
+            mm_cpu = build_mm_cpu(multimodal_outputs)
 
         self._process_additional_information_updates(
             hidden_states,
