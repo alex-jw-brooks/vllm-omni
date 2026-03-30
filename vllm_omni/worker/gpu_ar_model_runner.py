@@ -39,6 +39,7 @@ from vllm.v1.worker.utils import is_residual_scattered_for_sp
 
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
 from vllm_omni.outputs import OmniModelRunnerOutput
+from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
 from vllm_omni.worker.gpu_model_runner import OmniGPUModelRunner
 
 logger = init_logger(__name__)
@@ -523,37 +524,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
         return super()._sample(logits, spec_decode_metadata)
 
     @staticmethod
-    def _build_mm_cpu(multimodal_outputs, seq_len) -> dict[str, object]:
-        # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
-        # redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
-        mm_cpu: dict[str, object] = {}
-        if isinstance(multimodal_outputs, dict) and multimodal_outputs:
-            for k, v in multimodal_outputs.items():
-                try:
-                    if isinstance(v, torch.Tensor) and v.shape[0] == seq_len:
-                        mm_cpu[k] = v.detach().to("cpu").contiguous()
-                    elif isinstance(v, dict):
-                        sub_dict: dict[str, torch.Tensor] = {}
-                        for sk, sv in v.items():
-                            if isinstance(sv, torch.Tensor) and sv.shape[0] == seq_len:
-                                sub_dict[str(sk)] = sv.detach().to("cpu").contiguous()
-                        if sub_dict:
-                            mm_cpu[k] = sub_dict
-                    elif isinstance(v, list):
-                        if len(v) == 0:
-                            continue
-                        cpu_list = []
-                        for elem in v:
-                            if isinstance(elem, torch.Tensor):
-                                cpu_list.append(elem.detach().to("cpu").contiguous())
-                            else:
-                                cpu_list.append(elem)
-                        mm_cpu[k] = cpu_list
-                except Exception as e:
-                    logger.error(f"Error in merge multimodal outputs: {e}")
-        return mm_cpu
-
-    @staticmethod
     def _resolve_req_hidden_states(
         hidden_states_cpu: torch.Tensor,
         combined_hidden_states: dict[str, torch.Tensor] | None,
@@ -577,6 +547,13 @@ class GPUARModelRunner(OmniGPUModelRunner):
     ) -> OmniModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors:
         kv_extracted_req_ids = getattr(self, "kv_extracted_req_ids", None)
         self.kv_extracted_req_ids = None
+
+        # Used for prefix cache
+        combined_hidden_states = None
+        combined_multimodal_outputs = None
+        # Used when we don't use prefix cache; prefix cache builds the payloads
+        # internally since it already needs to do this for the cached tensors
+        mm_cpu = {}
 
         if self.execute_model_state is None:
             kv_connector_output = self.kv_connector_output
@@ -609,6 +586,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
             slot_mappings,  # OMNI: unpack slot_mappings for drafter
         ) = self.execute_model_state
         self.execute_model_state = None
+        seq_len = hidden_states.shape[0]
 
         # Apply structured output bitmasks if present.
         if grammar_output is not None:
@@ -732,9 +710,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
 
         # Prior to applying the post-processing func, extract
         # the prefix cached hidden states and multimodal states.
-        if self.omni_prefix_cache is None:
-            combined_hidden_states, combined_multimodal_outputs = None, None
-        else:
+        if self.omni_prefix_cache is not None:
             combined_hidden_states = self.omni_prefix_cache.get_merged_hidden_states(
                 query_start_loc=self.query_start_loc.cpu,
                 input_batch=self.input_batch,
@@ -747,6 +723,8 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 multimodal_outputs=multimodal_outputs,
                 num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
             )
+        else:
+            mm_cpu = build_mm_cpu(multimodal_outputs, seq_len=seq_len)
 
         self._process_additional_information_updates(
             hidden_states,
@@ -754,8 +732,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
             scheduler_output,
             combined_hidden_states,
         )
-
-        mm_cpu = self._build_mm_cpu(multimodal_outputs, seq_len=hidden_states_cpu.shape[0])
 
         pooler_output: list[dict[str, object]] = []
         for rid in req_ids_output_copy:
@@ -774,40 +750,24 @@ class GPUARModelRunner(OmniGPUModelRunner):
             )
             payload: dict[str, object] = {"hidden": req_hidden_states}
 
-            logger.info(
-                f"[HS] req={rid} hidden_shape={req_hidden_states.shape} "
-                f"cache_hit={rid in combined_hidden_states if combined_hidden_states else False}"
-            )
-
-            if mm_cpu:
-                mm_payload: dict[str, object] = {}
-                for k, v in mm_cpu.items():
-                    if (
-                        combined_multimodal_outputs
-                        and k in combined_multimodal_outputs
-                        and rid in combined_multimodal_outputs[k]
-                    ):
-                        mm_payload[k] = combined_multimodal_outputs[k][rid].detach().to("cpu").contiguous()
-                        logger.info(f"Cached mm key {k} | shape: {combined_multimodal_outputs[k][rid].shape}")
-
-                    # We probably need to handle the passthrough data correctly here,
-                    # since for now we just pass it as is.
-                    if isinstance(v, torch.Tensor) and v.shape[0] == hidden_states_cpu.shape[0]:
-                        mm_payload[k] = v[start:end].contiguous()
-                    elif isinstance(v, dict):
-                        mm_payload[k] = {sk: sv[start:end].contiguous() for sk, sv in v.items()}
-                    elif isinstance(v, list):
-                        element = v[idx] if idx < len(v) else v[0]
-                        # Clone tensors to avoid cross-request aliasing
-                        if isinstance(element, torch.Tensor):
-                            element = element.clone()
-                        mm_payload[k] = element
-                    elif isinstance(v, torch.Tensor):
-                        # List-derived tensor payloads are request-invariant; clone to
-                        # avoid accidental cross-request aliasing on downstream mutation.
-                        mm_payload[k] = v.clone()
-                    else:
-                        mm_payload[k] = v
+            mm_payload: dict[str, object] = {}
+            if combined_multimodal_outputs or mm_cpu:
+                if combined_multimodal_outputs:
+                    # Prefix cache enabled; all items have already been processed
+                    # and split apart for each request as needed, and all tensors
+                    # have already been detached to the CPU.
+                    for mm_key in combined_multimodal_outputs.keys():
+                        mm_payload[mm_key] = combined_multimodal_outputs[mm_key][rid]
+                else:
+                    # Prefix cache disabled; we still need to process the data
+                    for mm_key, mm_val in mm_cpu.items():
+                        mm_payload[mm_key] = to_payload_element(
+                            element=mm_val,
+                            idx=idx,
+                            start=start,
+                            end=end,
+                            seq_len=seq_len,
+                        )
                 payload.update(mm_payload)
             pooler_output.append(payload)
         with record_function_or_nullcontext("gpu_model_runner: ModelRunnerOutput"):
