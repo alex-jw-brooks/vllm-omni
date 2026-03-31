@@ -1626,6 +1626,7 @@ class OmniResponse:
     e2e_latency: float | None = None
     success: bool = False
     error_message: str | None = None
+    cached_tokens: int | None = None
 
 
 @dataclass
@@ -2120,6 +2121,11 @@ class OpenAIClientHandler:
                 # Process text content
                 if hasattr(choice.message, "content") and choice.message.content is not None:
                     text_content = choice.message.content
+
+            # Extract cached_tokens for prefix caching tests
+            usage = getattr(chat_completion, "usage", None)
+            if usage and (details := getattr(usage, "prompt_tokens_details", None)):
+                result.cached_tokens = details.cached_tokens
 
             # Calculate end-to-end latency
             result.e2e_latency = time.perf_counter() - start_time
