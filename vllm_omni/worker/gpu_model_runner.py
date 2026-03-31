@@ -81,7 +81,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                 num_blocks=kv_cache_config.num_blocks,
                 block_size=self.cache_config.block_size,
                 hidden_size=self.model_config.get_hidden_size(),
-                dtype=self.dtype,
+                hs_dtype=self.dtype,
             )
 
     @instrument(span_name="Loading (GPU)")
