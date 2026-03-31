@@ -398,10 +398,15 @@ class GPUARModelRunner(OmniGPUModelRunner):
             # Cache hidden states if we've enabled hidden state prefix caching
             # unless this isn't the last pipeline parallelism rank.
             if self.omni_prefix_cache is not None and get_pp_group().is_last_rank:
-                self.omni_prefix_cache.maybe_init_missing_mm_cache_keys(
-                    multimodal_outputs,
-                    seq_len=hidden_states.shape[0],
-                )
+                if isinstance(multimodal_outputs, dict):
+                    self.omni_prefix_cache.maybe_init_missing_mm_cache_keys(
+                        multimodal_outputs,
+                        seq_len=hidden_states.shape[0],
+                    )
+                else:
+                    # This usually means that the stage doesn't have
+                    # multimodal outputs, so only the hidden states cache
+                    logger.warning_once("Omni prefix caching expects type dict, but got %s", type(multimodal_outputs))
 
                 self.omni_prefix_cache.update_omni_tensor_prefix_cache(
                     hidden_states=hidden_states,
