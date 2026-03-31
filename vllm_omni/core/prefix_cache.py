@@ -33,15 +33,14 @@ class OmniTensorPrefixCache:
         num_blocks: int,
         block_size: int,
         hidden_size: int,
-        dtype: torch.dtype,
+        hs_dtype: torch.dtype,
     ):
         self.num_blocks = num_blocks
         self.block_size = block_size
         self.default_hidden_size = hidden_size
-        self.dtype = dtype
 
         # Initialize the hidden states cache immediately
-        self.hidden_states_cache = self._get_cache_tensor()
+        self.hidden_states_cache = self._get_cache_tensor(dtype=hs_dtype)
 
         # Defer initialization of the mm_outputs_cache until we
         # actually see mm output tensors dependent on num tokens.
@@ -66,18 +65,19 @@ class OmniTensorPrefixCache:
             if isinstance(val, torch.Tensor) and val.shape[0] == seq_len and key not in self.mm_cache_keys:
                 feat_dim = val.shape[-1]
                 self.mm_outputs_cache[key] = self._get_cache_tensor(
+                    dtype=val.dtype,
                     hidden_size=feat_dim,
                 )
                 self.mm_cache_keys.add(key)
                 new_tensor_shape = self.mm_outputs_cache[key].shape
                 logger.info("Initializing multimodal output cache of size %s for key: %s", list(new_tensor_shape), key)
 
-    def _get_cache_tensor(self, hidden_size: int | None = None) -> torch.Tensor:
+    def _get_cache_tensor(self, dtype: torch.dtype, hidden_size: int | None = None) -> torch.Tensor:
         """Allocate a CPU cache tensor for a specific key."""
         actual_hidden_size = hidden_size if hidden_size is not None else self.default_hidden_size
         return torch.zeros(
             (self.num_blocks, self.block_size, actual_hidden_size),
-            dtype=self.dtype,
+            dtype=dtype,
             device="cpu",
         )
 
