@@ -10,6 +10,7 @@ NUM_BLOCKS = 10
 BLOCK_SIZE = 4
 HIDDEN_SIZE = 2
 DTYPE = torch.float32
+OTHER_DTYPE = torch.float16
 DEFAULT_SHAPE = torch.Size([NUM_BLOCKS, BLOCK_SIZE, HIDDEN_SIZE])
 
 
@@ -39,7 +40,7 @@ def get_omni_pcache() -> OmniTensorPrefixCache:
         num_blocks=NUM_BLOCKS,
         block_size=BLOCK_SIZE,
         hidden_size=HIDDEN_SIZE,
-        dtype=DTYPE,
+        hs_dtype=DTYPE,
     )
     return cache
 
@@ -69,6 +70,10 @@ def test_initialization_with_multimodal():
         feat_dims,
         seq_len=DEFAULT_SEQ_LEN,
     )
+    # Cast one of the keys to a different dtype; the dtype of the tensor
+    # that is used to initialize the cache dictates the cache dtype.
+    mm_outputs["foo"] = mm_outputs["foo"].to(OTHER_DTYPE)
+
     cache.maybe_init_missing_mm_cache_keys(mm_outputs, DEFAULT_SEQ_LEN)
     assert len(cache.mm_cache_keys) == 3
     assert set(cache.mm_cache_keys) == set(feat_dims.keys())
@@ -76,6 +81,7 @@ def test_initialization_with_multimodal():
         cache_tensor = cache.mm_outputs_cache[mm_key]
         assert isinstance(cache_tensor, torch.Tensor)
         assert cache_tensor.shape[-1] == feat_dims[mm_key]
+        assert mm_outputs[mm_key].dtype == cache_tensor.dtype
 
 
 def test_init_missing_mm_cache_keys_is_idempotent():
