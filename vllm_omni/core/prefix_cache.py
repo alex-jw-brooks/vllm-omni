@@ -161,14 +161,13 @@ class OmniTensorPrefixCache:
             )
         # First get the prefix cached tensors
         for mm_key in self.mm_cache_keys:
-            if self.mm_cache_keys is not None and mm_key in self.mm_cache_keys:
-                combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
-                    query_start_loc=query_start_loc,
-                    input_batch=input_batch,
-                    cache=self.mm_outputs_cache[mm_key],
-                    hidden_states=multimodal_outputs[mm_key],
-                    num_scheduled_tokens=num_scheduled_tokens,
-                )
+            combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
+                query_start_loc=query_start_loc,
+                input_batch=input_batch,
+                cache=self.mm_outputs_cache[mm_key],
+                hidden_states=multimodal_outputs[mm_key],
+                num_scheduled_tokens=num_scheduled_tokens,
+            )
 
         # Then, get everything else (passthrough data); first, convert to CPU
         # tensors similarly to the non prefix cached path, and then populate
