@@ -17,9 +17,6 @@ def build_mm_cpu(multimodal_outputs: dict) -> dict[str, object]:
 
     Args:
         multimodal_outputs: Multimodal dict mapping strings to objects.
-        seq_len: Optional sequence length (i.e., dim 0 of hidden states).
-            This should be set to None in the prefix caching case since we
-            only consider the passtrhough data.
     """
     # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
     # redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
