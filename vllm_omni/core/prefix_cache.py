@@ -102,9 +102,6 @@ class OmniTensorPrefixCache:
         slot_mapping: torch.Tensor,
     ):
         """Updates the hidden cache state for the provided hidden states and multimodal outputs."""
-        if hidden_states is not None:
-            hidden_states = OmniTensorPrefixCache._coerce_to_cpu_tensor(hidden_states)
-
         unpadded_slot_mapping = slot_mapping[:num_tokens_unpadded]
         if hidden_states is not None:
             # Ensure that hidden states are on the CPU
@@ -155,12 +152,6 @@ class OmniTensorPrefixCache:
     ):
         """Get the merged multimodal states if hidden state prefix caching is enabled."""
         combined_multimodal_outputs = {}
-        if self.mm_cache_keys is None and multimodal_outputs:
-            logger.warning(
-                " A model stage produced multimodal outputs, but has no defined mm_cache_keys; "
-                " this probably means that prefix caching is not fully supported for all stages "
-                "in this model"
-            )
         # First get the prefix cached tensors
         for mm_key in self.mm_cache_keys:
             combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
