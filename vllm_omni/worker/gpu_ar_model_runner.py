@@ -733,9 +733,11 @@ class GPUARModelRunner(OmniGPUModelRunner):
 
         self._process_additional_information_updates(
             hidden_states,
+            multimodal_outputs,
             num_scheduled_tokens_np,
             scheduler_output,
             combined_hidden_states,
+            combined_multimodal_outputs,
         )
 
         pooler_output: list[dict[str, object]] = []
@@ -760,9 +762,16 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 if combined_multimodal_outputs:
                     # Prefix cache enabled; all items have already been processed
                     # and split apart for each request as needed, and all tensors
-                    # have already been detached to the CPU.
+                    # have already been detached to the CPU. The only exception is
+                    # lists, which we keep as passthrough data for consistent behavior
+                    # in postprocess.
                     for mm_key in combined_multimodal_outputs.keys():
-                        mm_payload[mm_key] = combined_multimodal_outputs[mm_key][rid]
+                        value = combined_multimodal_outputs[mm_key][rid]
+                        if isinstance(value, list):
+                            mm_payload[mm_key] = value[idx] if idx < len(value) else value[0]
+                        else:
+                            mm_payload[mm_key] = value
+
                 else:
                     # Prefix cache disabled; we still need to process the data
                     for mm_key, mm_val in mm_cpu.items():
@@ -771,6 +780,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                             idx=idx,
                             start=start,
                             end=end,
+                            pass_lists_through=False,
                             seq_len=seq_len,
                         )
                 payload.update(mm_payload)
