@@ -50,7 +50,9 @@ def build_mm_cpu(multimodal_outputs: dict) -> dict[str, object]:
     return mm_cpu
 
 
-def to_payload_element(element: object, idx: int, start: int, end: int, seq_len: int | None = None):
+def to_payload_element(
+    element: object, idx: int, start: int, end: int, pass_lists_through: bool = False, seq_len: int | None = None
+):
     """Build an mm payload element corresponding to one request index
     from an element containing 0 or more CPU tensors.
 
@@ -59,6 +61,10 @@ def to_payload_element(element: object, idx: int, start: int, end: int, seq_len:
         idx: The index of the request.
         start: The start index corresponding to the request idx.
         end: The end index corresponding to the request idx.
+        pass_lists_through: bool Whether or not lists should be treated as
+            passthrough data; this should be False in normal cases, but True
+            if we need to avoid splitting nonempty lists prior to calling
+            postprocess, which is the case for prefix cache.
         seq_len: Optional sequence length (i.e., dim 0 of hidden states).
             This should be set to None in the prefix caching case, because
             the condition that would be executed here is the same as the
@@ -73,8 +79,10 @@ def to_payload_element(element: object, idx: int, start: int, end: int, seq_len:
     elif isinstance(element, dict):
         return {sk: sv[start:end].contiguous() for sk, sv in element.items()}
     elif isinstance(element, list):
+        # For lists, clone tensors to avoid cross-request aliasing
+        if pass_lists_through:
+            return [elem.clone() if isinstance(elem, torch.Tensor) else elem for elem in element]
         element = element[idx] if idx < len(element) else element[0]
-        # Clone tensors to avoid cross-request aliasing
         if isinstance(element, torch.Tensor):
             element = element.clone()
         return element
