@@ -117,11 +117,11 @@ class OmniTensorPrefixCache:
         # Do the same for the stage's cached multimodal outputs
         if multimodal_outputs is not None:
             for mm_out_key, mm_cache in self.mm_outputs_cache.items():
-                assert mm_out_key in multimodal_outputs
-                mm_state = multimodal_outputs[mm_out_key]
-                mm_state = OmniTensorPrefixCache._coerce_to_cpu_tensor(mm_state)
-                flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
-                flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
+                if mm_out_key in multimodal_outputs:
+                    mm_state = multimodal_outputs[mm_out_key]
+                    mm_state = OmniTensorPrefixCache._coerce_to_cpu_tensor(mm_state)
+                    flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
+                    flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
             logger.debug("Writing to mm output cache for %s tokens", num_tokens_unpadded)
 
     def _coerce_to_payload_dict(
