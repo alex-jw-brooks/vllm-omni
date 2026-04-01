@@ -1032,9 +1032,11 @@ class OmniGPUModelRunner(GPUModelRunner):
     def _process_additional_information_updates(
         self,
         hidden_states: torch.Tensor,
+        multimodal_outputs: object,
         num_scheduled_tokens_np: np.ndarray,
         scheduler_output: "SchedulerOutput",
         combined_hidden_states: dict[str, torch.Tensor] | None = None,
+        combined_multimodal_outputs: dict[str, object] | None = None,
     ) -> None:
         """Process model-provided per-request updates and merge into model_intermediate_buffer."""
         try:
@@ -1043,7 +1045,8 @@ class OmniGPUModelRunner(GPUModelRunner):
             if hasattr(self.model, "has_postprocess") and self.model.has_postprocess:
                 for req_index, req_id in enumerate(self.input_batch.req_ids):
                     req_infos = self.model_intermediate_buffer.get(req_id, {})
-                    if combined_hidden_states and req_id in combined_hidden_states:
+                    if combined_hidden_states:
+                        # Combined hidden states contains all hidden states for every request
                         hidden_states_slice = combined_hidden_states[req_id]
                     else:
                         start_offset = int(self.query_start_loc.cpu[req_index])
@@ -1051,7 +1054,19 @@ class OmniGPUModelRunner(GPUModelRunner):
                         s, e = start_offset, start_offset + sched_tokens
                         # only consider to store data into update dict.
                         hidden_states_slice = hidden_states[s:e]
-                    update_dict = self.model.postprocess(hidden_states_slice, **req_infos)
+
+                    if combined_multimodal_outputs:
+                        # NOTE this is a bit ugly, but the mm data is structured as a list of
+                        # keys mapping to request IDs, and if enabled, we will always have all
+                        # request IDs in every subdict, including for cache misses.
+                        mm_out = {k: v[req_id] for k, v in combined_multimodal_outputs.items()}
+                    else:
+                        mm_out = multimodal_outputs
+                    update_dict = self.model.postprocess(
+                        hidden_states_slice,
+                        multimodal_outputs=mm_out,
+                        **req_infos,
+                    )
                     self._update_intermediate_buffer(req_id, update_dict)
         except Exception as e:
             logger.error(f"Error merging for requests:{self.input_batch.req_ids} additional information update: {e}")

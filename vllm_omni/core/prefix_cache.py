@@ -141,7 +141,9 @@ class OmniTensorPrefixCache:
             req_idx = input_batch.req_id_to_index[req_id]
             start = query_start_loc[req_idx]
             end = start + num_scheduled_tokens[req_id]
-            elem_dict[req_id] = to_payload_element(element, req_idx, start=start, end=end, seq_len=None)
+            elem_dict[req_id] = to_payload_element(
+                element, req_idx, start=start, end=end, pass_lists_through=True, seq_len=None
+            )
         return elem_dict
 
     def get_merged_multimodal_states(

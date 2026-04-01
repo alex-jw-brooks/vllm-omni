@@ -288,6 +288,9 @@ def test_get_merged_multimodal_outputs(feat_dims):
         )
     # We also want to make sure passthrough data (outside of our keys) isn't dropped
     new_mm_outputs["passthrough_data"] = "Something else"
+    # Lists are a special case because we can't split them yet if we want to match
+    # the nonprefix cache behavior, because this runs before post process.
+    new_mm_outputs["passthrough_list"] = ["should", "not", "split"]
 
     input_batch = MockInputBatch(num_computed_tokens_cpu=torch.Tensor([orig_num_tokens_unpadded, 0]))
 
@@ -304,12 +307,17 @@ def test_get_merged_multimodal_outputs(feat_dims):
 
     # Ensure the passthrough data wasn't dropped
     assert "passthrough_data" in merged_mm_outputs
+    assert "passthrough_list" in merged_mm_outputs
 
     for mm_key, mm_output in merged_mm_outputs.items():
         # Ensure passthrough data is just forwarded normally and not duplicated
         assert isinstance(mm_output, dict)
         assert "req1" in mm_output and "req2" in mm_output
         if mm_key == "passthrough_data":
+            assert mm_key not in cache.mm_cache_keys
+            assert new_mm_outputs[mm_key] == mm_output["req1"]
+            assert new_mm_outputs[mm_key] == mm_output["req2"]
+        elif mm_key == "passthrough_list":
             assert mm_key not in cache.mm_cache_keys
             assert new_mm_outputs[mm_key] == mm_output["req1"]
             assert new_mm_outputs[mm_key] == mm_output["req2"]
