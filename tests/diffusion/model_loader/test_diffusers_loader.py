@@ -6,29 +6,23 @@ Tests for the DiffusersPipelineLoader.
 """
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 import torch.nn as nn
+from vllm.config.load import LoadConfig
 
 from vllm_omni.diffusion.config import get_current_diffusion_config, get_current_diffusion_config_or_none
+from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
+from vllm_omni.diffusion.models.helios import HeliosPipeline
 from vllm_omni.diffusion.registry import initialize_model
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
-from unittest.mock import MagicMock, patch
-
-import pytest
-from vllm.config.load import LoadConfig
-
-from vllm_omni.diffusion.data import OmniDiffusionConfig
-from vllm_omni.diffusion.models.helios import HeliosPipeline
-
 model_path = "hf-internal-testing/tiny-helios-modular-pipe"
-
-pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 
 @pytest.fixture(scope="function", autouse=True)
