@@ -1019,7 +1019,7 @@ class Flux2Pipeline(nn.Module, SupportImageInput):
         self._num_timesteps = len(timesteps)
 
         # handle guidance
-        if self.guidance_scale is not None:
+        if self.transformer.guidance_embeds is not None:
             guidance_tensor = torch.full([1], self.guidance_scale, device=device, dtype=torch.float32)
             guidance_tensor = guidance_tensor.expand(latents.shape[0])
 
