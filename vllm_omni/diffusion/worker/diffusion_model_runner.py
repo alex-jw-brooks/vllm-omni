@@ -273,6 +273,10 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                     req.sampling_params.num_inference_steps or 0
                     if self.od_config.cache_backend == "tea_cache"
                     else req.sampling_params.num_inference_steps
+                num_inference_steps = (
+                    req.sampling_params.num_inference_steps if req.sampling_params.num_inference_steps is not None else 0
+                    if self.od_config.cache_backend == "tea_cache"
+                    else req.sampling_params.num_inference_steps
                 )
                 if num_inference_steps is not None:
                     self.cache_backend.refresh(self.pipeline, num_inference_steps)
