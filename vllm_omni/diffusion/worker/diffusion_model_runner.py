@@ -271,7 +271,8 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 # For now, if num_inference_steps is not set, we pass 0 to allow
                 # TeaCache to refresh to align with the param signature. This is
                 # okay to force refresh TeaCache because the refresh does not use
-                # num_inference_steps at all.
+                # num_inference_steps at all (i.e., just resets state and clears
+                # stale residuals).
                 num_inference_steps = (
                     req.sampling_params.num_inference_steps
                     if req.sampling_params.num_inference_steps is not None
