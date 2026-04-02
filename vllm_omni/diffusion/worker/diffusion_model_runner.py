@@ -273,13 +273,10 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 # okay to force refresh TeaCache because the refresh does not use
                 # num_inference_steps at all (i.e., just resets state and clears
                 # stale residuals).
-                num_inference_steps = (
-                    req.sampling_params.num_inference_steps
-                    if req.sampling_params.num_inference_steps is not None
-                    else 0
-                    if self.od_config.cache_backend == "tea_cache"
-                    else req.sampling_params.num_inference_steps
-                )
+                num_inference_steps = req.sampling_params.num_inference_steps
+                if self.od_config.cache_backend == "tea_cache" and num_inference_steps is None:
+                    num_inference_steps = 0
+
                 if num_inference_steps is not None:
                     self.cache_backend.refresh(self.pipeline, num_inference_steps)
                 else:
