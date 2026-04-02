@@ -266,15 +266,16 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             ):
                 # FIXME (Alex): When num_inference_steps is None, we defer to
                 # pipelines for default, but don't refresh the cache; the right
-                # way to do this is to merge the sampling params first, but
-                # for now we allow teacache to refresh either way since it does
-                # not depend on the num_inference_steps.
+                # way to do this is to merge the sampling params first.
+                #
+                # For now, if num_inference_steps is not set, we pass 0 to allow
+                # TeaCache to refresh to align with the param signature. This is
+                # okay to force refresh TeaCache because the refresh does not use
+                # num_inference_steps at all.
                 num_inference_steps = (
-                    req.sampling_params.num_inference_steps or 0
-                    if self.od_config.cache_backend == "tea_cache"
-                    else req.sampling_params.num_inference_steps
-                num_inference_steps = (
-                    req.sampling_params.num_inference_steps if req.sampling_params.num_inference_steps is not None else 0
+                    req.sampling_params.num_inference_steps
+                    if req.sampling_params.num_inference_steps is not None
+                    else 0
                     if self.od_config.cache_backend == "tea_cache"
                     else req.sampling_params.num_inference_steps
                 )
