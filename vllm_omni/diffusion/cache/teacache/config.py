@@ -15,9 +15,9 @@ _MODEL_COEFFICIENTS = {
         -3.82021401e00,
         2.64230861e-01,
     ],
-    # Flux2 Klein transformer coefficients
+    # Flux2 transformer coefficients
     # Same as FLUX.1 (similar dual-stream architecture)
-    "Flux2Klein": [
+    "Flux2Transformer2DModel": [
         4.98651651e02,
         -2.83781631e02,
         5.58554382e01,

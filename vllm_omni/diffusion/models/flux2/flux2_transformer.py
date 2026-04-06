@@ -781,6 +781,7 @@ class Flux2Transformer2DModel(nn.Module):
         quant_config: "QuantizationConfig | None" = None,
     ):
         super().__init__()
+        self.guidance_embeds = guidance_embeds
         self.out_channels = out_channels or in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
         self.config = SimpleNamespace(
@@ -878,8 +879,7 @@ class Flux2Transformer2DModel(nn.Module):
         txt_ids: torch.Tensor,
         guidance: torch.Tensor | None = None,
         joint_attention_kwargs: dict[str, Any] | None = None,
-        return_dict: bool = True,
-    ) -> torch.Tensor | Transformer2DModelOutput:
+    ) -> Transformer2DModelOutput:
         joint_attention_kwargs = joint_attention_kwargs or {}
 
         num_txt_tokens = encoder_hidden_states.shape[1]
@@ -962,8 +962,6 @@ class Flux2Transformer2DModel(nn.Module):
         hidden_states = self.norm_out(hidden_states, temb)
         output = self.proj_out(hidden_states)
 
-        if not return_dict:
-            return (output,)
         return Transformer2DModelOutput(sample=output)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:

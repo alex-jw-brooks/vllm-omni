@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Unit tests for the Flux2-Klein GGUF adapter."""
+"""Unit tests for the Flux2 GGUF adapter."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import pytest
 import torch
 
 from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
-from vllm_omni.diffusion.model_loader.gguf_adapters.flux2_klein import (
-    Flux2KleinGGUFAdapter,
+from vllm_omni.diffusion.model_loader.gguf_adapters.flux2 import (
+    Flux2GGUFAdapter,
 )
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
@@ -31,7 +31,7 @@ def _make_source(prefix: str = "", subfolder: str = "transformer"):
     return SimpleNamespace(prefix=prefix, subfolder=subfolder)
 
 
-def test_flux2_klein_adapter_selected_for_flux_family():
+def test_flux2_adapter_selected_for_flux_family():
     adapter = get_gguf_adapter(
         "dummy.gguf",
         object(),
@@ -39,22 +39,22 @@ def test_flux2_klein_adapter_selected_for_flux_family():
         _make_od_config(),
     )
 
-    assert isinstance(adapter, Flux2KleinGGUFAdapter)
+    assert isinstance(adapter, Flux2GGUFAdapter)
 
 
-def test_flux2_klein_adapter_matches_flux_model_type():
-    assert Flux2KleinGGUFAdapter.is_compatible(
+def test_flux2_adapter_matches_flux_model_type():
+    assert Flux2GGUFAdapter.is_compatible(
         _make_od_config(model_class_name="OtherPipeline", model_type="flux-dev"),
         object(),
         _make_source(),
     )
 
 
-def test_flux2_klein_adapter_renames_core_projection_paths(monkeypatch: pytest.MonkeyPatch):
-    import vllm_omni.diffusion.model_loader.gguf_adapters.flux2_klein as flux_module
+def test_flux2_adapter_renames_core_projection_paths(monkeypatch: pytest.MonkeyPatch):
+    import vllm_omni.diffusion.model_loader.gguf_adapters.flux2 as flux2_module
 
     monkeypatch.setattr(
-        flux_module,
+        flux2_module,
         "gguf_quant_weights_iterator",
         lambda _path: iter(
             [
@@ -66,7 +66,7 @@ def test_flux2_klein_adapter_renames_core_projection_paths(monkeypatch: pytest.M
         ),
     )
 
-    adapter = Flux2KleinGGUFAdapter(
+    adapter = Flux2GGUFAdapter(
         "dummy.gguf",
         object(),
         _make_source(),
@@ -82,11 +82,11 @@ def test_flux2_klein_adapter_renames_core_projection_paths(monkeypatch: pytest.M
     assert "proj_out.qweight" in names
 
 
-def test_flux2_klein_adapter_swaps_final_adaln_shift_and_scale(monkeypatch: pytest.MonkeyPatch):
-    import vllm_omni.diffusion.model_loader.gguf_adapters.flux2_klein as flux_module
+def test_flux2_adapter_swaps_final_adaln_shift_and_scale(monkeypatch: pytest.MonkeyPatch):
+    import vllm_omni.diffusion.model_loader.gguf_adapters.flux2 as flux2_module
 
     monkeypatch.setattr(
-        flux_module,
+        flux2_module,
         "gguf_quant_weights_iterator",
         lambda _path: iter(
             [
@@ -98,7 +98,7 @@ def test_flux2_klein_adapter_swaps_final_adaln_shift_and_scale(monkeypatch: pyte
         ),
     )
 
-    adapter = Flux2KleinGGUFAdapter(
+    adapter = Flux2GGUFAdapter(
         "dummy.gguf",
         object(),
         _make_source(),

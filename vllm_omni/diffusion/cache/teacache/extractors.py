@@ -579,7 +579,7 @@ def extract_zimage_context(
     )
 
 
-def extract_flux2_klein_context(
+def extract_flux2_context(
     module: nn.Module,
     hidden_states: torch.Tensor,
     encoder_hidden_states: torch.Tensor | None = None,
@@ -591,7 +591,8 @@ def extract_flux2_klein_context(
     **kwargs: Any,
 ) -> CacheContext:
     """
-    Extract cache context for Flux2Klein model.
+    Extract cache context for Flux2 model; this extractor is used for both
+    the klein and dev variants.
 
     Caches the full transformer output (including single_transformer_blocks).
     When cache is reused, single_transformer_blocks is skipped to achieve maximum speedup.
@@ -976,7 +977,7 @@ EXTRACTOR_REGISTRY: dict[str, Callable] = {
     "QwenImageTransformer2DModel": extract_qwen_context,
     "Bagel": extract_bagel_context,
     "ZImageTransformer2DModel": extract_zimage_context,
-    "Flux2Klein": extract_flux2_klein_context,
+    "Flux2Transformer2DModel": extract_flux2_context,
     "StableAudioDiTModel": extract_stable_audio_context,
     "Flux2Transformer2DModel": extract_flux2_context,
     # Future models:

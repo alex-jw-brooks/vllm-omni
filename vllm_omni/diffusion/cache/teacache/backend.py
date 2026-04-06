@@ -59,10 +59,10 @@ def enable_bagel_teacache(pipeline: Any, config: DiffusionCacheConfig) -> None:
 
 def enable_flux2_klein_teacache(pipeline: Any, config: DiffusionCacheConfig) -> None:
     """
-    Enable TeaCache for Flux2 Klein model.
+    Enable TeaCache for the Flux2 model (klein & dev).
     """
     teacache_config = TeaCacheConfig(
-        transformer_type="Flux2Klein",
+        transformer_type="Flux2Transformer2DModel",
         rel_l1_thresh=config.rel_l1_thresh,
         coefficients=config.coefficients,
     )

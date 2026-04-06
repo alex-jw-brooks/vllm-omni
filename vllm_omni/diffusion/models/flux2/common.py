@@ -42,7 +42,6 @@ from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineL
 from vllm_omni.diffusion.models.flux2.flux2_transformer import Flux2Transformer2DModel
 from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
-from vllm_omni.diffusion.quantization import get_vllm_quant_config_for_layers
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
 from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
@@ -761,5 +760,5 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
         )
         self._current_timestep = None
 
-        # 8. Decode
+        # 9. Decode
         return self._decode_latents(latents, latent_ids, output_type)

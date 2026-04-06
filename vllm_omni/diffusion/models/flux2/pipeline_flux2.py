@@ -145,6 +145,13 @@ class Flux2Pipeline(Flux2PipelineBase):
     ):
         """Runs the denoising loop for Flux2 (does not use CFG)."""
         self.scheduler.set_begin_index(0)
+
+        guidance_tensor = None
+        # handle guidance
+        if self.transformer.guidance_embeds is not None:
+            guidance_tensor = torch.full([1], self.guidance_scale, device=self._execution_device, dtype=torch.float32)
+            guidance_tensor = guidance_tensor.expand(latents.shape[0])
+
         for i, t in enumerate(timesteps):
             if self.interrupt:
                 continue
@@ -162,12 +169,11 @@ class Flux2Pipeline(Flux2PipelineBase):
             noise_pred = self.transformer(
                 hidden_states=latent_model_input,  # (B, image_seq_len, C)
                 timestep=timestep / 1000,
-                guidance=None,
+                guidance=guidance_tensor,
                 encoder_hidden_states=prompt_embeds,
                 txt_ids=text_ids,  # B, text_seq_len, 4
                 img_ids=latent_image_ids,  # B, image_seq_len, 4
                 joint_attention_kwargs={},
-                return_dict=False,
             )[0]
 
             noise_pred = noise_pred[:, : latents.size(1)]

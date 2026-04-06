@@ -12,7 +12,7 @@ used by TeaCache. Each model's extractor can be tested by:
 4. Implementing any model-specific test methods
 
 Currently implemented:
-- TestFlux2KleinExtractor: Flux2Klein model extractor
+- TestFlux2Extractor: Flux2 model extractor
 """
 
 from abc import ABC, abstractmethod
@@ -22,10 +22,8 @@ import pytest
 import torch
 
 from tests.utils import hardware_test
-from vllm_omni.diffusion.cache.teacache.extractors import extract_flux2_context, extract_flux2_klein_context
-from vllm_omni.diffusion.models.flux2_klein.flux2_klein_transformer import (
-    Flux2Transformer2DModel,
-)
+from vllm_omni.diffusion.cache.teacache.extractors import extract_flux2_context
+from vllm_omni.diffusion.models.flux2.flux2_transformer import Flux2Transformer2DModel
 
 pytestmark = [pytest.mark.core_model]
 
@@ -66,14 +64,14 @@ class BaseExtractorTest(ABC):
         pass
 
 
-class TestFlux2KleinExtractor(BaseExtractorTest):
-    """Test extract_flux2_klein_context function."""
+class TestFlux2Extractor(BaseExtractorTest):
+    """Test extract_flux2_context function."""
 
     def get_extractor(self):
-        return extract_flux2_klein_context
+        return extract_flux2_context
 
     @pytest.fixture
-    def flux2_klein_module(self):
+    def flux2_module(self):
         """Create a minimal Flux2Transformer2DModel for testing."""
         model = Flux2Transformer2DModel(
             num_layers=2,
@@ -84,12 +82,12 @@ class TestFlux2KleinExtractor(BaseExtractorTest):
         )
         return model
 
-    def get_module(self, flux2_klein_module):
-        return flux2_klein_module
+    def get_module(self, flux2_module):
+        return flux2_module
 
     @pytest.fixture
     def sample_inputs(self):
-        """Create sample input tensors for Flux2Klein.
+        """Create sample input tensors for Flux2.
 
         Note: hidden_states uses in_channels=128 (default for Flux2Klein),
         not inner_dim=6144. The x_embedder projects from 128 -> 6144.
@@ -115,46 +113,46 @@ class TestFlux2KleinExtractor(BaseExtractorTest):
         return sample_inputs
 
     @hardware_test(res={"cuda": "L4"}, num_cards=1)
-    def test_modulated_input_shape(self, flux2_klein_module, sample_inputs):
+    def test_modulated_input_shape(self, flux2_module, sample_inputs):
         """Test that modulated_input has correct shape matching the model's inner_dim.
 
         Note: After x_embedder projection, hidden_states are projected from
         in_channels (128) to inner_dim (6144), so modulated_input should match
         the projected shape, not the input shape.
         """
-        context = extract_flux2_klein_context(flux2_klein_module, **sample_inputs)
+        context = extract_flux2_context(flux2_module, **sample_inputs)
 
         batch_size, img_seq_len, _ = sample_inputs["hidden_states"].shape
-        inner_dim = flux2_klein_module.inner_dim
+        inner_dim = flux2_module.inner_dim
         assert context.modulated_input.shape == (batch_size, img_seq_len, inner_dim)
 
     @hardware_test(res={"cuda": "L4"}, num_cards=1)
-    def test_run_transformer_blocks_callable(self, flux2_klein_module, sample_inputs):
+    def test_run_transformer_blocks_callable(self, flux2_module, sample_inputs):
         """Test that run_transformer_blocks is callable."""
-        context = extract_flux2_klein_context(flux2_klein_module, **sample_inputs)
+        context = extract_flux2_context(flux2_module, **sample_inputs)
         assert callable(context.run_transformer_blocks)
 
     @hardware_test(res={"cuda": "L4"}, num_cards=1)
-    def test_postprocess_callable(self, flux2_klein_module, sample_inputs):
+    def test_postprocess_callable(self, flux2_module, sample_inputs):
         """Test that postprocess is callable."""
-        context = extract_flux2_klein_context(flux2_klein_module, **sample_inputs)
+        context = extract_flux2_context(flux2_module, **sample_inputs)
         assert callable(context.postprocess)
 
     @hardware_test(res={"cuda": "L4"}, num_cards=1)
-    def test_extra_states_contains_full_transformer(self, flux2_klein_module, sample_inputs):
+    def test_extra_states_contains_full_transformer(self, flux2_module, sample_inputs):
         """Test that extra_states contains run_flux2_full_transformer_with_single."""
-        context = extract_flux2_klein_context(flux2_klein_module, **sample_inputs)
+        context = extract_flux2_context(flux2_module, **sample_inputs)
 
         assert context.extra_states is not None
         assert "run_flux2_full_transformer_with_single" in context.extra_states
         assert callable(context.extra_states["run_flux2_full_transformer_with_single"])
 
-    def test_without_guidance(self, flux2_klein_module, sample_inputs):
+    def test_without_guidance(self, flux2_module, sample_inputs):
         """Test context extraction works without guidance (no CFG)."""
         inputs = sample_inputs.copy()
         inputs["guidance"] = None
 
-        context = extract_flux2_klein_context(flux2_klein_module, **inputs)
+        context = extract_flux2_context(flux2_module, **inputs)
 
         assert context is not None
         assert context.temb is not None
@@ -166,7 +164,7 @@ class TestFlux2KleinExtractor(BaseExtractorTest):
         invalid_module.transformer_blocks = []
 
         with pytest.raises(ValueError, match="Module must have transformer_blocks"):
-            extract_flux2_klein_context(
+            extract_flux2_context(
                 invalid_module,
                 hidden_states=torch.randn(1, 1024, 6144),
                 encoder_hidden_states=torch.randn(1, 512, 15360),
