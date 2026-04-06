@@ -680,7 +680,8 @@ class StableDiffusion3Pipeline(nn.Module, CFGParallelMixin, DiffusionPipelinePro
         if self.output_type == "latent":
             image = latents
         else:
-            latents = latents.to(self.od_config.dtype)
+            # Ensure the latents are the same dtype as the VAE for decode
+            latents = latents.to(self.vae.dtype)
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
 
             image = self.vae.decode(latents, return_dict=False)[0]
