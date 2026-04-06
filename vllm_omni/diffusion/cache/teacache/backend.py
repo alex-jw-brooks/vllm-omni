@@ -57,7 +57,7 @@ def enable_bagel_teacache(pipeline: Any, config: DiffusionCacheConfig) -> None:
     )
 
 
-def enable_flux2_klein_teacache(pipeline: Any, config: DiffusionCacheConfig) -> None:
+def enable_flux2_teacache(pipeline: Any, config: DiffusionCacheConfig) -> None:
     """
     Enable TeaCache for the Flux2 model (klein & dev).
     """
@@ -78,7 +78,8 @@ def enable_flux2_klein_teacache(pipeline: Any, config: DiffusionCacheConfig) -> 
 
 CUSTOM_TEACACHE_ENABLERS = {
     "BagelPipeline": enable_bagel_teacache,
-    "Flux2KleinPipeline": enable_flux2_klein_teacache,
+    "Flux2KleinPipeline": enable_flux2_teacache,
+    "Flux2Pipeline": enable_flux2_teacache,
     "HunyuanImage3Pipeline": enable_hunyuan_image3_teacache,
 }
 

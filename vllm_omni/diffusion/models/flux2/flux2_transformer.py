@@ -28,6 +28,7 @@ from diffusers.models.embeddings import (
 )
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.normalization import AdaLayerNormContinuous
+from diffusers.utils import is_torch_npu_available
 from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (
@@ -677,8 +678,16 @@ class Flux2RopePrepare(nn.Module):
         components (0 & 1) need to be replicated across SP ranks,
         while image components (2 & 3) must be sharded.
         """
-        img_freqs_cos, img_freqs_sin = self.pos_embed(img_ids)
-        txt_freqs_cos, txt_freqs_sin = self.pos_embed(txt_ids)
+        if is_torch_npu_available():
+            img_freqs_cos, img_freqs_sin = self.pos_embed(img_ids.cpu())
+            img_freqs_cos = img_freqs_cos.npu()
+            img_freqs_sin = img_freqs_sin.npu()
+            txt_freqs_cos, txt_freqs_sin = self.pos_embed(txt_ids.cpu())
+            txt_freqs_cos = txt_freqs_cos.npu()
+            txt_freqs_sin = txt_freqs_sin.npu()
+        else:
+            img_freqs_cos, img_freqs_sin = self.pos_embed(img_ids)
+            txt_freqs_cos, txt_freqs_sin = self.pos_embed(txt_ids)
         return txt_freqs_cos, txt_freqs_sin, img_freqs_cos, img_freqs_sin
 
 

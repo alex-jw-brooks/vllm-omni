@@ -20,6 +20,7 @@
 import json
 import math
 import os
+from abc import ABC, abstractmethod
 from collections.abc import Iterable
 
 import numpy as np
@@ -146,7 +147,7 @@ class Flux2ImageProcessor(VaeImageProcessor):
 
 
 # Flux2 / Flux2 Klein share the same feature support at the moment, largely because they share the DiT architecture
-class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, DiffusionPipelineProfilerMixin):
+class Flux2PipelineBase(ABC, nn.Module, CFGParallelMixin, SupportImageInput, DiffusionPipelineProfilerMixin):
     support_image_input = True
 
     def __init__(
@@ -204,6 +205,12 @@ class Flux2PipelineBase(nn.Module, CFGParallelMixin, SupportImageInput, Diffusio
     @property
     def do_classifier_free_guidance(self) -> bool:
         return False
+
+    @property
+    @abstractmethod
+    def text_encoder(self) -> nn.Module:
+        """Text encoder - must be implemented by subclasses."""
+        raise NotImplementedError
 
     def check_inputs(
         self,
