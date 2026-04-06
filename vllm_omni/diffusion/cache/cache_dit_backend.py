@@ -622,40 +622,6 @@ def enable_cache_for_ltx2(pipeline: Any, cache_config: Any) -> refresh_cache_con
     )
 
 
-def enable_cache_for_dit(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for regular single-transformer DiT models.
-
-    Args:
-        pipeline: The diffusion pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-
-    Returns:
-        A refresh function that can be called to update cache context with new num_inference_steps.
-    """
-    # Build DBCacheConfig with optional SCM support
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    # Build calibrator config if TaylorSeer is enabled
-    calibrator_config = _resolve_calibrator_config(cache_config)
-
-    logger.info(
-        f"Enabling cache-dit on transformer: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
-    )
-
-    # Enable cache-dit on the transformer
-    transformer = get_transformer_from_pipeline(pipeline)
-    cache_dit.enable_cache(
-        transformer,
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
-    )
-    return build_cache_context_refresh(cache_config)
-
-
-
 def enable_cache_for_hunyuan_image3(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
     """Enable cache-dit for HunyuanImage3 pipeline.
 
