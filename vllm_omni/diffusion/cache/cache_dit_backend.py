@@ -162,174 +162,10 @@ def enable_cache_for_dit(
     return build_cache_context_refresh(cache_config)
 
 
-def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for Wan2.2 single or dual-transformer architecture.
-
-    Wan2.2 can use single or dual transformers (transformer and transformer_2) that need
-    to be enabled using BlockAdapter.
-
-    Args:
-        pipeline: The Wan2.2 pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-
-    Returns:
-        A refresh function that can be called to update cache context with new num_inference_steps.
-    """
-    # Build DBCacheConfig with optional SCM support
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    if getattr(pipeline, "transformer_2", None) is None:
-        logger.info("transformer_2 not found, enabling cache-dit for single transformer mode")
-        db_cache_config = _build_db_cache_config(cache_config)
-        cache_dit.enable_cache(
-            BlockAdapter(
-                transformer=pipeline.transformer,
-                blocks=[pipeline.transformer.blocks],
-                forward_pattern=[ForwardPattern.Pattern_2],
-                params_modifiers=[
-                    ParamsModifier(cache_config=db_cache_config),
-                ],
-                has_separate_cfg=True,
-            ),
-            cache_config=db_cache_config,
-        )
-
-        def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
-            """Refresh cache context for single transformer."""
-            if cache_config.scm_steps_mask_policy is None:
-                cache_dit.refresh_context(
-                    pipeline.transformer, num_inference_steps=num_inference_steps, verbose=verbose
-                )
-            else:
-                cache_dit.refresh_context(
-                    pipeline.transformer,
-                    cache_config=DBCacheConfig().reset(
-                        num_inference_steps=num_inference_steps,
-                        steps_computation_mask=cache_dit.steps_mask(
-                            mask_policy=cache_config.scm_steps_mask_policy, total_steps=num_inference_steps
-                        ),
-                        steps_computation_policy=cache_config.scm_steps_policy,
-                    ),
-                    verbose=verbose,
-                )
-
-        return refresh_cache_context
-
-    cache_dit.enable_cache(
-        BlockAdapter(
-            transformer=[
-                pipeline.transformer,
-                pipeline.transformer_2,
-            ],
-            blocks=[
-                pipeline.transformer.blocks,
-                pipeline.transformer_2.blocks,
-            ],
-            forward_pattern=[
-                ForwardPattern.Pattern_2,
-                ForwardPattern.Pattern_2,
-            ],
-            params_modifiers=[
-                # high-noise transformer only have 30% steps
-                ParamsModifier(
-                    cache_config=DBCacheConfig().reset(
-                        max_warmup_steps=cache_config.max_warmup_steps,
-                        max_cached_steps=cache_config.max_cached_steps,
-                    ),
-                ),
-                ParamsModifier(
-                    cache_config=DBCacheConfig().reset(
-                        max_warmup_steps=2,
-                        max_cached_steps=20,
-                    ),
-                ),
-            ],
-            has_separate_cfg=True,
-        ),
-        cache_config=db_cache_config,
-    )
-
-    # from https://github.com/vipshop/cache-dit/pull/542
-    def _split_inference_steps(num_inference_steps: int) -> tuple[int, int]:
-        """Split inference steps into high-noise and low-noise steps for Wan2.2.
-
-        This is an internal helper function specific to Wan2.2's dual-transformer
-        architecture that uses boundary_ratio to determine the split point.
-
-        Args:
-            num_inference_steps: Total number of inference steps.
-
-        Returns:
-            A tuple of (num_high_noise_steps, num_low_noise_steps).
-        """
-        if pipeline.boundary_ratio is not None:
-            boundary_timestep = pipeline.boundary_ratio * pipeline.scheduler.config.num_train_timesteps
-        else:
-            boundary_timestep = None
-
-        # Set timesteps to calculate the split
-        device = next(pipeline.transformer.parameters()).device
-        pipeline.scheduler.set_timesteps(num_inference_steps, device=device)
-
-        timesteps = pipeline.scheduler.timesteps
-        num_high_noise_steps = 0  # high-noise steps for transformer
-        for t in timesteps:
-            if boundary_timestep is None or t >= boundary_timestep:
-                num_high_noise_steps += 1
-        # low-noise steps for transformer_2
-        num_low_noise_steps = num_inference_steps - num_high_noise_steps
-        return num_high_noise_steps, num_low_noise_steps
-
-    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
-        """Refresh cache context for both transformers with new num_inference_steps.
-
-        Args:
-            pipeline: The Wan2.2 pipeline instance.
-            num_inference_steps: New number of inference steps.
-        """
-
-        num_high_noise_steps, num_low_noise_steps = _split_inference_steps(num_inference_steps)
-        # Refresh context for high-noise transformer
-        if cache_config.scm_steps_mask_policy is None:
-            # cache_dit.refresh_context(pipeline.transformer, num_inference_steps=num_high_noise_steps, verbose=verbose)
-            cache_dit.refresh_context(
-                pipeline.transformer,
-                num_inference_steps=num_high_noise_steps,
-                verbose=verbose,
-            )
-            cache_dit.refresh_context(
-                pipeline.transformer_2,
-                num_inference_steps=num_low_noise_steps,
-                verbose=verbose,
-            )
-        else:
-            cache_dit.refresh_context(
-                pipeline.transformer,
-                cache_config=DBCacheConfig().reset(
-                    num_inference_steps=num_high_noise_steps,
-                    steps_computation_mask=cache_dit.steps_mask(
-                        mask_policy=cache_config.scm_steps_mask_policy, total_steps=num_high_noise_steps
-                    ),
-                    steps_computation_policy=cache_config.scm_steps_policy,
-                ),
-                verbose=verbose,
-            )
-
-            cache_dit.refresh_context(
-                pipeline.transformer_2,
-                cache_config=DBCacheConfig().reset(
-                    num_inference_steps=num_low_noise_steps,
-                    steps_computation_mask=cache_dit.steps_mask(
-                        mask_policy=cache_config.scm_steps_mask_policy, total_steps=num_low_noise_steps
-                    ),
-                    steps_computation_policy=cache_config.scm_steps_policy,
-                ),
-                verbose=verbose,
-            )
-
-    return refresh_cache_context
-
-
+### Simple enablers for DiT cache
+# These mostly define BlockAdapters for single transformer architectures
+# and are the common case, where we only really need to define the blocks
+# and the forward pattern.
 def enable_cache_for_longcat_image(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
     """Enable cache-dit for LongCatImage pipeline.
 
@@ -557,6 +393,128 @@ def enable_cache_for_hunyuan_image3(pipeline: Any, cache_config: Any) -> refresh
         cache_config,
         block_adapter=block_adapter,
     )
+
+
+### Complex / custom enablers for DiT cache
+# NOTE: This case is rare (currently only Wan / Bagel); most DiT cache
+# enablement should be easy since the underlying library is intended to
+# be pretty generic.
+
+
+# from https://github.com/vipshop/cache-dit/pull/542
+def _split_wan22_inference_steps(pipeline, num_inference_steps: int) -> tuple[int, int]:
+    """Split inference steps into high-noise and low-noise steps for Wan2.2.
+
+    This is an internal helper function specific to Wan2.2's dual-transformer
+    architecture that uses boundary_ratio to determine the split point.
+
+    Args:
+        num_inference_steps: Total number of inference steps.
+
+    Returns:
+        A tuple of (num_high_noise_steps, num_low_noise_steps).
+    """
+    if pipeline.boundary_ratio is not None:
+        boundary_timestep = pipeline.boundary_ratio * pipeline.scheduler.config.num_train_timesteps
+    else:
+        boundary_timestep = None
+
+    # Set timesteps to calculate the split
+    device = next(pipeline.transformer.parameters()).device
+    pipeline.scheduler.set_timesteps(num_inference_steps, device=device)
+
+    timesteps = pipeline.scheduler.timesteps
+    num_high_noise_steps = 0  # high-noise steps for transformer
+    for t in timesteps:
+        if boundary_timestep is None or t >= boundary_timestep:
+            num_high_noise_steps += 1
+    # low-noise steps for transformer_2
+    num_low_noise_steps = num_inference_steps - num_high_noise_steps
+    return num_high_noise_steps, num_low_noise_steps
+
+
+def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
+    """Enable cache-dit for Wan2.2 single or dual-transformer architecture.
+
+    Wan2.2 can use single or dual transformers (transformer and transformer_2) that need
+    to be enabled using BlockAdapter.
+
+    Args:
+        pipeline: The Wan2.2 pipeline instance.
+        cache_config: DiffusionCacheConfig instance with cache configuration.
+
+    Returns:
+        A refresh function that can be called to update cache context with new num_inference_steps.
+    """
+    # Build DBCacheConfig with optional SCM support
+    db_cache_config = _build_db_cache_config(cache_config)
+
+    if getattr(pipeline, "transformer_2", None) is None:
+        logger.info("transformer_2 not found, enabling cache-dit for single transformer mode")
+        db_cache_config = _build_db_cache_config(cache_config)
+        cache_dit.enable_cache(
+            BlockAdapter(
+                transformer=pipeline.transformer,
+                blocks=[pipeline.transformer.blocks],
+                forward_pattern=[ForwardPattern.Pattern_2],
+                params_modifiers=[
+                    ParamsModifier(cache_config=db_cache_config),
+                ],
+                has_separate_cfg=True,
+            ),
+            cache_config=db_cache_config,
+        )
+        return build_cache_context_refresh(cache_config)
+
+    cache_dit.enable_cache(
+        BlockAdapter(
+            transformer=[
+                pipeline.transformer,
+                pipeline.transformer_2,
+            ],
+            blocks=[
+                pipeline.transformer.blocks,
+                pipeline.transformer_2.blocks,
+            ],
+            forward_pattern=[
+                ForwardPattern.Pattern_2,
+                ForwardPattern.Pattern_2,
+            ],
+            params_modifiers=[
+                # high-noise transformer only have 30% steps
+                ParamsModifier(
+                    cache_config=DBCacheConfig().reset(
+                        max_warmup_steps=cache_config.max_warmup_steps,
+                        max_cached_steps=cache_config.max_cached_steps,
+                    ),
+                ),
+                ParamsModifier(
+                    cache_config=DBCacheConfig().reset(
+                        max_warmup_steps=2,
+                        max_cached_steps=20,
+                    ),
+                ),
+            ],
+            has_separate_cfg=True,
+        ),
+        cache_config=db_cache_config,
+    )
+
+    refresh_trans_one = build_cache_context_refresh(cache_config)
+    refresh_trans_two = build_cache_context_refresh(cache_config, lambda pipeline: pipeline.transformer_2)
+
+    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
+        """Refresh cache context for both transformers with new num_inference_steps.
+
+        Args:
+            pipeline: The Wan2.2 pipeline instance.
+            num_inference_steps: New number of inference steps.
+        """
+        num_high_noise_steps, num_low_noise_steps = _split_wan22_inference_steps(pipeline, num_inference_steps)
+        refresh_trans_one(pipeline, num_high_noise_steps, verbose)
+        refresh_trans_two(pipeline, num_low_noise_steps, verbose)
+
+    return refresh_cache_context
 
 
 class BagelCachedContextManager(CachedContextManager):
