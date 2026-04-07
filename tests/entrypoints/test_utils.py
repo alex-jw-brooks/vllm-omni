@@ -314,7 +314,7 @@ class TestLoadAndResolveStageConfigs:
         """Ensure that dtype survives default stage creation."""
         kwargs = {"dtype": torch.float32}
         config_path, stage_configs = load_and_resolve_stage_configs(
-            model="stabilityai/stable-diffusion-3-medium-diffusers",
+            model="black-forest-labs/FLUX.2-klein-4B",
             stage_configs_path=None,
             kwargs=kwargs,
             default_stage_cfg_factory=lambda: AsyncOmniEngine._create_default_diffusion_stage_cfg(kwargs),
