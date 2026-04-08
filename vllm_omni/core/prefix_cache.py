@@ -103,6 +103,7 @@ class OmniTensorPrefixCache:
     ):
         """Updates the hidden cache state for the provided hidden states and multimodal outputs."""
         unpadded_slot_mapping = slot_mapping[:num_tokens_unpadded]
+
         if hidden_states is not None:
             # Ensure that hidden states are on the CPU
             hidden_states = OmniTensorPrefixCache._coerce_to_cpu_tensor(hidden_states)
@@ -113,6 +114,12 @@ class OmniTensorPrefixCache:
 
         # Do the same for the stage's cached multimodal outputs
         if multimodal_outputs is not None:
+            # If we haven't initialized the keys already, do it now
+            self.maybe_init_missing_mm_cache_keys(
+                multimodal_outputs,
+                seq_len=num_tokens_unpadded,
+            )
+
             for mm_out_key, mm_cache in self.mm_outputs_cache.items():
                 if mm_out_key in multimodal_outputs:
                     mm_state = multimodal_outputs[mm_out_key]
@@ -152,15 +159,16 @@ class OmniTensorPrefixCache:
     ):
         """Get the merged multimodal states if hidden state prefix caching is enabled."""
         combined_multimodal_outputs = {}
-        # First get the prefix cached tensors
+        # First get the prefix cached tensors that are present in the mm data
         for mm_key in self.mm_cache_keys:
-            combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
-                query_start_loc=query_start_loc,
-                input_batch=input_batch,
-                cache=self.mm_outputs_cache[mm_key],
-                hidden_states=multimodal_outputs[mm_key],
-                num_scheduled_tokens=num_scheduled_tokens,
-            )
+            if mm_key in multimodal_outputs:
+                combined_multimodal_outputs[mm_key] = self._get_merged_tensors(
+                    query_start_loc=query_start_loc,
+                    input_batch=input_batch,
+                    cache=self.mm_outputs_cache[mm_key],
+                    hidden_states=multimodal_outputs[mm_key],
+                    num_scheduled_tokens=num_scheduled_tokens,
+                )
 
         # Then, get everything else (passthrough data); first, convert to CPU
         # tensors similarly to the non prefix cached path, and then populate
