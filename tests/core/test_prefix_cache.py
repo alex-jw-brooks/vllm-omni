@@ -185,12 +185,14 @@ def fake_get_cached_block_ids(self, req_idx, *args, **kwargs):
     return torch.tensor([], dtype=torch.long)
 
 
+@pytest.mark.parametrize("is_partial_block", [True, False])
 @pytest.mark.parametrize("num_tokens_padded", [None, 16])
-def test_get_merged_hidden_states(num_tokens_padded):
+def test_get_merged_hidden_states(is_partial_block, num_tokens_padded):
     """Ensure that hidden states are merged correctly."""
     cache = get_omni_pcache()
 
-    orig_num_tokens_unpadded = 8
+    # If it's a partial block, add an extral prompt token (since block size is 4).
+    orig_num_tokens_unpadded = 8 if not is_partial_block else 9
     slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
     orig_hidden_states = torch.rand((orig_num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE)
@@ -247,6 +249,7 @@ def test_get_merged_hidden_states(num_tokens_padded):
     assert torch.all(req2_merged_states == req2_new_states)
 
 
+@pytest.mark.parametrize("is_partial_block", [True, False])
 @pytest.mark.parametrize("num_tokens_padded", [None, 16])
 @pytest.mark.parametrize(
     "feat_dims",
@@ -255,11 +258,12 @@ def test_get_merged_hidden_states(num_tokens_padded):
         {"foo": 100, "bar": 50, "baz": 10},
     ],
 )
-def test_get_merged_multimodal_outputs(feat_dims, num_tokens_padded):
+def test_get_merged_multimodal_outputs(is_partial_block, feat_dims, num_tokens_padded):
     cache = get_omni_pcache_with_mm_tensors(feat_dims, seq_len=DEFAULT_SEQ_LEN)
 
-    orig_num_tokens_unpadded = 8
-    slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
+    # If it's a partial block, add an extral prompt token (since block size is 4).
+    orig_num_tokens_unpadded = 8 if not is_partial_block else 9
+    slot_offset = 8  # We'll put our states in slots 8, 9, 10, ...
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
     orig_mm_outputs = {
