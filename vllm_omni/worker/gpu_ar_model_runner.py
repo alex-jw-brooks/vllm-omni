@@ -516,6 +516,7 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                     multimodal_outputs=multimodal_outputs,
                     num_tokens_unpadded=num_tokens_unpadded,
                     slot_mapping=self.input_batch.block_table[0].slot_mapping.cpu,
+                    num_tokens_padded=num_tokens_padded,
                 )
 
             if not self.broadcast_pp_output:
