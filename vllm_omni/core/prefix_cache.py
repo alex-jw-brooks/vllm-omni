@@ -100,32 +100,47 @@ class OmniTensorPrefixCache:
         multimodal_outputs: dict[str, torch.Tensor] | None,
         num_tokens_unpadded: int,
         slot_mapping: torch.Tensor,
+        num_tokens_padded: int | None = None,
     ):
-        """Updates the hidden cache state for the provided hidden states and multimodal outputs."""
+        """Updates the hidden cache state for the provided hidden states and multimodal outputs.
+
+        Args:
+            hidden_states: Hidden states tensor to cache (if any)
+            multimodal_outputs: Multimodal dict whose tensors may be cached
+            num_tokens_unpadded: Number of tokens without padding
+            slot_mapping: Slot mapping for the input sequence
+            num_tokens_padded: Total number of tokens including padding
+        """
         unpadded_slot_mapping = slot_mapping[:num_tokens_unpadded]
+        if num_tokens_padded is None:
+            num_tokens_padded = num_tokens_unpadded
 
         if hidden_states is not None:
+            # Slice to unpadded portion before caching
+            hidden_states = hidden_states[:num_tokens_unpadded]
             # Ensure that hidden states are on the CPU
             hidden_states = OmniTensorPrefixCache._coerce_to_cpu_tensor(hidden_states)
             # View the cache as 2D so that we can treat our slots as row indices
             flat_cache = self.hidden_states_cache.view(-1, self.hidden_states_cache.shape[-1])
-            flat_cache[unpadded_slot_mapping] = hidden_states[:num_tokens_unpadded]
+            flat_cache[unpadded_slot_mapping] = hidden_states
             logger.debug("Writing to hidden states for %s tokens", num_tokens_unpadded)
 
         # Do the same for the stage's cached multimodal outputs
         if multimodal_outputs is not None:
             # If we haven't initialized the keys already, do it now
+            # We check against the padded token count since we haven't sliced yet
             self.maybe_init_missing_mm_cache_keys(
                 multimodal_outputs,
-                seq_len=num_tokens_unpadded,
+                seq_len=num_tokens_padded,
             )
 
             for mm_out_key, mm_cache in self.mm_outputs_cache.items():
                 if mm_out_key in multimodal_outputs:
-                    mm_state = multimodal_outputs[mm_out_key]
+                    # Slice to unpadded portion before caching
+                    mm_state = multimodal_outputs[mm_out_key][:num_tokens_unpadded]
                     mm_state = OmniTensorPrefixCache._coerce_to_cpu_tensor(mm_state)
                     flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
-                    flat_cache[unpadded_slot_mapping] = mm_state[:num_tokens_unpadded]
+                    flat_cache[unpadded_slot_mapping] = mm_state
             logger.debug("Writing to mm output cache for %s tokens", num_tokens_unpadded)
 
     def _coerce_to_payload_dict(

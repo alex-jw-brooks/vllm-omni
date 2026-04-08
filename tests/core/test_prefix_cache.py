@@ -185,7 +185,8 @@ def fake_get_cached_block_ids(self, req_idx, *args, **kwargs):
     return torch.tensor([], dtype=torch.long)
 
 
-def test_get_merged_hidden_states():
+@pytest.mark.parametrize("num_tokens_padded", [None, 16])
+def test_get_merged_hidden_states(num_tokens_padded):
     """Ensure that hidden states are merged correctly."""
     cache = get_omni_pcache()
 
@@ -199,6 +200,7 @@ def test_get_merged_hidden_states():
         multimodal_outputs=None,
         num_tokens_unpadded=orig_num_tokens_unpadded,
         slot_mapping=orig_slot_mapping,
+        num_tokens_padded=num_tokens_padded,
     )
 
     # Say that we have two requests, but only one of them is a cache hit
@@ -245,6 +247,7 @@ def test_get_merged_hidden_states():
     assert torch.all(req2_merged_states == req2_new_states)
 
 
+@pytest.mark.parametrize("num_tokens_padded", [None, 16])
 @pytest.mark.parametrize(
     "feat_dims",
     [
@@ -252,7 +255,7 @@ def test_get_merged_hidden_states():
         {"foo": 100, "bar": 50, "baz": 10},
     ],
 )
-def test_get_merged_multimodal_outputs(feat_dims):
+def test_get_merged_multimodal_outputs(feat_dims, num_tokens_padded):
     cache = get_omni_pcache_with_mm_tensors(feat_dims, seq_len=DEFAULT_SEQ_LEN)
 
     orig_num_tokens_unpadded = 8
@@ -268,6 +271,7 @@ def test_get_merged_multimodal_outputs(feat_dims):
         multimodal_outputs=orig_mm_outputs,
         num_tokens_unpadded=orig_num_tokens_unpadded,
         slot_mapping=orig_slot_mapping,
+        num_tokens_padded=num_tokens_padded,
     )
 
     # Similar to hs test- say that we have two requests, but only one of them is a cache hit
