@@ -70,7 +70,7 @@ def to_payload_element(
             the condition that would be executed here is the same as the
             criteria for being added to the multimodal outputs cache.
     """
-    # Prefix cache won't hit this case because this is the considition
+    # Prefix cache won't hit this case because this is the condition
     # for being a mm_cache_key in the multimodal outputs tensor.
     if seq_len is not None and isinstance(element, torch.Tensor) and element.shape[0] == seq_len:
         return element[start:end].contiguous()
