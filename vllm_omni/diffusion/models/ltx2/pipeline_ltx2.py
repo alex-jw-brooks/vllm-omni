@@ -989,6 +989,7 @@ class LTX2Pipeline(VllmDiffusionPipeline, CFGParallelMixin, ProgressBarMixin):
             latents=audio_latents,
         )
 
+        sigmas = req.sampling_params.sigmas
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps) if sigmas is None else sigmas
         mu = calculate_shift(
             video_sequence_length,
