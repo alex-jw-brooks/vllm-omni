@@ -16,6 +16,7 @@ DTYPE = torch.float32
 OTHER_DTYPE = torch.float16
 DEFAULT_SHAPE = torch.Size([NUM_BLOCKS, BLOCK_SIZE, HIDDEN_SIZE])
 MOCK_MEDIUM = "MOCK_MEDIUM"
+MOCK_END_IDX = 1
 
 
 class MockInputBatch:
@@ -424,16 +425,16 @@ def test_tail_eviction_empty_event_list():
     # Cache a tail
     block_hash = BlockHash(b"block_hash_0")
     tail_len = 1
-    tail_hash = TailHash("image_hash_0", tail_len)
+    tail_hash = TailHash("image_hash_0", tail_len, MOCK_END_IDX)
     mock_tail = torch.rand((tail_len, HIDDEN_SIZE), dtype=DTYPE)
-    cache.partial_block_cache._cache_tail_tensors(block_hash, tail_hash, mock_tail, None)
+    cache.block_tail_cache._cache_tail_tensors(block_hash, tail_hash, mock_tail, None)
 
     # Handle empty event list
     cache.handle_kv_cache_events([])
 
     # Verify tail still exists
-    assert block_hash in cache.partial_block_cache.hidden_states_cache
-    block_hashed_tails = cache.partial_block_cache.hidden_states_cache[block_hash]
+    assert block_hash in cache.block_tail_cache.hidden_states_cache
+    block_hashed_tails = cache.block_tail_cache.hidden_states_cache[block_hash]
     # The block should still link the tail hash to our tail tensor
     assert len(block_hashed_tails) == 1
     retrieved_tail = block_hashed_tails[tail_hash]
@@ -458,14 +459,14 @@ def test_tail_eviction_on_block_removed(del_indices):
     tail_hashes = []
     mock_tails = []
     for i, block_hash in enumerate(block_hashes):
-        tail_hash = TailHash(f"image_hash_{i}", i + 1)
+        tail_hash = TailHash(f"image_hash_{i}", i + 1, MOCK_END_IDX)
         mock_tail = torch.rand((i + 1, HIDDEN_SIZE), dtype=DTYPE)
         tail_hashes.append(tail_hash)
         mock_tails.append(mock_tail)
-        cache.partial_block_cache._cache_tail_tensors(block_hash, tail_hash, mock_tail, None)
+        cache.block_tail_cache._cache_tail_tensors(block_hash, tail_hash, mock_tail, None)
 
     # Verify all tails exist
-    assert len(cache.partial_block_cache.hidden_states_cache) == num_blocks
+    assert len(cache.block_tail_cache.hidden_states_cache) == num_blocks
 
     # Emit BlockRemoved event for specified blocks and update tail cache
     hashes_to_evict: list[ExternalBlockHash] = [block_hashes[i] for i in del_indices]
@@ -474,13 +475,13 @@ def test_tail_eviction_on_block_removed(del_indices):
 
     # Ensure we dropped the caches for hashes at our del_indices, but kept the rest
     expected_remaining = num_blocks - len(del_indices)
-    assert len(cache.partial_block_cache.hidden_states_cache) == expected_remaining
+    assert len(cache.block_tail_cache.hidden_states_cache) == expected_remaining
 
     for i, (mock_tail, block_hash, tail_hash) in enumerate(zip(mock_tails, block_hashes, tail_hashes)):
         if i in del_indices:
-            assert block_hash not in cache.partial_block_cache.hidden_states_cache
+            assert block_hash not in cache.block_tail_cache.hidden_states_cache
         else:
-            block_hashed_tails = cache.partial_block_cache.hidden_states_cache[block_hash]
+            block_hashed_tails = cache.block_tail_cache.hidden_states_cache[block_hash]
             retrieved_tail = block_hashed_tails[tail_hash]
             assert torch.all(retrieved_tail == mock_tail)
 
@@ -490,14 +491,14 @@ def test_tail_eviction_multiple_tails_per_block(use_mm_outputs):
     """Ensure that if a block has multiple tails, block eviction clears them all."""
     if use_mm_outputs:
         cache = get_omni_pcache_with_mm_tensors({"foo": 100, "bar": 50}, seq_len=DEFAULT_SEQ_LEN)
-        cache_dict = cache.partial_block_cache.mm_outputs_cache
+        cache_dict = cache.block_tail_cache.mm_outputs_cache
     else:
         cache = get_omni_pcache()
-        cache_dict = cache.partial_block_cache.hidden_states_cache
+        cache_dict = cache.block_tail_cache.hidden_states_cache
 
     # Create a single block with multiple tails
     block_hash = BlockHash(b"block_hash_shared")
-    tail_hashes = [TailHash(f"image_hash_{i}", i + 1) for i in range(3)]
+    tail_hashes = [TailHash(f"image_hash_{i}", i + 1, MOCK_END_IDX) for i in range(3)]
 
     for tail_hash in tail_hashes:
         tail_len = tail_hash.tail_len
@@ -506,10 +507,10 @@ def test_tail_eviction_multiple_tails_per_block(use_mm_outputs):
                 "foo": torch.rand((tail_len, 100), dtype=DTYPE),
                 "bar": torch.rand((tail_len, 50), dtype=DTYPE),
             }
-            cache.partial_block_cache._cache_tail_tensors(block_hash, tail_hash, None, mm_tails)
+            cache.block_tail_cache._cache_tail_tensors(block_hash, tail_hash, None, mm_tails)
         else:
             mock_tail = torch.rand((tail_len, HIDDEN_SIZE), dtype=DTYPE)
-            cache.partial_block_cache._cache_tail_tensors(block_hash, tail_hash, mock_tail, None)
+            cache.block_tail_cache._cache_tail_tensors(block_hash, tail_hash, mock_tail, None)
 
     # Verify all tails are stored under the same block
     assert block_hash in cache_dict
@@ -533,24 +534,24 @@ def test_tail_eviction_all_blocks_cleared():
     # Cache multiple tails for both hidden states and multimodal outputs
     for i in range(num_blocks):
         block_hash = BlockHash(f"block_hash_{i}".encode())
-        tail_hash = TailHash(f"image_hash_{i}", i + 1)
+        tail_hash = TailHash(f"image_hash_{i}", i + 1, MOCK_END_IDX)
 
         # Add tails for both the hidden states and mm outputs
         mock_hs_tail = torch.rand((i + 1, HIDDEN_SIZE), dtype=DTYPE)
-        cache.partial_block_cache._cache_tail_tensors(block_hash, tail_hash, mock_hs_tail, None)
+        cache.block_tail_cache._cache_tail_tensors(block_hash, tail_hash, mock_hs_tail, None)
 
         mock_mm_tails = {"foo": torch.rand((i + 1, 100), dtype=DTYPE)}
-        cache.partial_block_cache._cache_tail_tensors(block_hash, tail_hash, None, mock_mm_tails)
+        cache.block_tail_cache._cache_tail_tensors(block_hash, tail_hash, None, mock_mm_tails)
 
     # Verify tails exist for both HS / multimodal
-    assert len(cache.partial_block_cache.hidden_states_cache) == num_blocks
-    assert len(cache.partial_block_cache.mm_outputs_cache) == num_blocks
+    assert len(cache.block_tail_cache.hidden_states_cache) == num_blocks
+    assert len(cache.block_tail_cache.mm_outputs_cache) == num_blocks
 
     # Verify handling AllBlocksCleared deletes all tails for every hash
     event = AllBlocksCleared()
     cache.handle_kv_cache_events([event])
-    assert len(cache.partial_block_cache.hidden_states_cache) == 0
-    assert len(cache.partial_block_cache.mm_outputs_cache) == 0
+    assert len(cache.block_tail_cache.hidden_states_cache) == 0
+    assert len(cache.block_tail_cache.mm_outputs_cache) == 0
 
 
 def test_tail_eviction_no_op_on_missing_blocks():
@@ -563,12 +564,12 @@ def test_tail_eviction_no_op_on_missing_blocks():
 
     # Cache a tail for block_0
     block_hash_0 = BlockHash(b"block_hash_0")
-    tail_hash = TailHash("image_hash_0", 1)
+    tail_hash = TailHash("image_hash_0", 1, MOCK_END_IDX)
     mock_tail = torch.rand((1, HIDDEN_SIZE), dtype=DTYPE)
-    cache.partial_block_cache._cache_tail_tensors(block_hash_0, tail_hash, mock_tail, None)
+    cache.block_tail_cache._cache_tail_tensors(block_hash_0, tail_hash, mock_tail, None)
 
     # Verify tail exists
-    assert block_hash_0 in cache.partial_block_cache.hidden_states_cache
+    assert block_hash_0 in cache.block_tail_cache.hidden_states_cache
 
     # Ensure evicting block hashes not in the tail cache does
     # not crash or affect the previously cached tails
@@ -577,5 +578,5 @@ def test_tail_eviction_no_op_on_missing_blocks():
     cache.handle_kv_cache_events([event])
 
     # Verify original tail is still intact
-    assert block_hash_0 in cache.partial_block_cache.hidden_states_cache
-    assert tail_hash in cache.partial_block_cache.hidden_states_cache[block_hash_0]
+    assert block_hash_0 in cache.block_tail_cache.hidden_states_cache
+    assert tail_hash in cache.block_tail_cache.hidden_states_cache[block_hash_0]

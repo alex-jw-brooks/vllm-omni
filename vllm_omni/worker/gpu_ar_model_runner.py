@@ -37,6 +37,7 @@ from vllm.v1.worker.gpu_model_runner import (
 from vllm.v1.worker.ubatch_utils import maybe_create_ubatch_slices
 from vllm.v1.worker.utils import is_residual_scattered_for_sp
 
+from vllm_omni.core.sched.output import OmniSchedulerOutput
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
@@ -152,6 +153,19 @@ class GPUARModelRunner(OmniGPUModelRunner):
             self._warmup_state_cleared = True
             if hasattr(self.model, "_clear_warmup_state"):
                 self.model._clear_warmup_state()
+
+        # [Omni] Mirror any evictions made for kv caching in the prefix tail cache
+        if self.omni_prefix_cache is not None:
+            # Shouldn't ever happen unless large changes are made to the scheduling interfaces,
+            # but handling it for now for compatibility in case we bring things closer to vLLM's
+            # interfaces in the future
+            if not isinstance(scheduler_output, OmniSchedulerOutput):
+                logger.warning_once(
+                    "Omni prefix caching is enabled, but the scheduler output type has no "
+                    "kv_cache_events attribute; tail caching will not be able to handle eviction!"
+                )
+            else:
+                self.omni_prefix_cache.handle_kv_cache_events(scheduler_output.kv_cache_events)
 
         # [Omni] Handle KV transfer BEFORE updating states (which removes finished requests)
         finished_reqs = getattr(scheduler_output, "finished_requests_needing_kv_transfer", {})
@@ -412,6 +426,9 @@ class GPUARModelRunner(OmniGPUModelRunner):
                     num_tokens_unpadded=num_tokens_unpadded,
                     slot_mapping=self.input_batch.block_table[0].slot_mapping.cpu,
                     num_tokens_padded=num_tokens_padded,
+                    scheduled_new_reqs=scheduler_output.scheduled_new_reqs,
+                    query_start_loc=self.query_start_loc.cpu,
+                    input_batch=self.input_batch,
                 )
 
             if not self.broadcast_pp_output:
@@ -720,12 +737,14 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 input_batch=self.input_batch,
                 hidden_states=hidden_states,
                 num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+                scheduled_new_reqs=scheduler_output.scheduled_new_reqs,
             )
             combined_multimodal_outputs = self.omni_prefix_cache.get_merged_multimodal_states(
                 query_start_loc=self.query_start_loc.cpu,
                 input_batch=self.input_batch,
                 multimodal_outputs=multimodal_outputs,
                 num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+                scheduled_new_reqs=scheduler_output.scheduled_new_reqs,
             )
         else:
             mm_cpu = build_mm_cpu(multimodal_outputs)

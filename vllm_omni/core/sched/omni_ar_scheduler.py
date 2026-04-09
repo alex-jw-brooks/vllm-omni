@@ -6,7 +6,7 @@ from time import time
 from typing import Any
 
 from vllm.compilation.cuda_graph import CUDAGraphStat
-from vllm.distributed.kv_events import KVEventBatch
+from vllm.distributed.kv_events import KVCacheEvent, KVEventBatch
 from vllm.distributed.kv_transfer.kv_connector.v1.metrics import KVConnectorStats
 from vllm.logger import init_logger
 from vllm.v1.core.sched.output import SchedulerOutput
@@ -68,6 +68,11 @@ class OmniARScheduler(VLLMScheduler):
         self.chunk_transfer_adapter = None
         if getattr(model_config, "async_chunk", False):
             self.chunk_transfer_adapter = OmniChunkTransferAdapter(self.vllm_config)
+
+        # Track KV cache events from the previous iteration; this is only used for prefix
+        # caching. We store events so that we can check if we need to evict from the tail
+        # cache on the current iteration to have the correct state.
+        self.pending_kv_cache_events: list[KVCacheEvent] = []
 
     def _get_kv_transfer_criteria(self) -> dict | None:
         # Note: vllm_config is available in Scheduler after super().__init__
@@ -165,8 +170,9 @@ class OmniARScheduler(VLLMScheduler):
             # enriching with request-level payloads
             new_list = []
             for nr in scheduler_output.scheduled_new_reqs:
-                req_id = getattr(nr, "req_id", None)
-                request = self.requests.get(req_id) if req_id else None
+                req_id = nr.req_id
+                request = self.requests.get(req_id)
+                block_hashes = request.block_hashes if request is not None else None
                 # Build omni entry preserving all base fields
                 omni_nr = OmniNewRequestData(
                     req_id=nr.req_id,
@@ -181,6 +187,7 @@ class OmniARScheduler(VLLMScheduler):
                     # Enrich with omni payloads from the live request object
                     prompt_embeds=(getattr(request, "prompt_embeds", None) if request else None),
                     additional_information=(getattr(request, "additional_information", None) if request else None),
+                    block_hashes=block_hashes,
                 )
                 new_list.append(omni_nr)
 
@@ -200,6 +207,7 @@ class OmniARScheduler(VLLMScheduler):
         return OmniSchedulerOutput(
             **base_data,
             finished_requests_needing_kv_transfer=finished_reqs,
+            kv_cache_events=self.pending_kv_cache_events,
         )
 
     def update_from_output(
@@ -436,6 +444,11 @@ class OmniARScheduler(VLLMScheduler):
         if events:
             batch = KVEventBatch(ts=time(), events=events)
             self.kv_event_publisher.publish(batch)
+
+        # If prefix caching is enabled, store the events (if any) for the
+        # next iteration so that evictions are handled in the tail cache
+        if self.cache_config.enable_prefix_caching:
+            self.pending_kv_cache_events = events
 
         # Create EngineCoreOutputs for all clients that have requests with
         # outputs in this step.

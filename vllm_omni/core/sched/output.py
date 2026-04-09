@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from vllm.distributed.kv_events import KVCacheEvent
+from vllm.v1.core.kv_cache_utils import BlockHash
 from vllm.v1.core.sched.output import CachedRequestData, NewRequestData, SchedulerOutput
 from vllm.v1.request import Request
 
@@ -20,10 +22,12 @@ class OmniNewRequestData(NewRequestData):
         external_req_id: Optional external request ID for tracking
         additional_information: Optional serialized additional information
             dictionary containing tensors or lists
+        block_hashes: Block hashes corresponding to the request inputs.
     """
 
     external_req_id: str | None = None
     additional_information: AdditionalInformationPayload | None = None
+    block_hashes: list[BlockHash] = field(default_factory=list)
 
     @classmethod
     def from_request(
@@ -55,6 +59,7 @@ class OmniNewRequestData(NewRequestData):
             prompt_embeds=getattr(request, "prompt_embeds", None),
             prefill_token_ids=prefill_token_ids,
             additional_information=getattr(request, "additional_information", None),
+            block_hashes=request.block_hashes,
         )
 
 
@@ -67,6 +72,7 @@ class OmniCachedRequestData(CachedRequestData):
     """
 
     prompt_token_ids: dict[str, list[int]]
+    block_hashes: dict[str, list[BlockHash] | None]
     additional_information: dict[str, dict | None]
 
 
@@ -75,3 +81,6 @@ class OmniSchedulerOutput(SchedulerOutput):
     """Scheduler output with omni-specific transfer metadata."""
 
     finished_requests_needing_kv_transfer: dict[str, dict] = field(default_factory=dict)
+    # KV cache events are only passed when prefix cache is enabled.
+    # NOTE: This is currently only available for AutoRegressive models
+    kv_cache_events: list[KVCacheEvent] = field(default_factory=list)
