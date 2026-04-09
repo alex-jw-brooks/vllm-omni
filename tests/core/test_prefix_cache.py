@@ -228,20 +228,20 @@ def fake_get_cached_block_ids(self, req_idx, *args, **kwargs):
     return torch.tensor([], dtype=torch.long)
 
 
-@pytest.mark.parametrize("is_partial_block", [True, False])
+@pytest.mark.parametrize("tail_len", [0, 1])
 @pytest.mark.parametrize("num_tokens_padded", [None, 16])
-def test_get_merged_hidden_states(is_partial_block, num_tokens_padded):
+def test_get_merged_hidden_states(tail_len, num_tokens_padded):
     """Ensure that hidden states are merged correctly."""
     cache = get_omni_pcache()
 
     # If it's a partial block, add an extral prompt token (since block size is 4).
-    orig_num_tokens_unpadded = 8 if not is_partial_block else 9
+    orig_num_tokens_unpadded = 8 + tail_len
     slot_offset = 8  # We'll put our states in slots 8, 9, 10, ..., 15
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
     orig_hidden_states = torch.rand((orig_num_tokens_unpadded, HIDDEN_SIZE), dtype=DTYPE)
 
     # Say that we have two requests, but only one of them is a cache hit
-    num_new_toks_req1 = 3
+    num_new_toks_req1 = 3 + tail_len
     num_new_toks_req2 = 2
     cache.add_prefix_cached_new_req_id("req1")
 
@@ -260,7 +260,7 @@ def test_get_merged_hidden_states(is_partial_block, num_tokens_padded):
 
     # Create tail metadata for partial block case
     scheduled_new_reqs = (
-        create_scheduled_new_req_with_tail("req1", orig_num_tokens_unpadded, BLOCK_SIZE) if is_partial_block else []
+        create_scheduled_new_req_with_tail("req1", orig_num_tokens_unpadded, BLOCK_SIZE) if tail_len else []
     )
 
     cache.update_omni_tensor_prefix_cache(
@@ -291,7 +291,9 @@ def test_get_merged_hidden_states(is_partial_block, num_tokens_padded):
     req2_merged_states = merged_states["req2"]
 
     # First, check the cache hit case
-    assert req1_merged_states.shape == torch.Size([orig_num_tokens_unpadded + num_new_toks_req1, HIDDEN_SIZE])
+    assert req1_merged_states.shape == torch.Size(
+        [orig_num_tokens_unpadded + num_new_toks_req1 - tail_len, HIDDEN_SIZE]
+    )
     # Ensure that the req1 merged states are the cached states + the new req1 states
     assert torch.all(req1_merged_states[:orig_num_tokens_unpadded] == orig_hidden_states)
     assert torch.all(req1_merged_states[-num_new_toks_req1:] == req1_new_states)
@@ -301,7 +303,7 @@ def test_get_merged_hidden_states(is_partial_block, num_tokens_padded):
     assert torch.all(req2_merged_states == req2_new_states)
 
 
-@pytest.mark.parametrize("is_partial_block", [True, False])
+@pytest.mark.parametrize("tail_len", [0, 1])
 @pytest.mark.parametrize("num_tokens_padded", [None, 16])
 @pytest.mark.parametrize(
     "feat_dims",
@@ -310,11 +312,11 @@ def test_get_merged_hidden_states(is_partial_block, num_tokens_padded):
         {"foo": 100, "bar": 50, "baz": 10},
     ],
 )
-def test_get_merged_multimodal_outputs(is_partial_block, feat_dims, num_tokens_padded):
+def test_get_merged_multimodal_outputs(tail_len, feat_dims, num_tokens_padded):
     cache = get_omni_pcache_with_mm_tensors(feat_dims, seq_len=DEFAULT_SEQ_LEN)
 
     # If it's a partial block, add an extral prompt token (since block size is 4).
-    orig_num_tokens_unpadded = 8 if not is_partial_block else 9
+    orig_num_tokens_unpadded = 8 + tail_len
     slot_offset = 8  # We'll put our states in slots 8, 9, 10, ...
     orig_slot_mapping = torch.arange(slot_offset, slot_offset + orig_num_tokens_unpadded)
     feature_dims = {key: val.shape[-1] for key, val in cache.mm_outputs_cache.items()}
@@ -323,7 +325,7 @@ def test_get_merged_multimodal_outputs(is_partial_block, feat_dims, num_tokens_p
     }
 
     # Similar to hs test- say that we have two requests, but only one of them is a cache hit
-    num_new_toks_req1 = 3
+    num_new_toks_req1 = 3 + tail_len
     num_new_toks_req2 = 2
     cache.add_prefix_cached_new_req_id("req1")
 
@@ -348,7 +350,7 @@ def test_get_merged_multimodal_outputs(is_partial_block, feat_dims, num_tokens_p
 
     # Create tail metadata for partial block case
     scheduled_new_reqs = (
-        create_scheduled_new_req_with_tail("req1", orig_num_tokens_unpadded, BLOCK_SIZE) if is_partial_block else []
+        create_scheduled_new_req_with_tail("req1", orig_num_tokens_unpadded, BLOCK_SIZE) if tail_len else []
     )
 
     cache.update_omni_tensor_prefix_cache(
@@ -398,7 +400,7 @@ def test_get_merged_multimodal_outputs(is_partial_block, feat_dims, num_tokens_p
             req1_new_mm_outputs = new_mm_outputs[mm_key][:num_new_toks_req1]
 
             assert req1_merged_mm_outputs.shape == torch.Size(
-                [orig_num_tokens_unpadded + num_new_toks_req1, curr_feat_dim]
+                [orig_num_tokens_unpadded + num_new_toks_req1 - tail_len, curr_feat_dim]
             )
             # Ensure that the req1 merged mm data are the cached data + the new data
             assert torch.all(req1_merged_mm_outputs[:orig_num_tokens_unpadded] == orig_mm_outputs[mm_key])
