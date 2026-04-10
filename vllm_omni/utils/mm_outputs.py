@@ -45,7 +45,7 @@ def build_mm_cpu(multimodal_outputs: dict) -> dict[str, object]:
                     else:
                         cpu_list.append(elem)
                 mm_cpu[k] = cpu_list
-            else:
+            elif v is not None:
                 mm_cpu[k] = v
     return mm_cpu
 
