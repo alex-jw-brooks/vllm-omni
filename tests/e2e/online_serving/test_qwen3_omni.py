@@ -103,6 +103,7 @@ def get_prompt(prompt_type="text_only"):
     prompts = {
         "text_only": "What is the capital of China? Answer in 20 words.",
         "mix": "What is recited in the audio? What is in this image? Describe the video briefly.",
+        "text_image": "What color are the squares in this image?",
     }
     return prompts.get(prompt_type, prompts["text_only"])
 
@@ -184,10 +185,17 @@ def test_text_to_text_001(omni_server, openai_client) -> None:
 @pytest.mark.parametrize("omni_server", prefix_test_params, indirect=True)
 def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     """
-    Test thinker supports prefix caching by sending two identical
-    requests and checking the number of cached tokens.
+    Test thinker prefix caching by sending identical requests with an image (i.e.,
+    a large shared prefix) and verifying that the second request uses cached tokens
+    & produces the same output.
     """
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt())
+    image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(224, 224)['base64']}"
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(),
+        image_data_url=image_data_url,
+        content_text=get_prompt("text_image"),
+    )
+
     request_config = {
         "model": omni_server.model,
         "messages": messages,
@@ -201,4 +209,8 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     assert response_1.success
     assert response_2.success
     assert response_2.cached_tokens is not None
+    # We should cache the vast majority of the prompt (image + up to last full block),
+    # and set seed in the CI config, so the second request should give an identical
+    # response for the generated input image, even if we use dummy weights
     assert response_2.cached_tokens > 0
+    assert response_1.text_content == response_2.text_content
