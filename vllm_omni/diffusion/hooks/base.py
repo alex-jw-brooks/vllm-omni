@@ -96,9 +96,8 @@ class ModelHook:
 
     def new_forward(self, module: nn.Module, *args: Any, **kwargs: Any) -> Any:
         """Override the module's forward pass. This should be overridden for more complex
-        cases, e.g., TeaCache.
-
-        NOTE: only one hook overriding `new_forward` can be enabled at a time.
+        cases, e.g., TeaCache. If this method is overridden in a subclass, it will be called
+        instead of self.module._omni_original_forward when executing the hooks.
 
         Args:
             module: The module being called.
@@ -106,9 +105,9 @@ class ModelHook:
             **kwargs: Keyword arguments to forward.
 
         Returns:
-            The output of the forward pass.
+            The output of the replacement for the forward pass.
         """
-        return module._omni_original_forward(*args, **kwargs)  # type: ignore[attr-defined]
+        raise NotImplementedError("By default, hooks do not implement new_forward")
 
     def reset_state(self, module: nn.Module) -> nn.Module:
         """Reset any state associated with this hook.
