@@ -46,10 +46,7 @@ class OverrideAppendHook(AppendHook):
     """Same as AppendHook, but replace the forward call with a different string."""
 
     def new_forward(self, module: nn.Module, *args, **kwargs):
-        """Call pre_forward, do something instead of fwd, then call post forward."""
-        _, new_kwargs = self.pre_forward(module, *args, **kwargs)
-        fwd_out = new_kwargs[INPUT_KWARG] + OVERRIDE_OUT
-        return self.post_forward(module, fwd_out)
+        return kwargs[INPUT_KWARG] + OVERRIDE_OUT
 
 
 def test_register_no_fwd_override_hooks():
@@ -65,10 +62,10 @@ def test_register_no_fwd_override_hooks():
     registry.register_hook(name="a", hook=first_hook)
 
     assert len(registry._hooks) == 2
-    assert len(registry._sorted_def_fwd_hooks) == 2
+    assert len(registry._sorted_hooks) == 2
     assert registry._new_fwd_impl_hook is None
     # Ensure registering a new hook sorting alphabetically
-    for actual_hook, expected_hook in zip(registry._sorted_def_fwd_hooks, sorted_no_fwd_hooks):
+    for actual_hook, expected_hook in zip(registry._sorted_hooks, sorted_no_fwd_hooks):
         assert actual_hook is expected_hook
 
 
@@ -87,10 +84,10 @@ def test_register_with_forward_hooks():
     registry.register_hook(name="c", hook=exec_hook)
 
     assert len(registry._hooks) == 3
-    assert len(registry._sorted_def_fwd_hooks) == 2
+    assert len(registry._sorted_hooks) == 3
     assert registry._new_fwd_impl_hook is exec_hook
     # Ensure registering a new hook sorting alphabetically
-    for actual_hook, expected_hook in zip(registry._sorted_def_fwd_hooks, sorted_no_fwd_hooks):
+    for actual_hook, expected_hook in zip(registry._sorted_hooks, sorted_no_fwd_hooks):
         assert actual_hook is expected_hook
 
 
@@ -119,14 +116,14 @@ def test_remove_hooks():
     # Explicitly reorder our hooks to be in the wrong order, since register
     # forces them to be sorted too. Ensure that remove the hook will also
     # enforce the sorted order.
-    registry._sorted_def_fwd_hooks = [second_hook, first_hook]
+    registry._sorted_hooks = [second_hook, first_hook]
 
     assert registry._new_fwd_impl_hook is exec_hook
     registry.remove_hook("c")
     assert registry._new_fwd_impl_hook is None
 
     sorted_no_fwd_hooks = [first_hook, second_hook]
-    for actual_hook, expected_hook in zip(registry._sorted_def_fwd_hooks, sorted_no_fwd_hooks):
+    for actual_hook, expected_hook in zip(registry._sorted_hooks, sorted_no_fwd_hooks):
         assert actual_hook is expected_hook
 
 
