@@ -659,21 +659,7 @@ def extract_flux2_context(
     # ============================================================================
     # DEFINE TRANSFORMER EXECUTION (Flux2-specific)
     # ============================================================================
-    def run_flux2_transformer_blocks():
-        h = hidden_states
-        c = encoder_hidden_states
-        for block in module.transformer_blocks:
-            c, h = block(
-                hidden_states=h,
-                encoder_hidden_states=c,
-                temb_mod_params_img=double_stream_mod_img,
-                temb_mod_params_txt=double_stream_mod_txt,
-                image_rotary_emb=concat_rotary_emb,
-                joint_attention_kwargs=joint_attention_kwargs,
-            )
-        return (h, c)
-
-    def run_flux2_full_transformer_with_single(ori_h, ori_c):
+    def run_flux2_transformer_blocks(ori_h, ori_c):
         h = ori_h
         c = ori_c
         for block in module.transformer_blocks:
@@ -716,9 +702,6 @@ def extract_flux2_context(
         temb=temb,
         run_transformer_blocks=run_flux2_transformer_blocks,
         postprocess=postprocess,
-        extra_states={
-            "run_flux2_full_transformer_with_single": run_flux2_full_transformer_with_single,
-        },
     )
 
 
