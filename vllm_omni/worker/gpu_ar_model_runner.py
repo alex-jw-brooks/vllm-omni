@@ -202,28 +202,62 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         finally:
             set_cudagraph_capturing_enabled(False)
 
-    def update_hidden_state_cache(self, hidden_states, multimodal_outputs, num_tokens_unpadded):
-        """Updates the hidden cache state for prefix caching from
-        the current model's execution for the unpadded tokens.
+    def _maybe_update_prefix_cache(
+        self,
+        hidden_states: torch.Tensor,
+        multimodal_outputs: dict,
+        num_tokens_unpadded: int,
+        num_tokens_padded: int,
+    ):
+        """If prefix caching is enabled and it's the last pipeline parallelism rank,
+        retrieve the hidden states & multimodal outputs from the prefix cache based
+        on our batch slot mappings.
         """
-        assert self.hidden_state_cache is not None
-        slot_mapping = self.input_batch.block_table[0].slot_mapping.gpu[:num_tokens_unpadded]
-        # View the cache as 2D so that we can treat our slots as row indices
-        flat_cache = self.hidden_state_cache.view(-1, self.hidden_state_cache.shape[-1])
-        flat_cache[slot_mapping] = hidden_states[:num_tokens_unpadded]
-        logger.info(f"[HS Cache WRITE] tokens={num_tokens_unpadded}")
+        # Cache hidden states if we've enabled hidden state prefix caching
+        # unless this isn't the last pipeline parallelism rank.
+        if self.omni_prefix_cache is not None and get_pp_group().is_last_rank:
+            # If this happens, it generally means the model is not following the correct
+            # interface yet and is therefore currently not compatible with prefix cache.
+            if multimodal_outputs is not None and not isinstance(multimodal_outputs, dict):
+                logger.warning_once(
+                    "prefix caching expects mm outputs to be a dict, but got %s",
+                    type(multimodal_outputs),
+                )
 
-        # Do the same for the cached multimodal outputs for this stage;
-        # for now we assume that all of the multimodal outputs cached
-        # are exactly the same size as the hidden states.
-        # TODO (Alex) make this more flexible.
-        if self.mm_outputs_cache is not None:
-            for mm_out_key, mm_cache in self.mm_outputs_cache.items():
-                assert mm_out_key in multimodal_outputs
-                mm_state = multimodal_outputs[mm_out_key]
-                flat_cache = mm_cache.view(-1, mm_cache.shape[-1])
-                flat_cache[slot_mapping] = mm_state[:num_tokens_unpadded]
-            logger.info(f"[multimodal output Cache WRITE] tokens={num_tokens_unpadded}")
+            self.omni_prefix_cache.update_omni_tensor_prefix_cache(
+                hidden_states=hidden_states,
+                multimodal_outputs=multimodal_outputs,
+                num_tokens_unpadded=num_tokens_unpadded,
+                slot_mapping=self.input_batch.block_table[0].slot_mapping.cpu,
+                num_tokens_padded=num_tokens_padded,
+            )
+
+    def _maybe_get_combined_prefix_cache_tensors(
+        self,
+        hidden_states: torch.Tensor,
+        multimodal_outputs: dict,
+        num_scheduled_tokens: dict[str, int],
+    ) -> tuple[dict[str, torch.Tensor] | None, dict | None]:
+        """If prefix caching is enabled, extract the merged hidden states and multimodal outputs for
+        all requests in the batch (including those that aren't a hit on Prefix cache).
+        """
+        # Prior to applying the post-processing func, extract
+        # the prefix cached hidden states and multimodal states.
+        combined_hidden_states, combined_multimodal_outputs = None, None
+        if self.omni_prefix_cache is not None:
+            combined_hidden_states = self.omni_prefix_cache.get_merged_hidden_states(
+                query_start_loc=self.query_start_loc.cpu,
+                input_batch=self.input_batch,
+                hidden_states=hidden_states,
+                num_scheduled_tokens=num_scheduled_tokens,
+            )
+            combined_multimodal_outputs = self.omni_prefix_cache.get_merged_multimodal_states(
+                query_start_loc=self.query_start_loc.cpu,
+                input_batch=self.input_batch,
+                multimodal_outputs=multimodal_outputs,
+                num_scheduled_tokens=num_scheduled_tokens,
+            )
+        return combined_hidden_states, combined_multimodal_outputs
 
     @torch.inference_mode()
     def execute_model(
@@ -500,24 +534,14 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
 
             hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
 
-            # Cache hidden states if we've enabled hidden state prefix caching
-            # unless this isn't the last pipeline parallelism rank.
-            if self.omni_prefix_cache is not None and get_pp_group().is_last_rank:
-                # If this happens, it generally means the model is not following the correct
-                # interface yet and is therefore currently not compatible with prefix cache.
-                if multimodal_outputs is not None and not isinstance(multimodal_outputs, dict):
-                    logger.warning_once(
-                        "prefix caching expects mm outputs to be a dict, but got %s",
-                        type(multimodal_outputs),
-                    )
-
-                self.omni_prefix_cache.update_omni_tensor_prefix_cache(
-                    hidden_states=hidden_states,
-                    multimodal_outputs=multimodal_outputs,
-                    num_tokens_unpadded=num_tokens_unpadded,
-                    slot_mapping=self.input_batch.block_table[0].slot_mapping.cpu,
-                    num_tokens_padded=num_tokens_padded,
-                )
+            # Cache hidden states & multimodal outputs if we've enabled hidden state
+            # prefix caching unless this isn't the last pipeline parallelism rank.
+            self._maybe_update_prefix_cache(
+                hidden_states=hidden_states,
+                multimodal_outputs=multimodal_outputs,
+                num_tokens_unpadded=num_tokens_unpadded,
+                num_tokens_padded=num_tokens_padded,
+            )
 
             if not self.broadcast_pp_output:
                 # Common case.
@@ -820,19 +844,16 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         # Prior to applying the post-processing func, extract
         # the prefix cached hidden states and multimodal states.
         if self.omni_prefix_cache is not None:
-            combined_hidden_states = self.omni_prefix_cache.get_merged_hidden_states(
-                query_start_loc=self.query_start_loc.cpu,
-                input_batch=self.input_batch,
-                hidden_states=hidden_states,
-                num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+            (
+                combined_hidden_states,
+                combined_multimodal_outputs,
+            ) = self._maybe_get_combined_prefix_cache_tensors(
+                hidden_states,
+                multimodal_outputs,
+                scheduler_output.num_scheduled_tokens,
             )
-            combined_multimodal_outputs = self.omni_prefix_cache.get_merged_multimodal_states(
-                query_start_loc=self.query_start_loc.cpu,
-                input_batch=self.input_batch,
-                multimodal_outputs=multimodal_outputs,
-                num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
-            )
-        else:
+        # Otherwise we don't have the mm CPU data yet, so we still need to build it
+        if self.omni_prefix_cache is None:
             mm_cpu = build_mm_cpu(multimodal_outputs)
 
         self._process_additional_information_updates(
