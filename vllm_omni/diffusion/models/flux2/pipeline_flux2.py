@@ -68,7 +68,7 @@ class Flux2Pipeline(Flux2PipelineBase):
         model = od_config.model
         local_files_only = os.path.exists(model)
 
-        self.text_encoder = Mistral3ForConditionalGeneration.from_pretrained(
+        self._text_encoder = Mistral3ForConditionalGeneration.from_pretrained(
             model, subfolder="text_encoder", local_files_only=local_files_only
         ).to(self._execution_device)
         self.tokenizer = PixtralProcessor.from_pretrained(
@@ -76,6 +76,11 @@ class Flux2Pipeline(Flux2PipelineBase):
         )
 
         self.system_message = SYSTEM_MESSAGE
+
+    @property
+    def text_encoder(self) -> torch.nn.Module:
+        """Text encoder implementation for Flux2 (Mistral 3)."""
+        return self._text_encoder
 
     def _get_prompt_embeds(
         self,
