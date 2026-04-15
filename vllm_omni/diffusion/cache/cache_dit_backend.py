@@ -35,21 +35,18 @@ from vllm_omni.diffusion.data import DiffusionCacheConfig, OmniDiffusionConfig
 
 logger = init_logger(__name__)
 
+# Registry of custom cache-dit enablers for specific models
+# Maps pipeline names to their cache-dit enablement functions
+CUSTOM_DIT_ENABLERS: dict[str, Callable] = {}
+
+refresh_cache_context_func: TypeAlias = Callable[[Any, int, bool], None]
+
 
 # Small helper to centralize cache-dit summaries.
 def cache_summary(pipeline: Any, details: bool = True) -> None:
     cache_dit.summary(pipeline.transformer, details=details)
     if hasattr(pipeline, "transformer_2"):
         cache_dit.summary(pipeline.transformer_2, details=details)
-
-
-# Registry of custom cache-dit enablers for specific models
-# Maps pipeline names to their cache-dit enablement functions
-# Models in this registry require custom handling (e.g., dual-transformer architectures)
-# Will be populated after function definitions
-CUSTOM_DIT_ENABLERS: dict[str, Callable] = {}
-
-refresh_cache_context_func: TypeAlias = Callable[[Any, int, bool], None]
 
 
 def default_get_pipeline_transformer(pipeline: Any) -> Any:
@@ -111,7 +108,7 @@ def _build_db_cache_config(cache_config: DiffusionCacheConfig) -> DBCacheConfig:
         DBCacheConfig instance with SCM support if configured.
     """
     return DBCacheConfig(
-        # we will refresh the context when gets num_inference_steps in the first inference request
+        # we will refresh the context when we get num_inference_steps in the first inference request
         num_inference_steps=None,
         Fn_compute_blocks=cache_config.Fn_compute_blocks,
         Bn_compute_blocks=cache_config.Bn_compute_blocks,
@@ -153,8 +150,9 @@ def enable_cache_for_dit(
     )
 
     # Enable cache-dit on the transformer
+    transformer = default_get_pipeline_transformer(pipeline)
     cache_dit.enable_cache(
-        pipeline.transformer if block_adapter is None else block_adapter,
+        transformer if block_adapter is None else block_adapter,
         cache_config=db_cache_config,
         calibrator_config=calibrator_config,
     )
@@ -162,243 +160,9 @@ def enable_cache_for_dit(
     return build_cache_context_refresh(cache_config)
 
 
-### Simple enablers for DiT cache
-# These mostly define BlockAdapters for single transformer architectures
-# and are the common case, where we only really need to define the blocks
-# and the forward pattern.
-def enable_cache_for_longcat_image(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for LongCatImage pipeline.
-
-    Args:
-        pipeline: The LongCatImage pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-    """
-    block_adapter = BlockAdapter(
-        transformer=pipeline.transformer,
-        blocks=[
-            pipeline.transformer.transformer_blocks,
-            pipeline.transformer.single_transformer_blocks,
-        ],
-        forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
-    )
-    return enable_cache_for_dit(
-        pipeline,
-        cache_config,
-        block_adapter=block_adapter,
-    )
-
-
-def enable_cache_for_flux(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for Flux.1-dev pipeline.
-
-    Args:
-        pipeline: The Flux pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-    Returns:
-        A refresh function that can be called with a new ``num_inference_steps``
-        to update the cache context for the pipeline.
-    """
-    block_adapter = BlockAdapter(
-        transformer=pipeline.transformer,
-        blocks=[
-            pipeline.transformer.transformer_blocks,
-            pipeline.transformer.single_transformer_blocks,
-        ],
-        forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_1],
-    )
-
-    return enable_cache_for_dit(
-        pipeline,
-        cache_config,
-        block_adapter=block_adapter,
-    )
-
-
-def enable_cache_for_flux2_klein(pipeline: Any, cache_config: DiffusionCacheConfig) -> refresh_cache_context_func:
-    """Enable cache-dit for FLUX.2-klein-4B pipeline.
-
-    Args:
-        pipeline: The FLUX.2-klein-4B pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-    Returns:
-        A refresh function that can be called with a new ``num_inference_steps``
-        to update the cache context for the pipeline.
-    """
-    # FIXME This should be a custom default, not hard-coded,
-    # because the user cannot currently override it.
-    # TODO - validate this is correct
-    cache_config.Fn_compute_blocks = 2
-    block_adapter = BlockAdapter(
-        transformer=pipeline.transformer,
-        blocks=[
-            pipeline.transformer.transformer_blocks,
-            pipeline.transformer.single_transformer_blocks,
-        ],
-        forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_2],
-    )
-    return enable_cache_for_dit(
-        pipeline,
-        cache_config,
-        block_adapter=block_adapter,
-    )
-
-
-def enable_cache_for_flux2(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for Flux.2-dev pipeline.
-
-    Args:
-        pipeline: The Flux2 pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-    Returns:
-        A refresh function that can be called with a new ``num_inference_steps``
-        to update the cache context for the pipeline.
-    """
-    block_adapter = BlockAdapter(
-        transformer=pipeline.transformer,
-        blocks=[
-            pipeline.transformer.transformer_blocks,
-            pipeline.transformer.single_transformer_blocks,
-        ],
-        forward_pattern=[ForwardPattern.Pattern_1, ForwardPattern.Pattern_2],
-    )
-    return enable_cache_for_dit(
-        pipeline,
-        cache_config,
-        block_adapter=block_adapter,
-    )
-
-
-def enable_cache_for_stable_audio_open(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
-    """Enable cache-dit for Stable Audio Open pipeline.
-
-    Args:
-        pipeline: The StableAudioPipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-
-    Returns:
-        A refresh function that can be called to update cache context with new num_inference_steps.
-    """
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    # StableAudio is officially registered in CacheDiT as Pattern_3:
-    # https://github.com/vipshop/cache-dit/blob/69e82bd1/src/cache_dit/caching/block_adapters/__init__.py#L562
-    #
-    # Pattern_3 is required because StableAudioDiT uses cross-attention
-    # with static encoder_hidden_states that do not change inside the
-    # transformer block loop.
-    cache_dit.enable_cache(
-        BlockAdapter(
-            transformer=pipeline.transformer,
-            blocks=pipeline.transformer.transformer_blocks,
-            forward_pattern=ForwardPattern.Pattern_3,
-            params_modifiers=[
-                ParamsModifier(
-                    cache_config=db_cache_config,
-                    calibrator_config=calibrator_config,
-                )
-            ],
-        ),
-        cache_config=db_cache_config,
-    )
-
-    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
-        """Refresh cache context for the transformer with new num_inference_steps.
-
-        Args:
-            pipeline: The StableAudioPipeline instance.
-            num_inference_steps: New number of inference steps.
-            verbose: Whether to log refresh operations.
-        """
-        # Bypass SCM for step counts that don't support predefined masks (e.g., vLLM's 1-step dummy run)
-        scm_supported_steps = num_inference_steps >= 8 or num_inference_steps in (4, 6)
-
-        if cache_config.scm_steps_mask_policy is None or not scm_supported_steps:
-            cache_dit.refresh_context(pipeline.transformer, num_inference_steps=num_inference_steps, verbose=verbose)
-        else:
-            updated_scm_config = DBCacheConfig().reset(
-                num_inference_steps=num_inference_steps,
-                steps_computation_mask=cache_dit.steps_mask(
-                    mask_policy=cache_config.scm_steps_mask_policy,
-                    total_steps=num_inference_steps,
-                ),
-                steps_computation_policy=cache_config.scm_steps_policy,
-            )
-
-            cache_dit.refresh_context(
-                pipeline.transformer,
-                cache_config=updated_scm_config,
-                verbose=verbose,
-            )
-
-    return refresh_cache_context
-
-
-def enable_cache_for_sd3(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for StableDiffusion3Pipeline.
-
-    Args:
-        pipeline: The StableDiffusion3 pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-    """
-    block_adapter = BlockAdapter(
-        transformer=pipeline.transformer,
-        blocks=pipeline.transformer.transformer_blocks,
-        forward_pattern=ForwardPattern.Pattern_1,
-    )
-    return enable_cache_for_dit(
-        pipeline,
-        cache_config,
-        block_adapter=block_adapter,
-    )
-
-
-def enable_cache_for_ltx2(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for LTX2 pipelines (audio-video transformer blocks)."""
-    block_adapter = BlockAdapter(
-        transformer=pipeline.transformer,
-        blocks=pipeline.transformer.transformer_blocks,
-        # LTX2 blocks return (hidden_states, audio_hidden_states)
-        forward_pattern=ForwardPattern.Pattern_0,
-        # Treat audio_hidden_states as encoder_hidden_states in Pattern_0
-        check_forward_pattern=False,
-    )
-    return enable_cache_for_dit(
-        pipeline,
-        cache_config,
-        block_adapter=block_adapter,
-    )
-
-
-def enable_cache_for_hunyuan_image3(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for HunyuanImage3 pipeline.
-
-    HunyuanImage3 stores its main transformer stack at ``pipeline.model`` with
-    decoder blocks in ``pipeline.model.layers``.
-    """
-    block_adapter = BlockAdapter(
-        transformer=pipeline.transformer,
-        blocks=pipeline.transformer.layers,
-        forward_pattern=ForwardPattern.Pattern_4,
-        check_forward_pattern=False,
-    )
-
-    return enable_cache_for_dit(
-        pipeline,
-        cache_config,
-        block_adapter=block_adapter,
-    )
-
-
 ### Complex / custom enablers for DiT cache
 # NOTE: This case is rare (currently only Wan / Bagel); most DiT cache
-# enablement should be easy since the underlying library is intended to
-# be pretty generic.
+# enablement should be done by setting the _block_fwd_patterns in the models.
 
 
 # from https://github.com/vipshop/cache-dit/pull/542
@@ -513,6 +277,80 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_co
         num_high_noise_steps, num_low_noise_steps = _split_wan22_inference_steps(pipeline, num_inference_steps)
         refresh_trans_one(pipeline, num_high_noise_steps, verbose)
         refresh_trans_two(pipeline, num_low_noise_steps, verbose)
+
+    return refresh_cache_context
+
+
+def enable_cache_for_wan22_s2v(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
+    """Enable cache-dit for Wan2.2 S2V.
+
+    S2V uses a single transformer, but unlike the other Wan2.2 variants its
+    block loop calls each block as ``block(hidden_states, **kwargs)`` and keeps
+    the timestep modulation state in ``e`` rather than a second positional
+    tensor. CacheDiT Pattern_3 matches that contract: cache hidden states only
+    and pass the remaining conditioning through kwargs unchanged.
+
+    The S2V transformer has an ``after_transformer_block`` method that injects
+    audio embeddings after specific layers. The cached blocks wrapper
+    (Wan22S2VCachedBlocks._run_block) calls the original internally, so we
+    permanently replace it with a no-op on the transformer to prevent double
+    injection from the main forward loop.
+    """
+    db_cache_config = _build_db_cache_config(cache_config)
+    calibrator_config = None
+    if cache_config.enable_taylorseer:
+        taylorseer_order = cache_config.taylorseer_order
+        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
+        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
+
+    # Save the original after_transformer_block before cache-dit wrapping
+    transformer = pipeline.transformer
+    if hasattr(transformer, "after_transformer_block"):
+        transformer._cache_dit_original_after_transformer_block = transformer.after_transformer_block
+
+    Wan22S2VCachedAdapter.apply(
+        BlockAdapter(
+            transformer=transformer,
+            blocks=[transformer.blocks],
+            forward_pattern=[ForwardPattern.Pattern_3],
+            params_modifiers=[
+                ParamsModifier(cache_config=db_cache_config, calibrator_config=calibrator_config),
+            ],
+            has_separate_cfg=True,
+        ),
+        cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
+    )
+
+    # Permanently replace after_transformer_block with a no-op.
+    # The cached blocks wrapper (Wan22S2VCachedBlocks._run_block) already calls
+    # the original via _cache_dit_original_after_transformer_block.
+    def _noop_after_transformer_block(block_idx: int, hidden_states: torch.Tensor) -> torch.Tensor:
+        return hidden_states
+
+    transformer.after_transformer_block = _noop_after_transformer_block
+
+    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
+        """Refresh cache context for the S2V transformer."""
+        if cache_config.scm_steps_mask_policy is None:
+            cache_dit.refresh_context(
+                pipeline.transformer,
+                num_inference_steps=num_inference_steps,
+                verbose=verbose,
+            )
+        else:
+            cache_dit.refresh_context(
+                pipeline.transformer,
+                cache_config=DBCacheConfig().reset(
+                    num_inference_steps=num_inference_steps,
+                    steps_computation_mask=cache_dit.steps_mask(
+                        mask_policy=cache_config.scm_steps_mask_policy,
+                        total_steps=num_inference_steps,
+                    ),
+                    steps_computation_policy=cache_config.scm_steps_policy,
+                ),
+                verbose=verbose,
+            )
 
     return refresh_cache_context
 
@@ -1613,24 +1451,13 @@ CUSTOM_DIT_ENABLERS.update(
         "Wan22Pipeline": enable_cache_for_wan22,
         "Wan22I2VPipeline": enable_cache_for_wan22,
         "Wan22S2VPipeline": enable_cache_for_wan22_s2v,
-        "HunyuanImage3Pipeline": enable_cache_for_hunyuan_image3,
-        "FluxPipeline": enable_cache_for_flux,
-        "Flux2KleinPipeline": enable_cache_for_flux2_klein,
-        "LongCatImagePipeline": enable_cache_for_longcat_image,
-        "LongCatImageEditPipeline": enable_cache_for_longcat_image,
-        "StableAudioPipeline": enable_cache_for_stable_audio_open,
-        "StableDiffusion3Pipeline": enable_cache_for_sd3,
-        "LTX2Pipeline": enable_cache_for_ltx2,
-        "LTX2ImageToVideoPipeline": enable_cache_for_ltx2,
-        "LTX2TwoStagesPipeline": enable_cache_for_ltx2,
-        "LTX2ImageToVideoTwoStagesPipeline": enable_cache_for_ltx2,
-        "LTX23Pipeline": enable_cache_for_ltx2,
-        "LTX23ImageToVideoPipeline": enable_cache_for_ltx2,
         "BagelPipeline": enable_cache_for_bagel,
         "SenseNovaU1Pipeline": enable_cache_for_sensenova_u1,
         "GlmImagePipeline": enable_cache_for_glm_image,
         "Flux2Pipeline": enable_cache_for_flux2,
         "DreamIDOmniPipeline": enable_cache_for_dreamid_omni,
+        "Wan22TI2VPipeline": enable_cache_for_wan22,
+        "BagelPipeline": enable_cache_for_bagel,
         "ErnieImagePipeline": enable_cache_for_ernie_image,
         "HunyuanVideo15Pipeline": enable_cache_for_hunyuan_video_15,
         "HunyuanVideo15I2VPipeline": enable_cache_for_hunyuan_video_15,
@@ -1677,6 +1504,25 @@ class CacheDiTBackend(CacheBackend):
         self._refresh_func: Callable[[Any, int, bool], None] | None = None
         self._last_num_inference_steps: int | None = None
 
+    @staticmethod
+    def maybe_build_block_adapter(pipeline) -> BlockAdapter | None:
+        """If a module defines `_block_fwd_patterns`, build the corresponding
+        block adapter.
+        """
+        # TODO (Alex): Handle this more flexibly after PR lands:
+        # https://github.com/vllm-project/vllm-omni/pull/2811
+        transformer = default_get_pipeline_transformer(pipeline)
+        if not hasattr(transformer, "_block_fwd_patterns"):
+            return None
+
+        blocks, forward_pattern = zip(*transformer._block_fwd_patterns)
+        block_adapter = BlockAdapter(
+            transformer=transformer,
+            blocks=blocks,
+            forward_pattern=forward_pattern,
+        )
+        return block_adapter
+
     def enable(self, pipeline: Any) -> None:
         """Enable cache-dit on the pipeline if configured.
 
@@ -1695,8 +1541,11 @@ class CacheDiTBackend(CacheBackend):
             logger.info(f"Using custom cache-dit enabler for model: {pipeline_name}")
             self._refresh_func = CUSTOM_DIT_ENABLERS[pipeline_name](pipeline, self.config)
         else:
-            # For regular single-transformer models
-            self._refresh_func = enable_cache_for_dit(pipeline, self.config)
+            # Common case; either the model doesn't explicitly support dit cache yet,
+            # Or it defines its _block_fwd_patterns, which describes how we should
+            # create its block adapter.
+            block_adapter = self.maybe_build_block_adapter(pipeline)
+            self._refresh_func = enable_cache_for_dit(pipeline, self.config, block_adapter)
 
         self.enabled = True
         logger.info(f"Cache-dit enabled successfully on {pipeline_name}")

@@ -11,6 +11,7 @@ from typing import Any, cast
 import numpy as np
 import regex as re
 import torch
+from cache_dit import ForwardPattern
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -2018,6 +2019,11 @@ class HunyuanImagePostprocessor(nn.Module):
 
 
 class HunyuanImage3Model(nn.Module):
+    # FIXME: This is skipping fwd validate. I think it's wrong and should be pattern 3?
+    _block_fwd_patterns = {
+        "layers": ForwardPattern.Pattern_4,
+    }
+
     _sp_plan = {
         # Split custom_pos_emb tuple elements (cos, sin) at model forward input
         "pre_processor": {

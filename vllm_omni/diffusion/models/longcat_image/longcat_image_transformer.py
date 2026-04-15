@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+from cache_dit import ForwardPattern
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps, apply_rotary_emb, get_1d_rotary_pos_embed
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.normalization import AdaLayerNormContinuous, AdaLayerNormZero, AdaLayerNormZeroSingle
@@ -580,6 +581,11 @@ class LongCatImageTransformer2DModel(nn.Module):
 
     Supports Sequence Parallelism (Ulysses and Ring) when configured via OmniDiffusionConfig.
     """
+
+    _block_fwd_patterns = {
+        "transformer_blocks": ForwardPattern.Pattern_1,
+        "single_transformer_blocks": ForwardPattern.Pattern_1,
+    }
 
     _repeated_blocks = ["LongCatImageTransformerBlock", "LongCatImageSingleTransformerBlock"]
     _layerwise_offload_blocks_attrs = ["transformer_blocks", "single_transformer_blocks"]

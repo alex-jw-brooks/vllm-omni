@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from cache_dit import ForwardPattern
 from diffusers.models.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
     CombinedTimestepTextProjEmbeddings,
@@ -523,6 +524,11 @@ class FluxTransformer2DModel(nn.Module):
         axes_dims_rope (`Tuple[int]`, defaults to `(16, 56, 56)`):
             The dimensions to use for the rotary positional embeddings.
     """
+
+    _block_fwd_patterns = {
+        "transformer_blocks": ForwardPattern.Pattern_1,
+        "single_transformer_blocks": ForwardPattern.Pattern_1,
+    }
 
     # the small and frequently-repeated block(s) of a model
     # -- typically a transformer layer

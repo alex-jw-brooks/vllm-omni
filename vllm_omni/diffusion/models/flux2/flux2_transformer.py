@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import torch
+from cache_dit import ForwardPattern
 from diffusers.models.embeddings import (
     TimestepEmbedding,
     Timesteps,
@@ -754,6 +755,11 @@ class Flux2Transformer2DModel(nn.Module):
 
     Supports Sequence Parallelism (Ulysses and Ring) when configured via OmniDiffusionConfig.
     """
+
+    _block_fwd_patterns = {
+        "transformer_blocks": ForwardPattern.Pattern_1,
+        "single_transformer_blocks": ForwardPattern.Pattern_2,
+    }
 
     _repeated_blocks = ["Flux2TransformerBlock", "Flux2SingleTransformerBlock"]
     _sp_plan = {

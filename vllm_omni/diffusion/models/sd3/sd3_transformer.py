@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # TODO replace this with vLLM implementation
+from cache_dit import ForwardPattern
 from diffusers.models.embeddings import CombinedTimestepTextProjEmbeddings, PatchEmbed
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.normalization import AdaLayerNormContinuous, AdaLayerNormZero, SD35AdaLayerNormZeroX
@@ -254,6 +255,10 @@ class SD3TransformerBlock(nn.Module):
         context_pre_only (`bool`): Boolean to determine if we should add some blocks associated with the
             processing of `context` conditions.
     """
+
+    _block_fwd_patterns = {
+        "transformer_blocks": ForwardPattern.Pattern_1,
+    }
 
     def __init__(
         self,

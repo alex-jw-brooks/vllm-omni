@@ -23,6 +23,7 @@ import torch
 import torch.distributed
 import torch.nn as nn
 import torch.nn.functional as F
+from cache_dit import ForwardPattern
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
 from diffusers.utils import (
     BaseOutput,
@@ -1448,6 +1449,11 @@ class LTX2VideoTransformer3DModel(nn.Module):
         qk_norm (`str`, defaults to `"rms_norm_across_heads"`):
             The normalization layer to use.
     """
+
+    # TODO: We may need to support validation on the pattern skip here?
+    _block_fwd_patterns = {
+        "transformer_blocks": ForwardPattern.Pattern_0,
+    }
 
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = ["norm"]
