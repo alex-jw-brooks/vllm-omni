@@ -1515,10 +1515,10 @@ class CacheDiTBackend(CacheBackend):
         if not hasattr(transformer, "_block_fwd_patterns"):
             return None
 
-        blocks, forward_pattern = zip(*transformer._block_fwd_patterns)
+        block_attrs, forward_pattern = zip(*transformer._block_fwd_patterns.items())
         block_adapter = BlockAdapter(
             transformer=transformer,
-            blocks=blocks,
+            blocks=[getattr(transformer, block_attr) for block_attr in block_attrs],
             forward_pattern=forward_pattern,
         )
         return block_adapter

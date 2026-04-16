@@ -256,10 +256,6 @@ class SD3TransformerBlock(nn.Module):
             processing of `context` conditions.
     """
 
-    _block_fwd_patterns = {
-        "transformer_blocks": ForwardPattern.Pattern_1,
-    }
-
     def __init__(
         self,
         dim: int,
@@ -390,6 +386,10 @@ class SD3Transformer2DModel(nn.Module):
     """
     The Transformer model introduced in [Stable Diffusion 3](https://huggingface.co/papers/2403.03206).
     """
+
+    _block_fwd_patterns = {
+        "transformer_blocks": ForwardPattern.Pattern_1,
+    }
 
     _repeated_blocks = ["SD3TransformerBlock"]
     _layerwise_offload_blocks_attrs = ["transformer_blocks"]
