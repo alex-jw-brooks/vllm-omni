@@ -13,13 +13,6 @@ from vllm_omni.diffusion.cache.teacache.extractors import get_extractor
 from vllm_omni.diffusion.data import OmniDiffusionConfig, TransformerConfig
 from vllm_omni.diffusion.hooks import HookRegistry, ModelHook
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
-<<<<<<< HEAD
-from vllm_omni.diffusion.models.bagel.pipeline_bagel import BagelPipeline
-from vllm_omni.diffusion.models.flux2.pipeline_flux2 import Flux2Pipeline
-from vllm_omni.diffusion.models.longcat_image.pipeline_longcat_image import LongCatImagePipeline
-from vllm_omni.diffusion.models.stable_audio.pipeline_stable_audio import StableAudioPipeline
-=======
->>>>>>> 79e29eaa (make teacache estimator common)
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
@@ -92,77 +85,6 @@ class DefaultAdapter:
 
     @staticmethod
     def get_transformer(pipeline: Any) -> tuple[Any, str]:
-<<<<<<< HEAD
-        return pipeline.bagel, "Bagel"
-
-    @staticmethod
-    def install_hook(transformer: Any, hook: DataCollectionHook) -> None:
-        registry = HookRegistry.get_or_create(transformer)
-        registry.register_hook(hook._HOOK_NAME, hook)
-
-
-class StableAudioAdapter:
-    """Adapter for Stable Audio Open 1.0 coefficient estimation."""
-
-    @staticmethod
-    def load_pipeline(model_path: str, device: str = "cuda", dtype: torch.dtype = torch.float16) -> Any:
-        od_config = OmniDiffusionConfig.from_kwargs(model=model_path, dtype=dtype)
-
-        # Strictly necessary because we bypass loader.load_model()
-        with set_default_torch_dtype(dtype):
-            pipeline = StableAudioPipeline(od_config=od_config)
-
-        loader = DiffusersPipelineLoader(LoadConfig())
-        loader.load_weights(pipeline)
-        pipeline.to(device)
-        return pipeline
-
-    @staticmethod
-    def get_transformer(pipeline: Any) -> tuple[Any, str]:
-        return pipeline.transformer, "StableAudioDiTModel"
-
-    @staticmethod
-    def install_hook(transformer: Any, hook: DataCollectionHook) -> None:
-        registry = HookRegistry.get_or_create(transformer)
-        registry.register_hook(hook._HOOK_NAME, hook)
-
-
-class Flux2Adapter:
-    """Adapter for Flux2 model coefficient estimation."""
-
-    @staticmethod
-    def load_pipeline(model_path: str, device: str = "cuda", dtype: torch.dtype = torch.bfloat16) -> Flux2Pipeline:
-        """Load Flux2 pipeline for coefficient estimation."""
-        od_config = OmniDiffusionConfig.from_kwargs(model=model_path, dtype=dtype)
-        od_config.model_class_name = "Flux2Pipeline"
-
-        pipeline = Flux2Pipeline(od_config=od_config)
-        loader = DiffusersPipelineLoader(LoadConfig())
-        loader.load_weights(pipeline)
-        pipeline.to(device)
-        return pipeline
-
-    @staticmethod
-    def get_transformer(pipeline: Any) -> tuple[Any, str]:
-        return pipeline.transformer, pipeline.transformer.__class__.__name__
-
-    @staticmethod
-    def install_hook(transformer: Any, hook: DataCollectionHook) -> None:
-        registry = HookRegistry.get_or_create(transformer)
-        registry.register_hook(hook._HOOK_NAME, hook)
-
-
-class DefaultAdapter:
-    """Default adapter for standard diffusers pipelines."""
-
-    @staticmethod
-    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> Any:
-        raise NotImplementedError("DefaultAdapter.load_pipeline not implemented")
-
-    @staticmethod
-    def get_transformer(pipeline: Any) -> tuple[Any, str]:
-=======
->>>>>>> 79e29eaa (make teacache estimator common)
         return pipeline.transformer, pipeline.transformer.__class__.__name__
 
     @staticmethod
@@ -187,6 +109,12 @@ class BagelAdapter(DefaultAdapter):
     def install_hook(transformer: Any, hook: DataCollectionHook) -> None:
         registry = HookRegistry.get_or_create(transformer)
         registry.register_hook(hook._HOOK_NAME, hook)
+
+
+class Flux2Adapter(DefaultAdapter):
+    """Adapter for Flux2 model coefficient estimation."""
+
+    model_class_name = "Flux2Pipeline"
 
 
 class LongCatAdapter(DefaultAdapter):
