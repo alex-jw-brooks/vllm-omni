@@ -22,6 +22,7 @@ import torch.nn as nn
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.forward_context import get_forward_context
+from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
