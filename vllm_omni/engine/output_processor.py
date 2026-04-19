@@ -237,7 +237,7 @@ class OmniRequestState(RequestState):
 
         if not hasattr(base_output, "multimodal_output"):
             setattr(base_output, "multimodal_output", {})
-        if self.mm_accumulated is not None:
+        if self.mm_accumulated:
             mm_out = getattr(base_output, "multimodal_output")
             if isinstance(mm_out, dict):
                 for k, v in self.mm_accumulated.items():
