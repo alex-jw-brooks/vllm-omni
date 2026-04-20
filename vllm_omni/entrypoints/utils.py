@@ -854,8 +854,7 @@ def coerce_cumulative_messages(params: list[OmniSamplingParams]):
     # Coerce vLLM's default CUMULATIVE to DELTA so later stages don't
     # redundantly re-emit multimodal outputs. Explicit FINAL_ONLY /
     # DELTA is preserved so callers keep their choice.
-    for idx in range(len(params)):
-        sp = params[idx]
+    for idx, sp in enumerate(params):
         # For not OmniDiffusionParams don't set output kind
         if isinstance(sp, SamplingParams):
             params[idx] = maybe_coerce_to_delta_message(sp)
