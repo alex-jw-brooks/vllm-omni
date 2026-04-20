@@ -204,7 +204,7 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
         "messages": messages,
         "stream": False,
         "modalities": ["text"],
-        "sampling_params_list": [{"seed": seed, "temperature": 0}] * 3,
+        "sampling_params_list": [{"seed": seed, "temperature": 0, "max_tokens": 16}] * 3,
     }
 
     response_1 = openai_client.send_omni_request(request_config, request_num=1)[0]
