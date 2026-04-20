@@ -55,7 +55,9 @@ async def generate(
         out = omni_output.request_output
         if stage_id == 0:
             num_tokens = sum(len(output.token_ids) for output in out.outputs)
-            count = num_tokens
+            # Add since count may be cumulative or delta, but that's
+            # not the focus of the request abortion tests
+            count += num_tokens
 
         await asyncio.sleep(0.0)
 
