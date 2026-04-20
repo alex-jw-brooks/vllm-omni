@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import warnings
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -224,12 +223,11 @@ class AsyncOmni(EngineClient, OmniBase):
                 isinstance(sp, SamplingParams) and sp.output_kind == RequestOutputKind.CUMULATIVE
                 for sp in sampling_params_list
             ):
-                warnings.warn(
+                logger.warning(
                     "CUMULATIVE output_kind detected in sampling params for "
                     "async generate(). For streaming, use DELTA; for "
                     "non-streaming, use FINAL_ONLY. CUMULATIVE causes "
                     "redundant multimodal data transfer.",
-                    stacklevel=2,
                 )
 
             # Track per-request metrics
