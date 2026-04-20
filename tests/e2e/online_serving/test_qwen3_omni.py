@@ -187,7 +187,8 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     & produces the same output with greedy decoding.
 
     NOTE: The seed for this test is used as a regression test for the issue linked below;
-    https://github.com/vllm-project/vllm-omni/issues/2833
+    https://github.com/vllm-project/vllm-omni/issues/2833; without passing the sampling
+    params, this test will fail with the current default stage configs.
     """
     seed = 10
     img_res = generate_synthetic_image(224, 224, seed=seed)
