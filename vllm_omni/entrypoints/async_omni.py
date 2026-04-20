@@ -300,12 +300,6 @@ class AsyncOmni(EngineClient, OmniBase):
 
             # PD disaggregation: modify prefill-stage sampling params per request
             req_sp_list = list(sampling_params_list)
-
-            # Coerce vLLM's default CUMULATIVE to DELTA so later stages don't
-            # redundantly re-emit multimodal outputs. Explicit FINAL_ONLY /
-            # DELTA is preserved so callers keep their choice.
-            req_sp_list = self.coerce_cumulative_messages(req_sp_list)
-
             pd_pair = self._get_pd_separation_pair()
             if pd_pair is not None:
                 p_id = pd_pair[0]
@@ -358,35 +352,6 @@ class AsyncOmni(EngineClient, OmniBase):
             await self.abort(request_id)
             logger.info(f"[AsyncOmni] Request {request_id} failed (input error): {e}")
             raise
-
-    @staticmethod
-    def coerce_cumulative_messages(params: list[OmniSamplingParams]):
-        """Iterate over the sampling params and coerce any CUMULATIVE
-        messages to DELTA messages, respecting `.is_clone` on the params.
-
-        This is needed to avoid redundantly emitting redundant multimodal
-        data.
-        """
-        # Coerce vLLM's default CUMULATIVE to DELTA so later stages don't
-        # redundantly re-emit multimodal outputs. Explicit FINAL_ONLY /
-        # DELTA is preserved so callers keep their choice.
-        for idx in range(len(params)):
-            sp = params[idx]
-            # For not OmniDiffusionParams don't set output kind
-            if isinstance(sp, SamplingParams):
-                params[idx] = AsyncOmni._maybe_coerce_to_delta_message(sp)
-        return params
-
-    @staticmethod
-    def _maybe_coerce_to_delta_message(params: SamplingParams):
-        """If this is a CUMULATIVE message, coerce it to DELTA."""
-        if params.output_kind != RequestOutputKind.CUMULATIVE:
-            return params
-        if not params.skip_clone:
-            params = params.clone()
-            params.skip_clone = True
-        params.output_kind = RequestOutputKind.DELTA
-        return params
 
     async def _add_streaming_input_request(
         self,

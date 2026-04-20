@@ -8,12 +8,14 @@ from typing import Any, get_args, get_origin
 
 import yaml
 from vllm.logger import init_logger
+from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.transformers_utils.config import get_config, get_hf_file_to_dict
 from vllm.transformers_utils.repo_utils import file_or_path_exists
 
 from vllm_omni.config.stage_config import StageConfigFactory
 from vllm_omni.config.yaml_util import create_config, load_yaml_config, merge_configs
 from vllm_omni.entrypoints.stage_utils import _to_dict
+from vllm_omni.inputs.data import OmniSamplingParams
 from vllm_omni.platforms import current_omni_platform
 
 # Get the project root directory (2 levels up from this file)
@@ -842,3 +844,33 @@ def detect_pid_host() -> bool:
         return True
 
     return has_pid_host()
+
+
+### Helpers for handling delta messages
+def coerce_cumulative_messages(params: list[OmniSamplingParams]):
+    """Iterate over the sampling params and coerce any CUMULATIVE
+    messages to DELTA messages, respecting `.is_clone` on the params.
+
+    This is needed to avoid redundantly emitting redundant multimodal
+    data.
+    """
+    # Coerce vLLM's default CUMULATIVE to DELTA so later stages don't
+    # redundantly re-emit multimodal outputs. Explicit FINAL_ONLY /
+    # DELTA is preserved so callers keep their choice.
+    for idx in range(len(params)):
+        sp = params[idx]
+        # For not OmniDiffusionParams don't set output kind
+        if isinstance(sp, SamplingParams):
+            params[idx] = maybe_coerce_to_delta_message(sp)
+    return params
+
+
+def maybe_coerce_to_delta_message(params: SamplingParams):
+    """If this is a CUMULATIVE message, coerce it to DELTA."""
+    if params.output_kind != RequestOutputKind.CUMULATIVE:
+        return params
+    if not params.skip_clone:
+        params = params.clone()
+        params.skip_clone = True
+    params.output_kind = RequestOutputKind.DELTA
+    return params
