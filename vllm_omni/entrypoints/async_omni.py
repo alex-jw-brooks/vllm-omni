@@ -26,6 +26,7 @@ from vllm.v1.engine.exceptions import EngineDeadError
 
 from vllm_omni.entrypoints.client_request_state import ClientRequestState
 from vllm_omni.entrypoints.omni_base import OmniBase
+from vllm_omni.entrypoints.utils import coerce_cumulative_messages
 from vllm_omni.metrics.stats import OrchestratorAggregator as OrchestratorMetrics
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -217,8 +218,11 @@ class AsyncOmni(EngineClient, OmniBase):
                 sampling_params_list = self._maybe_expand_sampling_params(list(sampling_params_list))
             sampling_params_list = self.resolve_sampling_params_list(sampling_params_list)
 
-            # NOTE: CUMULATIVE -> DELTA coercion is handled by the wrapping entrypoints;
-            # this is done to keep consistency with vLLM's AsyncLLM's .generate patterns.
+            # TODO (Alex): CUMULATIVE output_kind is not yet fully supported for
+            # multimodal outputs, so for now we coerce to DELTA as a fallback for
+            # streaming. In general, this should be allowed though, and we should
+            # leave it up to the entrypoints to handle it in order to be consistent
+            # with upstream VLLM's AsyncLLM's API.
             if any(
                 isinstance(sp, SamplingParams) and sp.output_kind == RequestOutputKind.CUMULATIVE
                 for sp in sampling_params_list
@@ -226,9 +230,10 @@ class AsyncOmni(EngineClient, OmniBase):
                 logger.warning(
                     "CUMULATIVE output_kind detected in sampling params for "
                     "async generate(). For streaming, use DELTA; for "
-                    "non-streaming, use FINAL_ONLY. CUMULATIVE causes "
-                    "redundant multimodal data transfer.",
+                    "non-streaming, use FINAL_ONLY. Falling back to DELTA "
+                    "for now until CUMULATIVE is supported correctly."
                 )
+                sampling_params_list = coerce_cumulative_messages(list(sampling_params_list))
 
             # Track per-request metrics
             wall_start_ts = time.time()
