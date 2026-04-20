@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from pytest_mock import MockerFixture
+from vllm.sampling_params import RequestOutputKind, SamplingParams
 
 from vllm_omni.config.yaml_util import create_config
 from vllm_omni.diffusion.data import OmniDiffusionConfig
@@ -15,6 +16,7 @@ from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.entrypoints.utils import (
     _convert_dataclasses_to_dict,
     _filter_dict_like_object,
+    coerce_cumulative_messages,
     filter_dataclass_kwargs,
     load_and_resolve_stage_configs,
     load_stage_configs_from_yaml,
@@ -424,3 +426,23 @@ class TestLoadStageConfigsFromYaml:
 
         assert stages[0]["engine_args"]["nested"]["base"] == 1
         assert stages[0]["engine_args"]["nested"]["override"] == 2
+
+
+class TestCumulativeStreamingCoercion:
+    @pytest.mark.parametrize("skip_clone", [True, False])
+    def test_cumulative_default_becomes_delta(self, skip_clone):
+        """Ensure cumulative messages are coercible to delta."""
+        sp = SamplingParams(output_kind=RequestOutputKind.CUMULATIVE)
+        sp.skip_clone = skip_clone
+        result = coerce_cumulative_messages([sp])[0]
+        assert isinstance(result, SamplingParams)
+        assert result.output_kind == RequestOutputKind.DELTA
+        assert (skip_clone and sp is result) or (not skip_clone and sp is not result)
+
+    @pytest.mark.parametrize("output_kind", [(RequestOutputKind.DELTA), RequestOutputKind.FINAL_ONLY])
+    def test_non_cumulative_are_preserved(self, output_kind):
+        """Ensure messages that are not cumulative are preserved."""
+        sp = SamplingParams(output_kind=output_kind)
+        result = coerce_cumulative_messages([sp])[0]
+        assert isinstance(result, SamplingParams)
+        assert result.output_kind == output_kind
