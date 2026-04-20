@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import warnings
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -216,6 +217,20 @@ class AsyncOmni(EngineClient, OmniBase):
             ):
                 sampling_params_list = self._maybe_expand_sampling_params(list(sampling_params_list))
             sampling_params_list = self.resolve_sampling_params_list(sampling_params_list)
+
+            # NOTE: CUMULATIVE -> DELTA coercion is handled by the wrapping entrypoints;
+            # this is done to keep consistency with vLLM's AsyncLLM's .generate patterns.
+            if any(
+                isinstance(sp, SamplingParams) and sp.output_kind == RequestOutputKind.CUMULATIVE
+                for sp in sampling_params_list
+            ):
+                warnings.warn(
+                    "CUMULATIVE output_kind detected in sampling params for "
+                    "async generate(). For streaming, use DELTA; for "
+                    "non-streaming, use FINAL_ONLY. CUMULATIVE causes "
+                    "redundant multimodal data transfer.",
+                    stacklevel=2,
+                )
 
             # Track per-request metrics
             wall_start_ts = time.time()
