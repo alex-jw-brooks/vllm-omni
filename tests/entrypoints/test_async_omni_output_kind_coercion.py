@@ -1,65 +1,34 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-"""Regression for the ``output_kind`` coercion in ``AsyncOmni.generate``.
-
-PR #2911 unconditionally rewrote every SamplingParams.output_kind to DELTA,
-which silently overrode callers that had explicitly asked for FINAL_ONLY
-(e.g. the non-streaming PD prefill path). This coerces only the vLLM
-default CUMULATIVE; explicit DELTA / FINAL_ONLY is preserved and the
-caller's instance is cloned before mutation.
-
-This is a replay of the in-function coercion loop — a contract guard, not
-a full integration test.
-"""
+"""Ensure that the `output_kind` can be correctly coerced by AsyncOmni
+for multistage pipelines."""
 
 from __future__ import annotations
 
 import pytest
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 
+from vllm_omni.entrypoints.async_omni import AsyncOmni
+
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-def _coerce(sp_list):
-    req_sp_list = list(sp_list)
-    for idx in range(len(req_sp_list)):
-        sp = req_sp_list[idx]
-        if not isinstance(sp, SamplingParams):
-            continue
-        if sp.output_kind != RequestOutputKind.CUMULATIVE:
-            continue
-        if not sp.skip_clone:
-            sp = sp.clone()
-            sp.skip_clone = True
-            req_sp_list[idx] = sp
-        sp.output_kind = RequestOutputKind.DELTA
-    return req_sp_list
-
-
-def test_cumulative_default_becomes_delta():
-    sp = SamplingParams()
-    result = _coerce([sp])[0]
+@pytest.mark.parametrize("skip_clone", [True, False])
+def test_cumulative_default_becomes_delta(skip_clone):
+    """Ensure cumulative messages are coercible to delta."""
+    sp = SamplingParams(output_kind=RequestOutputKind.CUMULATIVE)
+    sp.skip_clone = skip_clone
+    result = AsyncOmni.coerce_cumulative_messages([sp])[0]
+    assert isinstance(result, SamplingParams)
     assert result.output_kind == RequestOutputKind.DELTA
+    assert (skip_clone and sp is result) or (not skip_clone and sp is not result)
 
 
-def test_explicit_final_only_is_preserved():
-    sp = SamplingParams(output_kind=RequestOutputKind.FINAL_ONLY)
-    result = _coerce([sp])[0]
-    assert result is sp
-    assert result.output_kind == RequestOutputKind.FINAL_ONLY
-
-
-def test_explicit_delta_is_preserved():
-    sp = SamplingParams(output_kind=RequestOutputKind.DELTA)
-    result = _coerce([sp])[0]
-    assert result is sp
-    assert result.output_kind == RequestOutputKind.DELTA
-
-
-def test_cumulative_caller_instance_is_cloned_not_mutated():
-    sp = SamplingParams()
-    result = _coerce([sp])[0]
-    assert result is not sp
-    assert sp.output_kind == RequestOutputKind.CUMULATIVE
-    assert result.output_kind == RequestOutputKind.DELTA
+@pytest.mark.parametrize("output_kind", [(RequestOutputKind.DELTA), RequestOutputKind.FINAL_ONLY])
+def test_non_cumulative_are_preserved(output_kind):
+    """Ensure messages that are not cumulative are preserved."""
+    sp = SamplingParams(output_kind=output_kind)
+    result = AsyncOmni.coerce_cumulative_messages([sp])[0]
+    assert isinstance(result, SamplingParams)
+    assert result.output_kind == output_kind
