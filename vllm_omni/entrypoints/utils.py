@@ -844,9 +844,10 @@ def detect_pid_host() -> bool:
 
 
 ### Helpers for handling delta messages
-def coerce_cumulative_messages(params: list[OmniSamplingParams]):
-    """Iterate over the sampling params and coerce any CUMULATIVE
-    messages to DELTA messages, respecting `.is_clone` on the params.
+def coerce_param_message_types(params: list[OmniSamplingParams], is_streaming: bool):
+    """Iterate over the sampling params and convert to the message types
+    to DELTA messages, if streaming is enabled, or FINAL_ONLY if
+    it's disabled, while respecting `.is_clone` on the params.
 
     This is needed to avoid redundantly emitting redundant multimodal
     data.
@@ -857,16 +858,22 @@ def coerce_cumulative_messages(params: list[OmniSamplingParams]):
     for idx, sp in enumerate(params):
         # For not OmniDiffusionParams don't set output kind
         if isinstance(sp, SamplingParams):
-            params[idx] = maybe_coerce_to_delta_message(sp)
+            params[idx] = maybe_coerce_to_message_type(sp, is_streaming)
     return params
 
 
-def maybe_coerce_to_delta_message(params: SamplingParams):
-    """If this is a CUMULATIVE message, coerce it to DELTA."""
-    if params.output_kind != RequestOutputKind.CUMULATIVE:
+def maybe_coerce_to_message_type(params: SamplingParams, is_streaming: bool):
+    """If this is a CUMULATIVE message, coerce it to DELTA if streaming, otherwise FINAL_ONLY."""
+    target_type = RequestOutputKind.DELTA if is_streaming else RequestOutputKind.FINAL_ONLY
+    if params.output_kind == target_type:
         return params
+    elif is_streaming and params.output_kind == RequestOutputKind.FINAL_ONLY:
+        logger.warning("Request appears to be streaming, but got request type final only!")
+    elif not is_streaming and params.output_kind == RequestOutputKind.DELTA:
+        logger.warning("Request appears to not be streaming, but got request type delta!")
+
     if not params.skip_clone:
         params = params.clone()
         params.skip_clone = True
-    params.output_kind = RequestOutputKind.DELTA
+    params.output_kind = target_type
     return params

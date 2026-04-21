@@ -34,7 +34,7 @@ from vllm_omni.entrypoints.openai.protocol.audio import (
     SpeechBatchItem,
     SpeechBatchItemResult,
 )
-from vllm_omni.entrypoints.utils import coerce_cumulative_messages
+from vllm_omni.entrypoints.utils import coerce_param_message_types
 from vllm_omni.model_executor.models.fish_speech.prompt_utils import (
     build_fish_text_only_prompt_ids,
     estimate_fish_voice_clone_prompt_len_from_normalized,
@@ -1510,8 +1510,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         # we don't emit redundant MM data & drain after emitting.
         # list() makes a copy to avoid mutating the params.
         sampling_params_list = list(self.engine_client.default_sampling_params_list)
-        if request.stream:
-            sampling_params_list = coerce_cumulative_messages(sampling_params_list)
+        sampling_params_list = coerce_param_message_types(sampling_params_list, request.stream)
 
         if self._is_fish_speech:
             validation_error = self._validate_fish_tts_request(request)

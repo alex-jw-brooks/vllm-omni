@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.protocol.chat_completion import OmniChatCompletionResponse
-from vllm_omni.entrypoints.utils import coerce_cumulative_messages
+from vllm_omni.entrypoints.utils import coerce_param_message_types
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 
 try:
@@ -402,10 +402,10 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                     # Use standard OpenAI API parameters for comprehension stage
                     sampling_params_list = self._build_sampling_params_list_from_request(request)
 
-                if request.stream:
-                    # If this is a streaming (output) request, coerce cumulative outputs
-                    # to delta to ensure emitted outputs are correctly drained
-                    sampling_params_list = coerce_cumulative_messages(sampling_params_list)
+                # If this is a streaming (output) request, coerce cumulative outputs
+                # to delta to ensure emitted outputs are correctly drained. Otherwise
+                # convert cumulative to Final Only to ensure the output is correct.
+                sampling_params_list = coerce_param_message_types(sampling_params_list, request.stream)
 
                 # Apply user-specified overrides to diffusion stage(s) for image generation
                 for idx, sp in enumerate(sampling_params_list):
