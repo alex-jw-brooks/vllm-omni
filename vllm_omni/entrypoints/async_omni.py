@@ -282,7 +282,6 @@ class AsyncOmni(EngineClient, OmniBase):
                 sampling_params_list = self._maybe_expand_sampling_params(list(sampling_params_list))
             sampling_params_list = self.resolve_sampling_params_list(sampling_params_list)
 
-
             # Track per-request metrics
             wall_start_ts = time.time()
             req_start_ts: dict[str, float] = {}
