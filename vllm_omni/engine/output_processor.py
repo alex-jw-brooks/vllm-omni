@@ -120,9 +120,10 @@ class OmniRequestState(RequestState):
                         # TODO (Alex) - this behavior should be consistent with what we see with
                         # delta messages in streaming and not have special handling for magic keys
                         if k == "audio":
-                            # When the audio tensor shape is inconsistent, torch.cat will fail.
-                            # We need to use torch.cat in -1 dimension.
-                            continue
+                            # Concatenate delta audio chunks (1-D) into the full waveform.
+                            # Each entry is a per-step slice; flatten to -1 so chunks with
+                            # inconsistent leading dims can still be joined on the sample axis.
+                            self.mm_accumulated[k] = torch.cat([t.reshape(-1) for t in v], dim=0)
                         elif k == "sr":
                             # Sample rate is a constant scalar, keep last value.
                             self.mm_accumulated[k] = v[-1]

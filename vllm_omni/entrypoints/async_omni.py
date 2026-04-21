@@ -282,29 +282,6 @@ class AsyncOmni(EngineClient, OmniBase):
                 sampling_params_list = self._maybe_expand_sampling_params(list(sampling_params_list))
             sampling_params_list = self.resolve_sampling_params_list(sampling_params_list)
 
-            # TODO (Alex): CUMULATIVE output_kind is not yet fully supported for
-            # multimodal outputs, so for now we coerce to DELTA as a fallback for
-            # streaming if this is called directly. If an endpoint isn't streaming,
-            # it should correctly coerce the output kinds prior to this point. The only
-            # exception to this is realtime_connection, which will fall through here
-            # and coerce to deltas, because it doesn't pass sampling params.
-            #
-            # In the future, we should correctly support CUMULATIVE outputkind as the
-            # default to direct calls to .generate() to align with vLLM's AsyncLLM API.
-            if any(
-                isinstance(sp, SamplingParams) and sp.output_kind == RequestOutputKind.CUMULATIVE
-                for sp in sampling_params_list
-            ):
-                logger.warning(
-                    "CUMULATIVE output_kind detected in sampling params for "
-                    "async generate(). For streaming, use DELTA; for "
-                    "non-streaming, use FINAL_ONLY. Falling back to DELTA "
-                    "for now until CUMULATIVE is supported correctly."
-                )
-                sampling_params_list = coerce_param_message_types(
-                    list(sampling_params_list),
-                    is_streaming=True,
-                )
 
             # Track per-request metrics
             wall_start_ts = time.time()
