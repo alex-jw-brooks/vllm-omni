@@ -260,6 +260,7 @@ async def run_single_request(
                     elif isinstance(audio_data, torch.Tensor):
                         new_chunks = [audio_data]
                         audio_last_tensor = audio_data
+                        audio_list_consumed = 1
                     else:
                         new_chunks = []
 
