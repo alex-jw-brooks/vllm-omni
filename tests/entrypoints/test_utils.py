@@ -16,7 +16,7 @@ from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.entrypoints.utils import (
     _convert_dataclasses_to_dict,
     _filter_dict_like_object,
-    coerce_cumulative_messages,
+    coerce_param_message_types,
     filter_dataclass_kwargs,
     load_and_resolve_stage_configs,
     load_stage_configs_from_yaml,
@@ -430,19 +430,31 @@ class TestLoadStageConfigsFromYaml:
 
 class TestCumulativeStreamingCoercion:
     @pytest.mark.parametrize("skip_clone", [True, False])
-    def test_cumulative_default_becomes_delta(self, skip_clone):
-        """Ensure cumulative messages are coercible to delta."""
+    def test_cumulative_default_becomes_delta_if_stream(self, skip_clone):
+        """Ensure cumulative messages are coercible to delta if streaming."""
         sp = SamplingParams(output_kind=RequestOutputKind.CUMULATIVE)
         sp.skip_clone = skip_clone
-        result = coerce_cumulative_messages([sp])[0]
+        result = coerce_param_message_types([sp], is_streaming=True)[0]
         assert isinstance(result, SamplingParams)
         assert result.output_kind == RequestOutputKind.DELTA
         assert (skip_clone and sp is result) or (not skip_clone and sp is not result)
 
-    @pytest.mark.parametrize("output_kind", [(RequestOutputKind.DELTA), RequestOutputKind.FINAL_ONLY])
-    def test_non_cumulative_are_preserved(self, output_kind):
-        """Ensure messages that are not cumulative are preserved."""
-        sp = SamplingParams(output_kind=output_kind)
-        result = coerce_cumulative_messages([sp])[0]
+    @pytest.mark.parametrize("skip_clone", [True, False])
+    def test_cumulative_default_becomes_final_only_if_not_stream(self, skip_clone):
+        """Ensure cumulative messages are coercible to final only if not streaming."""
+        sp = SamplingParams(output_kind=RequestOutputKind.CUMULATIVE)
+        sp.skip_clone = skip_clone
+        result = coerce_param_message_types([sp], is_streaming=False)[0]
         assert isinstance(result, SamplingParams)
-        assert result.output_kind == output_kind
+        assert result.output_kind == RequestOutputKind.FINAL_ONLY
+        assert (skip_clone and sp is result) or (not skip_clone and sp is not result)
+
+    @pytest.mark.parametrize("is_streaming", [True, False])
+    @pytest.mark.parametrize("output_kind", [RequestOutputKind.DELTA, RequestOutputKind.FINAL_ONLY])
+    def test_non_cumulative_are_coerced(self, output_kind, is_streaming):
+        """Ensure non-cumulative params are coerced to the target type."""
+        sp = SamplingParams(output_kind=output_kind)
+        expected = RequestOutputKind.DELTA if is_streaming else RequestOutputKind.FINAL_ONLY
+        result = coerce_param_message_types([sp], is_streaming=is_streaming)[0]
+        assert isinstance(result, SamplingParams)
+        assert result.output_kind == expected

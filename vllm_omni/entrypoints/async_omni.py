@@ -32,7 +32,7 @@ from vllm_omni.entrypoints.omni_base import (
     OmniEngineDeadError,
 )
 from vllm_omni.inputs.data import OmniSamplingParams
-from vllm_omni.entrypoints.utils import coerce_cumulative_messages
+from vllm_omni.entrypoints.utils import coerce_param_message_types
 from vllm_omni.metrics.stats import OrchestratorAggregator as OrchestratorMetrics
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.platforms import current_omni_platform
@@ -284,9 +284,13 @@ class AsyncOmni(EngineClient, OmniBase):
 
             # TODO (Alex): CUMULATIVE output_kind is not yet fully supported for
             # multimodal outputs, so for now we coerce to DELTA as a fallback for
-            # streaming. In general, this should be allowed though, and we should
-            # leave it up to the entrypoints to handle it in order to be consistent
-            # with upstream VLLM's AsyncLLM's API.
+            # streaming if this is called directly. If an endpoint isn't streaming,
+            # it should correctly coerce the output kinds prior to this point. The only
+            # exception to this is realtime_connection, which will fall through here
+            # and coerce to deltas, because it doesn't pass sampling params.
+            #
+            # In the future, we should correctly support CUMULATIVE outputkind as the
+            # default to direct calls to .generate() to align with vLLM's AsyncLLM API.
             if any(
                 isinstance(sp, SamplingParams) and sp.output_kind == RequestOutputKind.CUMULATIVE
                 for sp in sampling_params_list
@@ -297,7 +301,10 @@ class AsyncOmni(EngineClient, OmniBase):
                     "non-streaming, use FINAL_ONLY. Falling back to DELTA "
                     "for now until CUMULATIVE is supported correctly."
                 )
-                sampling_params_list = coerce_cumulative_messages(list(sampling_params_list))
+                sampling_params_list = coerce_param_message_types(
+                    list(sampling_params_list),
+                    is_streaming=True,
+                )
 
             # Track per-request metrics
             wall_start_ts = time.time()
