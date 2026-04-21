@@ -6,6 +6,7 @@ explicitly patch values that differ from vLLM.
 
 import argparse
 import inspect
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -172,6 +173,23 @@ def test_qwen3_tts_code2wav_injects_max_position_embeddings(monkeypatch):
             "max_position_embeddings": 65536,
         },
     }
+
+def test_from_cli_args_raise_for_invalid_types():
+    """Ensures that from_cli_args does type validation."""
+    ns = argparse.Namespace(model=34983589)
+    with pytest.raises(ValidationError):
+        OmniEngineArgs.from_cli_args(ns)
+
+
+def test_invalid_cli_args_logs_unrecognized_kwargs(caplog):
+    """Ensures that from_cli_args logs unrecognized namespace keys."""
+    logger_module = "vllm_omni.engine.arg_utils"
+    logging.getLogger(logger_module).addHandler(caplog.handler)
+    # NOTE: for now we keep this at debug level, since depending on where we
+    # pull the kwargs dict from, this could be noisy, but it's still useful.
+    with caplog.at_level(logging.DEBUG, logger=logger_module):
+        OmniEngineArgs.from_cli_args(argparse.Namespace(garbage_arg="Foo"))
+    assert any("garbage_arg" in r.message for r in caplog.records)
 
 
 def test_stage_specific_text_config_override():
