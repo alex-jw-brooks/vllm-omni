@@ -32,7 +32,6 @@ from vllm_omni.entrypoints.omni_base import (
     OmniEngineDeadError,
 )
 from vllm_omni.inputs.data import OmniSamplingParams
-from vllm_omni.entrypoints.utils import coerce_param_message_types
 from vllm_omni.metrics.stats import OrchestratorAggregator as OrchestratorMetrics
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.platforms import current_omni_platform
