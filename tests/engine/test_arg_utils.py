@@ -174,6 +174,7 @@ def test_qwen3_tts_code2wav_injects_max_position_embeddings(monkeypatch):
         },
     }
 
+
 def test_from_cli_args_raise_for_invalid_types():
     """Ensures that from_cli_args does type validation."""
     ns = argparse.Namespace(model=34983589)
