@@ -39,7 +39,7 @@ def talker2code2wav(
         output = talker_output.outputs[0]
         # audio_codes shape: [num_frames, Q] where Q=num_quantizers (16)
         audio_codes = output.multimodal_output["audio_codes"].to(torch.long)
-        token_ids = output.token_ids
+        token_ids = output.cumulative_token_ids
         # token_ids provides an upper bound on the newly generated codec span.
         # audio_codes may still contain zero-padded / invalid rows, so trim only
         # after filtering valid frames instead of trying to align EOS indices.

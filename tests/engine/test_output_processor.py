@@ -184,3 +184,20 @@ def test_final_only_consolidates_modality_keys(mm_type):
     audio = result.outputs[0].multimodal_output[mm_type]
     assert isinstance(audio, torch.Tensor)
     assert audio.shape == (800,)
+
+
+def test_cumulative_token_ids_always_set():
+    """cumulative_token_ids is set for all output kinds."""
+    for kind in (RequestOutputKind.DELTA, RequestOutputKind.CUMULATIVE, RequestOutputKind.FINAL_ONLY):
+        s = _make_state(kind)
+        out = s._new_completion_output([42], None, None)
+        assert hasattr(out, "cumulative_token_ids")
+        # The mock detokenizer has output_token_ids=[0]
+        assert list(out.cumulative_token_ids) == [0]
+
+
+def test_cumulative_token_ids_is_a_copy():
+    """cumulative_token_ids must be a snapshot, not a live reference."""
+    s = _make_state(RequestOutputKind.DELTA)
+    out = s._new_completion_output([42], None, None)
+    assert out.cumulative_token_ids is not _DETOK.output_token_ids

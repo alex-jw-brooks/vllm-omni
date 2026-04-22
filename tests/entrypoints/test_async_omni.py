@@ -52,7 +52,7 @@ def get_async_omni_instance(fake_add_request=_noop, fake_abort_request=_noop) ->
     omni.log_stats = False
     omni.request_states = {}
     omni._final_output_handler = lambda: None
-    omni.resolve_sampling_params_list = lambda params: params
+    omni.resolve_sampling_params_list = lambda params, allow_delta_coercion: params
     omni._compute_final_stage_id = lambda output_modalities: 0
     omni._process_orchestrator_results = fake_process_results
     omni._log_summary_and_cleanup = lambda request_id: omni.request_states.pop(request_id, None)

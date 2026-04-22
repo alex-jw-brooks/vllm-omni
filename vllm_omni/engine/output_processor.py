@@ -114,7 +114,8 @@ class OmniRequestState(RequestState):
             # Log and continue without crashing the output pipeline
             logger.exception("Error accumulating multimodal tensor")
 
-    _MODALITY_KEYS = frozenset({"image", "audio", "latent"})
+    # These keys are used for modality type objects that are dropped between outputs
+    _MODALITY_KEYS = frozenset({"image", "audio"})
 
     def _consolidate_multimodal_tensors(self) -> None:
         """Consolidate accumulated tensor lists into single tensors via concatenation.
@@ -247,6 +248,11 @@ class OmniRequestState(RequestState):
     ) -> Any:
         # Reuse base text/logprobs logic, then annotate with pooling_result.
         base_output = super()._new_completion_output(token_ids, finish_reason, stop_reason, routed_experts)
+
+        # Inter-stage processors need the full cumulative token sequence.
+        # In DELTA mode, base_output.token_ids only has the latest step's
+        # tokens, so we always store a cumulative copy here.
+        base_output.cumulative_token_ids = list(self.detokenizer.output_token_ids)
 
         if not hasattr(base_output, "multimodal_output"):
             setattr(base_output, "multimodal_output", {})
