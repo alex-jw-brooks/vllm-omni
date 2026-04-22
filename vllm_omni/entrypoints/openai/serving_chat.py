@@ -1025,12 +1025,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                             cur_channel = harmony_parser.current_channel
                             cur_recipient = harmony_parser.current_recipient
                         else:
-                            # output.text is cumulative, extract only the delta portion
-                            previous_text = previous_texts[i] if previous_texts else ""
-                            if output.text is not None:
-                                delta_text = output.text[len(previous_text) :]
-                            else:
-                                delta_text = ""
+                            delta_text = output.text or ""
 
                         if not delta_text and not output.token_ids and not previous_num_tokens[i]:
                             # Chunked prefill case, don't return empty chunks
