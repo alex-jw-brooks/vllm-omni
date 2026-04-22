@@ -334,6 +334,7 @@ def test_non_async_processor_prepends_ref_code_and_sets_trim_context():
     output = SimpleNamespace(
         multimodal_output={"audio_codes": audio_codes, "ref_code": ref_code},
         token_ids=list(range(3)),
+        cumulative_token_ids=list(range(3)),
     )
     stage = SimpleNamespace(
         engine_outputs=[SimpleNamespace(outputs=[output], finished=True)],
@@ -379,6 +380,7 @@ def test_non_async_processor_filters_out_of_range_codec_values():
     output = SimpleNamespace(
         multimodal_output={"audio_codes": audio_codes, "ref_code": ref_code},
         token_ids=list(range(4)),
+        cumulative_token_ids=list(range(4)),
     )
     stage = SimpleNamespace(
         engine_outputs=[SimpleNamespace(outputs=[output], finished=True)],
