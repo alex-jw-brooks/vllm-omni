@@ -115,16 +115,25 @@ class OmniRequestState(RequestState):
             # Log and continue without crashing the output pipeline
             logger.exception("Error accumulating multimodal tensor")
 
+    _MODALITY_KEYS = frozenset({"image", "audio", "latent"})
+
     def _consolidate_multimodal_tensors(self) -> None:
-        """Consolidate accumulated tensor lists into single tensors via concatenation."""
+        """Consolidate accumulated tensor lists into single tensors via concatenation.
+
+        Only DELTA drains modality keys per-step, so they will never be lists here and
+        can be skipped.  For CUMULATIVE and FINAL_ONLY, modality keys accumulate across
+        steps and need consolidation.
+        """
         if not self.mm_accumulated:
             return
+
+        skip_modality = self.output_kind == RequestOutputKind.DELTA
         try:
             for k, v in self.mm_accumulated.items():
+                if skip_modality and k in self._MODALITY_KEYS:
+                    continue
                 if isinstance(v, list) and v and isinstance(v[0], torch.Tensor):
                     try:
-                        # TODO (Alex) - this behavior should be consistent with what we see with
-                        # delta messages in streaming and not have special handling for magic keys
                         if k == "audio":
                             # Concatenate delta audio chunks (1-D) into the full waveform.
                             # Each entry is a per-step slice; flatten to -1 so chunks with
@@ -189,15 +198,13 @@ class OmniRequestState(RequestState):
             )
 
         finished = finish_reason is not None
-        final_only = self.output_kind == RequestOutputKind.FINAL_ONLY
+        is_final_only = self.output_kind == RequestOutputKind.FINAL_ONLY
+        is_delta = self.output_kind == RequestOutputKind.DELTA
 
-        if not finished and final_only:
+        if not finished and is_final_only:
             return None
 
-        # Consolidate accumulated tensors when finishing. For DELTA, only
-        # the output-modality key (mm_type) is drained per step; we need to
-        # keep hidden states so that they can be transferred between stages.
-        if finished:
+        if not is_delta:
             self._consolidate_multimodal_tensors()
 
         if self.stream_interval > 1:
@@ -214,7 +221,7 @@ class OmniRequestState(RequestState):
             ):
                 return None
 
-            if self.output_kind == RequestOutputKind.DELTA:
+            if is_delta:
                 # Send tokens from the offset in DELTA mode, otherwise all
                 # tokens are sent.
                 new_token_ids = self.detokenizer.output_token_ids[self.sent_tokens_offset :]
@@ -242,7 +249,6 @@ class OmniRequestState(RequestState):
     ) -> Any:
         # Reuse base text/logprobs logic, then annotate with pooling_result.
         base_output = super()._new_completion_output(token_ids, finish_reason, stop_reason, routed_experts)
-        is_delta = self.output_kind == RequestOutputKind.DELTA
 
         if not hasattr(base_output, "multimodal_output"):
             setattr(base_output, "multimodal_output", {})
@@ -254,18 +260,9 @@ class OmniRequestState(RequestState):
             else:
                 setattr(base_output, "multimodal_output", self.mm_accumulated)
 
-        # For DELTA, drain only the output-modality key so it isn't
-        # re-emitted.  Hidden-state keys (e.g. "0", "24") are left intact
-        # because downstream stages need the full accumulated embeddings
-        # for inter-stage transfer.
-        if is_delta:
-            # HACK (Alex) - drop modality specific keys. We should do this in a
-            # cleaner way rather than hardcoding keys here, and instead have a
-            # common enum to pull these from
-            for modality_key in ["image", "audio", "latent"]:
-                res = self.mm_accumulated.pop(modality_key, None)
-                if res is not None:
-                    logger.debug("Drained deltas for data type %s", modality_key)
+        if self.output_kind == RequestOutputKind.DELTA:
+            for modality_key in self._MODALITY_KEYS:
+                self.mm_accumulated.pop(modality_key, None)
 
         return base_output
 
