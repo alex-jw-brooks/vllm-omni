@@ -280,7 +280,13 @@ class AsyncOmni(EngineClient, OmniBase):
                 and not isinstance(sampling_params_list, (str, bytes))
             ):
                 sampling_params_list = self._maybe_expand_sampling_params(list(sampling_params_list))
-            sampling_params_list = self.resolve_sampling_params_list(sampling_params_list)
+
+            # Set the output kind to delta output if sampling params were omitted,
+            # since AsyncOmni is typically used for streaming.
+            sampling_params_list = self.resolve_sampling_params_list(
+                sampling_params_list,
+                allow_delta_coercion=True,
+            )
 
             # Track per-request metrics
             wall_start_ts = time.time()

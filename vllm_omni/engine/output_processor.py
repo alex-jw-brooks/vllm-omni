@@ -39,7 +39,6 @@ class OmniRequestState(RequestState):
         # NOTE: Keys in mm_accumulated matter, because they dictate which
         # outputs are drained (i.e., only drain modality keys, don't drain
         # hidden states).
-        # TODO (Alex) Make this cleaner in the future.
         self.mm_accumulated: dict[str, Any] = {}
 
     @staticmethod
@@ -135,10 +134,9 @@ class OmniRequestState(RequestState):
                 if isinstance(v, list) and v and isinstance(v[0], torch.Tensor):
                     try:
                         if k == "audio":
-                            # Concatenate delta audio chunks (1-D) into the full waveform.
-                            # Each entry is a per-step slice; flatten to -1 so chunks with
-                            # inconsistent leading dims can still be joined on the sample axis.
-                            self.mm_accumulated[k] = torch.cat([t.reshape(-1) for t in v], dim=0)
+                            # Audio chunks are usually 2D (i.e., 1, N); concatenate
+                            # on the last axis to preserve the channel dimension.
+                            self.mm_accumulated[k] = torch.cat(v, dim=-1)
                         elif k == "sr":
                             # Sample rate is a constant scalar, keep last value.
                             self.mm_accumulated[k] = v[-1]
@@ -204,7 +202,7 @@ class OmniRequestState(RequestState):
         if not finished and is_final_only:
             return None
 
-        if not is_delta:
+        if finished or not is_delta:
             self._consolidate_multimodal_tensors()
 
         if self.stream_interval > 1:

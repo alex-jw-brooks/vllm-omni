@@ -17,7 +17,7 @@ from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.entrypoints.client_request_state import ClientRequestState
 from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
-from vllm_omni.entrypoints.utils import detect_explicit_cli_keys, get_final_stage_id_for_e2e
+from vllm_omni.entrypoints.utils import coerce_param_message_types, detect_explicit_cli_keys, get_final_stage_id_for_e2e
 from vllm_omni.metrics.stats import OrchestratorAggregator as OrchestratorMetrics
 from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
 from vllm_omni.outputs import OmniRequestOutput
@@ -246,9 +246,14 @@ class OmniBase(PDDisaggregationMixin):
     def resolve_sampling_params_list(
         self,
         sampling_params_list: Sequence[Any] | Any | None,
+        allow_delta_coercion: bool = False,
     ) -> Sequence[Any]:
         if sampling_params_list is None:
             normalized = self.default_sampling_params_list
+            # Set the output kind to delta since no params were specified
+            if allow_delta_coercion:
+                normalized = coerce_param_message_types(list(normalized), is_streaming=True)
+
         elif isinstance(sampling_params_list, Sequence) and not isinstance(sampling_params_list, (str, bytes)):
             normalized = sampling_params_list
         elif self.num_stages == 1:

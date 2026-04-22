@@ -392,6 +392,10 @@ async def run_all(args):
 
         # Use default sampling params from stage config (they are pre-configured
         # in the YAML for each stage).
+        #
+        # NOTE: Since we do not set the sampling params directly, .generate in
+        # will automatically set the output kind to delta, since this is what
+        # makes sense for most multimodal use-cases.
         sampling_params_list = None
 
         output_dir = args.output_dir

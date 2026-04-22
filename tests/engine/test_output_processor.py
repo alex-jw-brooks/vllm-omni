@@ -86,29 +86,43 @@ def test_delta_drains_output_modality_per_step():
     assert torch.equal(hs2, out2_hidden[1])
 
 
-def test_cumulative_does_not_drain():
-    """Ensure that calling _new_completion_output doesn't clear accumulated mm data."""
+def test_cumulative_emits_consolidated_audio_each_step():
+    """Ensure cumulative accumulates and consolidates modality keys every step."""
     s = _make_state(RequestOutputKind.CUMULATIVE)
-    t1 = torch.ones(5)
-    s.add_multimodal_tensor(t1, "audio")
-    s._new_completion_output([1], None, None)
+    # NOTE: audio is usually emitted as (1, size) chunks; we need to be sure
+    # to not change the tensor dimension when we consolidate
+    audio1 = torch.ones(1, 500)
+    s.add_multimodal_tensor(audio1, mm_type="audio")
+    req_out = s.make_request_output([1], None, None, None)
+    assert req_out is not None
+    cons_audio = req_out.outputs[0].multimodal_output["audio"]
+    # Single chunk keeps original shape [1, 500]
+    assert isinstance(cons_audio, torch.Tensor) and cons_audio.shape == audio1.shape
+
+    audio2 = torch.ones(1, 300)
+    s.add_multimodal_tensor(audio2, mm_type="audio")
+    req_out = s.make_request_output([2], None, None, None)
+    assert req_out is not None
+    cons_audio = req_out.outputs[0].multimodal_output["audio"]
+    # After consolidation, audio chunks are concatenated on last axis,
+    # preserving the [1, N] channel dimension
+    total_audio_len = audio1.shape[-1] + audio2.shape[-1]
+    assert isinstance(audio2, torch.Tensor) and cons_audio.shape == (1, total_audio_len)
+
     assert "audio" in s.mm_accumulated
-    assert torch.equal(s.mm_accumulated["audio"], t1)
 
 
-def test_finish_consolidates_non_delta():
-    """Ensure tensor consolidation is called for non delta images."""
+def test_finish_consolidates_hidden_states():
+    """Ensure consolidation merges hidden-state tensor lists on finish."""
     s = _make_state(RequestOutputKind.CUMULATIVE)
-    len_1 = 5
-    len_2 = 4
-    s.add_multimodal_tensor(torch.ones(len_1), "audio")
-    s.add_multimodal_tensor(torch.ones(len_2), "audio")
+    s.add_multimodal_tensor(torch.ones(5, 4), mm_type="hidden")
+    s.add_multimodal_tensor(torch.ones(3, 4), mm_type="hidden")
 
     result = s.make_request_output([1], None, FinishReason.STOP, None)
     assert result is not None and not isinstance(result, PoolingRequestOutput)
 
-    audio = result.outputs[0].multimodal_output["audio"]
-    assert isinstance(audio, torch.Tensor) and audio.shape[0] == len_1 + len_2
+    hs = result.outputs[0].multimodal_output["hidden"]
+    assert isinstance(hs, torch.Tensor) and hs.shape[0] == 8
 
 
 def test_finish_consolidation_for_hs_delta():
@@ -130,9 +144,8 @@ def test_finish_consolidation_for_hs_delta():
     assert "foo" in s.mm_accumulated
 
 
-def test_finish_consolidation_for_mm_delta():
-    """Ensure audio consolidates as expected. Note that for now, audio is
-    handled as a special case."""
+def test_finish_consolidation_drains_mm_delta():
+    """Ensure making the request output drains modality deltas (e.g., audio)."""
     s = _make_state(RequestOutputKind.DELTA)
     # multimodal data accumulation (drained)
     s.add_multimodal_tensor({"audio": torch.ones(5, 4)}, mm_type="audio")
@@ -148,3 +161,26 @@ def test_finish_consolidation_for_mm_delta():
     hs = result.outputs[0].multimodal_output["audio"]
     assert isinstance(hs, torch.Tensor) and hs.shape[0] == 3
     assert "audio" not in s.mm_accumulated  # drained
+
+
+@pytest.mark.parametrize("mm_type", ["audio", "hidden"])
+def test_final_only_consolidates_modality_keys(mm_type):
+    """FINAL_ONLY never drains per-step, so modality keys and hidden state
+    keys both accumulate and are consolidated on finish."""
+    s = _make_state(RequestOutputKind.FINAL_ONLY)
+
+    # NOTE: Currently there is brittlness in the tensor stacking, so we just
+    # test a 1D tensor here. The intention is just to ensure audio /hidden
+    # behave the same.
+    s.add_multimodal_tensor(torch.ones(500), mm_type=mm_type)
+    # Non-finish step returns None without calling _new_completion_output
+    assert s.make_request_output([1], None, None, None) is None
+    assert mm_type in s.mm_accumulated
+
+    s.add_multimodal_tensor(torch.ones(300), mm_type=mm_type)
+    result = s.make_request_output([2], None, FinishReason.STOP, None)
+    assert result is not None and not isinstance(result, PoolingRequestOutput)
+
+    audio = result.outputs[0].multimodal_output[mm_type]
+    assert isinstance(audio, torch.Tensor)
+    assert audio.shape == (800,)
