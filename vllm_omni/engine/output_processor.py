@@ -188,8 +188,10 @@ class OmniRequestState(RequestState):
         if not finished and final_only:
             return None
 
-        # Consolidate accumulated tensors when finishing as long as it's not a delta message
-        if finished and self.output_kind != RequestOutputKind.DELTA:
+        # Consolidate accumulated tensors when finishing. For DELTA, only
+        # the output-modality key (mm_type) is drained per step; we need to
+        # keep hidden states so that they can be transferred between stages.
+        if finished:
             self._consolidate_multimodal_tensors()
 
         if self.stream_interval > 1:
@@ -246,9 +248,13 @@ class OmniRequestState(RequestState):
             else:
                 setattr(base_output, "multimodal_output", self.mm_accumulated)
 
-        # If it's a delta, we need to reset the mm accumulated data to avoid re-emitting it
-        if is_delta:
-            self.mm_accumulated = {}
+        # For DELTA, drain only the output-modality key so it isn't
+        # re-emitted.  Hidden-state keys (e.g. "0", "24") are left intact
+        # because downstream stages need the full accumulated embeddings
+        # for inter-stage transfer.
+        if is_delta and self.mm_type in self.mm_accumulated:
+            logger.debug("Draining deltas for data type %s", self.mm_type)
+            self.mm_accumulated.pop(self.mm_type)
 
         return base_output
 

@@ -441,13 +441,13 @@ class AsyncOmni(EngineClient, OmniBase):
     def _validate_streaming_input_sampling_params(params: OmniSamplingParams) -> None:
         if (
             not isinstance(params, SamplingParams)
+            or params.output_kind == RequestOutputKind.FINAL_ONLY
             or params.n > 1
-            or params.output_kind != RequestOutputKind.DELTA
             or params.stop
         ):
             raise ValueError(
                 "Input streaming is currently supported only for SamplingParams "
-                "with n == 1, output_kind == DELTA, and without stop strings."
+                "with n == 1, output_kind == FINAL_ONLY, and without stop strings."
             )
 
     async def encode(

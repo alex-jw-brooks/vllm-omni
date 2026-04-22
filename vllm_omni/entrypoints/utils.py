@@ -858,8 +858,10 @@ def coerce_param_message_types(params: list[OmniSamplingParams], is_streaming: b
     # Coerce vLLM's default CUMULATIVE to DELTA so later stages don't
     # redundantly re-emit multimodal outputs. Explicit FINAL_ONLY /
     # DELTA is preserved so callers keep their choice.
+    #
+    # NOTE: Hidden states will still be passed between stages.
     for idx, sp in enumerate(params):
-        # For not OmniDiffusionParams don't set output kind
+        # For OmniDiffusionParams don't set output kind
         if isinstance(sp, SamplingParams):
             params[idx] = maybe_coerce_to_message_type(sp, is_streaming)
     return params
