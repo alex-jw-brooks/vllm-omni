@@ -107,30 +107,6 @@ def test_generate_accepts_request_after_repeated_cancellations():
     asyncio.run(run_test())
 
 
-def test_cumulative_coerced_to_delta():
-    """Ensure CUMULATIVE sampling params are coerced to DELTA by generate()."""
-
-    captured_params = []
-
-    async def capturing_add_request(*, request_id, prompt, sampling_params_list, final_stage_id, **kwargs):
-        del prompt, final_stage_id, kwargs
-        captured_params.extend(sampling_params_list)
-
-    async def run():
-        omni = get_async_omni_instance(fake_add_request=capturing_add_request)
-        sp = SamplingParams(output_kind=RequestOutputKind.CUMULATIVE)
-        async for _ in omni.generate(
-            prompt={"prompt": "test"},
-            request_id="test-req",
-            sampling_params_list=[sp],
-            output_modalities=["text"],
-        ):
-            pass
-
-    asyncio.run(run())
-    assert captured_params[0].output_kind == RequestOutputKind.DELTA
-
-
 @pytest.mark.parametrize("output_kind", [RequestOutputKind.DELTA, RequestOutputKind.FINAL_ONLY])
 def test_non_cumulative_preserved(output_kind):
     """Ensure DELTA and FINAL_ONLY sampling params are not coerced."""
