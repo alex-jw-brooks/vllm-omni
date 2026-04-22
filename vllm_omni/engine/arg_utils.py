@@ -202,7 +202,7 @@ class OmniEngineArgs(EngineArgs):
             else:
                 field_type = field_type_map[key]
                 if field_type is not Any:
-                    TypeAdapter(field_type).validate_python(value)
+                    value = TypeAdapter(field_type).validate_python(value, strict=True)
                 validated_kwargs[key] = value
         logger.debug("OmniEngineArgs filtered invalid keys: %s", skip_keys)
         return validated_kwargs
