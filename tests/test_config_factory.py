@@ -6,10 +6,13 @@ Unit tests for StageConfigFactory and related classes.
 
 import warnings
 from dataclasses import dataclass
+from dataclasses import fields as fields
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from tests.helpers.stage_config import get_deploy_config_path
 from vllm_omni.config.stage_config import (
     _PIPELINE_REGISTRY,
     ModelPipeline,
@@ -20,11 +23,15 @@ from vllm_omni.config.stage_config import (
     StagePipelineConfig,
     StageType,
     _resolve_scheduler,
+    _apply_platform_overrides,
     build_stage_runtime_overrides,
+    deploy_override_field_names,
+    load_deploy_config,
+    merge_pipeline_deploy,
     register_pipeline,
     strip_parent_engine_args,
 )
-from vllm_omni.engine.arg_utils import SHARED_FIELDS, internal_blacklist_keys
+from vllm_omni.engine.arg_utils import SHARED_FIELDS, EngineArgs, internal_blacklist_keys
 
 
 class TestStageType:
@@ -99,8 +106,6 @@ class TestStageConfig:
 
     def test_to_omegaconf_with_runtime_overrides(self):
         """Test that runtime overrides are applied to OmegaConf output."""
-        import warnings
-
         config = StageConfig(
             stage_id=0,
             model_stage="thinker",
@@ -123,8 +128,6 @@ class TestStageConfig:
 
     def test_to_omegaconf_max_batch_size_deprecation(self):
         """Test that runtime.max_batch_size emits a FutureWarning."""
-        import warnings
-
         config = StageConfig(
             stage_id=0,
             model_stage="thinker",
@@ -149,7 +152,6 @@ class TestStageConfig:
 
     def test_to_omegaconf_omits_none_deploy_overrides_for_engine_args(self):
         """None deploy overrides must fall through to EngineArgs defaults."""
-        from vllm_omni.config.stage_config import deploy_override_field_names
 
         config = StageConfig(
             stage_id=0,
@@ -370,11 +372,7 @@ class TestStageResolutionHelpers:
         assert "parallel_config" not in overrides
 
     def test_strip_parent_engine_args_reports_only_surprising_parent_overrides(self):
-        from dataclasses import fields as dc_fields
-
-        from vllm.engine.arg_utils import EngineArgs
-
-        parent_fields = {f.name: f for f in dc_fields(EngineArgs)}
+        parent_fields = {f.name: f for f in fields(EngineArgs)}
         filtered, overridden = strip_parent_engine_args(
             {
                 "model": "some/model",
@@ -826,7 +824,7 @@ class TestPipelineRegistry:
 
 class TestDeployConfigLoading:
     def test_deploy_override_fields_include_deploy_schema_fields(self):
-        from vllm_omni.config.stage_config import deploy_override_field_names
+
 
         expected_fields = {
             "async_chunk",
@@ -900,10 +898,7 @@ class TestDeployConfigLoading:
         assert "compilation_config" not in deploy.stages[0].engine_extras
 
     def test_merge_pipeline_deploy(self):
-        from pathlib import Path
-
         import vllm_omni.model_executor.models.qwen3_omni.pipeline  # noqa: F401
-        from vllm_omni.config.stage_config import load_deploy_config, merge_pipeline_deploy
 
         pipeline = _PIPELINE_REGISTRY["qwen3_omni_moe"]
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
@@ -968,6 +963,99 @@ class TestDeployConfigLoading:
         stages = merge_pipeline_deploy(pipeline, deploy)
 
         assert stages[0].yaml_runtime["requires_multimodal_data"] is True
+
+
+    def test_mixed_schema_preserves_flat_fields(self):
+        """Ensure flat fields are not dropped when engine_args are present."""
+        fake_config = {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "gpu_memory_utilization": 0.7,
+                    "max_num_seqs": 8,
+                    "engine_args": {
+                        "tensor_parallel_size": 4,
+                        "enforce_eager": True,
+                    },
+                },
+            ]
+        }
+
+        with patch("vllm_omni.config.stage_config.resolve_deploy_yaml", return_value=fake_config):
+            deploy = load_deploy_config("dummy.yaml")
+
+        assert len(deploy.stages) == 1
+        stage = deploy.stages[0]
+        # Check that the engine args are set
+        assert stage.tensor_parallel_size == 4
+        assert stage.enforce_eager is True
+        # Check that the other settings are also preserved
+        assert stage.gpu_memory_utilization == 0.7
+        assert stage.max_num_seqs == 8
+
+
+    def test_engine_extras_deep_merges_dicts_simple(self):
+        """Ensure dictionary valued keys merge properly for top level dicts."""
+        fake_config = {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "foo": {"a": 111, "b": 1},
+                    "engine_args": {
+                        "foo": {"b": 2, "c": 3},
+                    },
+                },
+            ]
+        }
+
+        with patch("vllm_omni.config.stage_config.resolve_deploy_yaml", return_value=fake_config):
+            deploy = load_deploy_config("dummy.yaml")
+
+        assert len(deploy.stages) == 1
+        stage = deploy.stages[0]
+        assert "foo" in stage.engine_extras
+        assert stage.engine_extras["foo"] == {"a": 111, "b": 2, "c": 3}
+
+    def test_mixed_engine_extras_deep_merges_dicts(self):
+        """Ensure dictionary valued keys merge properly for nested dicts."""
+        fake_config = {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "foo": {"a": 111, "b": {"e": 199}},
+                    "engine_args": {
+                        "foo": {"b": {"d": 9}, "c": 3},
+                    },
+                },
+            ]
+        }
+
+        with patch("vllm_omni.config.stage_config.resolve_deploy_yaml", return_value=fake_config):
+            deploy = load_deploy_config("dummy.yaml")
+
+        assert len(deploy.stages) == 1
+        stage = deploy.stages[0]
+        assert "foo" in stage.engine_extras
+        assert stage.engine_extras["foo"] == {"a": 111, "b": {"d": 9, "e": 199}, "c": 3}
+
+    def test_mixed_schema_engine_args_wins_scalars(self):
+        """engine_args takes precedence over flat fields for scalar conflicts."""
+        fake_config = {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "gpu_memory_utilization": 0.7,
+                    "engine_args": {
+                        "gpu_memory_utilization": 0.5,
+                    },
+                },
+            ]
+        }
+
+        with patch("vllm_omni.config.stage_config.resolve_deploy_yaml", return_value=fake_config):
+            deploy = load_deploy_config("dummy.yaml")
+
+        assert deploy.stages[0].gpu_memory_utilization == 0.5
 
 
 class TestQwen3OmniPipeline:
@@ -1082,7 +1170,6 @@ class TestQwen3TTSPipeline:
     def test_per_stage_model_arch_flows_through_merge(self, tmp_path):
         """Verify the new ps.model_arch override survives merge_pipeline_deploy."""
         import vllm_omni.model_executor.models.qwen3_tts.pipeline  # noqa: F401
-        from vllm_omni.config.stage_config import load_deploy_config, merge_pipeline_deploy
 
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_tts.yaml"
         if not deploy_path.exists():
@@ -1288,9 +1375,6 @@ class TestBaseConfigInheritance:
     """Test deploy YAML base_config inheritance."""
 
     def test_ci_inherits_from_main(self):
-        from tests.helpers.stage_config import get_deploy_config_path
-        from vllm_omni.config.stage_config import load_deploy_config
-
         ci_path = Path(get_deploy_config_path("ci/qwen3_omni_moe.yaml"))
         if not ci_path.exists():
             pytest.skip("CI deploy config not found")
@@ -1311,9 +1395,6 @@ class TestBaseConfigInheritance:
         assert deploy.async_chunk is False
 
     def test_ci_sampling_merge(self):
-        from tests.helpers.stage_config import get_deploy_config_path
-        from vllm_omni.config.stage_config import load_deploy_config
-
         ci_path = Path(get_deploy_config_path("ci/qwen3_omni_moe.yaml"))
         if not ci_path.exists():
             pytest.skip("CI deploy config not found")
@@ -1328,8 +1409,6 @@ class TestBaseConfigInheritance:
 
     def test_pure_inheritance_overlay(self, tmp_path):
         """An overlay with only ``base_config`` inherits everything."""
-        from vllm_omni.config.stage_config import load_deploy_config
-
         base = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
         if not base.exists():
             pytest.skip("Base deploy config not found")
@@ -1343,8 +1422,6 @@ class TestBaseConfigInheritance:
 
     def test_single_field_overlay(self, tmp_path):
         """An overlay overriding one stage field merges with the base."""
-        from vllm_omni.config.stage_config import load_deploy_config
-
         base = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
         if not base.exists():
             pytest.skip("Base deploy config not found")
@@ -1362,10 +1439,6 @@ class TestPlatformOverrides:
     """Test platform-specific deploy config overrides."""
 
     def test_npu_overrides(self):
-        from pathlib import Path
-
-        from vllm_omni.config.stage_config import _apply_platform_overrides, load_deploy_config
-
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
         if not deploy_path.exists():
             pytest.skip("Deploy config not found")
@@ -1380,10 +1453,6 @@ class TestPlatformOverrides:
         assert deploy.stages[2].enforce_eager is True
 
     def test_xpu_overrides(self):
-        from pathlib import Path
-
-        from vllm_omni.config.stage_config import _apply_platform_overrides, load_deploy_config
-
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
         if not deploy_path.exists():
             pytest.skip("Deploy config not found")
@@ -1396,10 +1465,6 @@ class TestPlatformOverrides:
         assert deploy.stages[0].engine_extras.get("max_cudagraph_capture_size") == 0
 
     def test_unknown_platform_noop(self):
-        from pathlib import Path
-
-        from vllm_omni.config.stage_config import _apply_platform_overrides, load_deploy_config
-
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
         if not deploy_path.exists():
             pytest.skip("Deploy config not found")
@@ -1411,8 +1476,6 @@ class TestPlatformOverrides:
 
     def test_platforms_deep_merge_inheritance(self, tmp_path):
         """Overlay's platforms: block layers onto base's, per-stage."""
-        from vllm_omni.config.stage_config import _apply_platform_overrides, load_deploy_config
-
         base = tmp_path / "base.yaml"
         base.write_text(
             "stages:\n"
@@ -1447,10 +1510,7 @@ class TestCLIOverrideFlow:
     """Test --stage-overrides JSON merge into StageConfig."""
 
     def test_stage_overrides_merge(self):
-        from pathlib import Path
-
         import vllm_omni.model_executor.models.qwen3_omni.pipeline  # noqa: F401
-        from vllm_omni.config.stage_config import load_deploy_config, merge_pipeline_deploy
 
         pipeline = _PIPELINE_REGISTRY["qwen3_omni_moe"]
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
@@ -1466,10 +1526,7 @@ class TestCLIOverrideFlow:
         assert stages[0].runtime_overrides["gpu_memory_utilization"] == 0.5
 
     def test_global_override_applies_to_all(self):
-        from pathlib import Path
-
         import vllm_omni.model_executor.models.qwen3_omni.pipeline  # noqa: F401
-        from vllm_omni.config.stage_config import load_deploy_config, merge_pipeline_deploy
 
         pipeline = _PIPELINE_REGISTRY["qwen3_omni_moe"]
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
@@ -1603,10 +1660,7 @@ class TestSamplingConstraintsPrecedence:
     """Test that pipeline sampling_constraints override deploy defaults."""
 
     def test_constraints_win(self):
-        from pathlib import Path
-
         import vllm_omni.model_executor.models.qwen3_omni.pipeline  # noqa: F401
-        from vllm_omni.config.stage_config import load_deploy_config, merge_pipeline_deploy
 
         pipeline = _PIPELINE_REGISTRY["qwen3_omni_moe"]
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
