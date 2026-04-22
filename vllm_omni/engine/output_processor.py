@@ -36,28 +36,34 @@ class OmniRequestState(RequestState):
     ):
         super().__init__(*args, **kwargs)
         # Omni-specific: multimodal output accumulation
-        self.mm_type: str | None = None
+        # NOTE: Keys in mm_accumulated matter, because they dictate which
+        # outputs are drained (i.e., only drain modality keys, don't drain
+        # hidden states).
+        # TODO (Alex) Make this cleaner in the future.
         self.mm_accumulated: dict[str, Any] = {}
+
+    @staticmethod
+    def _to_cpu(x):
+        """Try to convert to CPU tensor if needed."""
+        # TODO: Make this more robust and unify with other payload
+        # building utils, we do this in multiple places.
+        if isinstance(x, torch.Tensor):
+            try:
+                return x.detach().to("cpu", non_blocking=True).contiguous()
+            except Exception:
+                return x
+        return x
 
     def add_multimodal_tensor(self, payload: Any | None, mm_type: str | None) -> None:
         if payload is None:
             return
+
+        mm_type = (mm_type or "").lower()
         try:
-            if mm_type:
-                self.mm_type = (mm_type or "").lower()
-
-            # Normalize incoming payload to dict on CPU
-            def _to_cpu(x):
-                if isinstance(x, torch.Tensor):
-                    try:
-                        return x.detach().to("cpu", non_blocking=True).contiguous()
-                    except Exception:
-                        return x
-                return x
-
             if isinstance(payload, dict):
                 incoming: dict[str, Any] = {}
-                target_key = self.mm_type or "hidden"
+                # TODO (Alex): Clean up and simplify key management
+                target_key = mm_type or "hidden"
 
                 for k, v in payload.items():
                     # Normalize producer keys to the modality name.
@@ -70,12 +76,12 @@ class OmniRequestState(RequestState):
                         k = target_key
 
                     if isinstance(v, dict):
-                        incoming[k] = {str(sk): _to_cpu(sv) for sk, sv in v.items()}
+                        incoming[k] = {str(sk): self._to_cpu(sv) for sk, sv in v.items()}
                     else:
-                        incoming[k] = _to_cpu(v)
+                        incoming[k] = self._to_cpu(v)
             else:
-                key = self.mm_type or "hidden"
-                incoming = {key: _to_cpu(payload)}
+                key = mm_type or "hidden"
+                incoming = {key: self._to_cpu(payload)}
 
             if not self.mm_accumulated:
                 self.mm_accumulated = incoming
@@ -252,9 +258,14 @@ class OmniRequestState(RequestState):
         # re-emitted.  Hidden-state keys (e.g. "0", "24") are left intact
         # because downstream stages need the full accumulated embeddings
         # for inter-stage transfer.
-        if is_delta and self.mm_type in self.mm_accumulated:
-            logger.debug("Draining deltas for data type %s", self.mm_type)
-            self.mm_accumulated.pop(self.mm_type)
+        if is_delta:
+            # HACK (Alex) - drop modality specific keys. We should do this in a
+            # cleaner way rather than hardcoding keys here, and instead have a
+            # common enum to pull these from
+            for modality_key in ["image", "audio", "latent"]:
+                res = self.mm_accumulated.pop(modality_key, None)
+                if res is not None:
+                    logger.debug("Drained deltas for data type %s", modality_key)
 
         return base_output
 

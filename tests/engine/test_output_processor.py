@@ -53,25 +53,37 @@ def test_init_empty_dict():
     assert _make_state(RequestOutputKind.DELTA).mm_accumulated == {}
 
 
-def test_delta_drains_per_step():
-    """Ensure that requests with delta outputs clear mm_accumulated data after emitting."""
+def test_delta_drains_output_modality_per_step():
+    """DELTA drains the mm_type key (output modality) but preserves hidden-state keys."""
     s = _make_state(RequestOutputKind.DELTA)
-    t1, t2 = torch.ones(5), torch.ones(3)
+    audio1, audio2, hs1, hs2 = [torch.ones(num_elem) for num_elem in range(1, 5)]
 
-    # Each call to _new_completion_output will clear mm_accumulated
-    s.add_multimodal_tensor(t1, "audio")
+    # Add audio and hidden state tensors
+    s.add_multimodal_tensor(audio1, mm_type="audio")  # should be drained
+    s.add_multimodal_tensor(hs1, mm_type="hidden")  # shouldn't be drained
+
     out1 = s._new_completion_output([1], None, None)
-    assert torch.equal(out1.multimodal_output["audio"], t1)
-    assert s.mm_accumulated == {}
+    out1_audio = out1.multimodal_output["audio"]
+    out1_hidden = out1.multimodal_output["hidden"]
+    assert isinstance(out1_audio, torch.Tensor)
+    assert torch.equal(out1.multimodal_output["audio"], audio1)
+    assert isinstance(out1_hidden, torch.Tensor)
+    assert torch.equal(out1.multimodal_output["hidden"], hs1)
 
-    s.add_multimodal_tensor(t2, "audio")
+    # After emission, hidden states should remain, but audio is drained
+    assert set(s.mm_accumulated.keys()) == {"hidden"}
+
+    s.add_multimodal_tensor(audio2, "audio")
+    s.add_multimodal_tensor(hs2, mm_type="hidden")
     out2 = s._new_completion_output([2], None, None)
-    assert torch.equal(out2.multimodal_output["audio"], t2)
-    assert s.mm_accumulated == {}
-
-    # If we have no mm accumulated data, get an empty dict back
-    out3 = s._new_completion_output([3], None, None)
-    assert out3.multimodal_output == {}
+    out2_audio = out2.multimodal_output["audio"]
+    out2_hidden = out2.multimodal_output["hidden"]
+    assert isinstance(out2_audio, torch.Tensor)
+    assert torch.equal(out2_audio, audio2)
+    # Since hidden isn't drained, it's grown to a list
+    assert isinstance(out2_hidden, list) and len(out2_hidden) == 2
+    assert torch.equal(hs1, out2_hidden[0])
+    assert torch.equal(hs2, out2_hidden[1])
 
 
 def test_cumulative_does_not_drain():
@@ -99,16 +111,40 @@ def test_finish_consolidates_non_delta():
     assert isinstance(audio, torch.Tensor) and audio.shape[0] == len_1 + len_2
 
 
-def test_finish_skips_consolidation_for_delta():
+def test_finish_consolidation_for_hs_delta():
+    """Ensure finish doesn't drop the accumulated hidden states."""
     s = _make_state(RequestOutputKind.DELTA)
-    s.add_multimodal_tensor(torch.ones(5), "audio")
-    s.add_multimodal_tensor(torch.ones(3), "audio")
-    assert isinstance(s.mm_accumulated["audio"], list)
-
-    result = s.make_request_output([1], None, FinishReason.STOP, None)
+    # hidden state accumulation (nothing drained)
+    s.add_multimodal_tensor({"foo": torch.ones(5, 4)}, mm_type="hidden")
+    result = s.make_request_output([0], None, FinishReason.STOP, None)
     assert result is not None and not isinstance(result, PoolingRequestOutput)
+    hs = result.outputs[0].multimodal_output["foo"]
+    assert isinstance(hs, torch.Tensor) and hs.shape[0] == 5
 
-    # Audio should still be a list (not consolidated into a single tensor)
-    audio = result.outputs[0].multimodal_output["audio"]
-    assert isinstance(audio, list) and len(audio) == 2
-    assert s.mm_accumulated == {}
+    # Since we don't drain the hidden states, if we add 3 elements, we should get 8
+    s.add_multimodal_tensor({"foo": torch.ones(3, 4)}, mm_type="hidden")
+    result = s.make_request_output([0], None, FinishReason.STOP, None)
+    assert result is not None and not isinstance(result, PoolingRequestOutput)
+    hs = result.outputs[0].multimodal_output["foo"]
+    assert isinstance(hs, torch.Tensor) and hs.shape[0] == 8
+    assert "foo" in s.mm_accumulated
+
+
+def test_finish_consolidation_for_mm_delta():
+    """Ensure audio consolidates as expected. Note that for now, audio is
+    handled as a special case."""
+    s = _make_state(RequestOutputKind.DELTA)
+    # multimodal data accumulation (drained)
+    s.add_multimodal_tensor({"audio": torch.ones(5, 4)}, mm_type="audio")
+    result = s.make_request_output([0], None, FinishReason.STOP, None)
+    assert result is not None and not isinstance(result, PoolingRequestOutput)
+    hs = result.outputs[0].multimodal_output["audio"]
+    assert isinstance(hs, torch.Tensor) and hs.shape[0] == 5
+
+    # Since we did drain the hidden states, we no longer get the 5 back
+    s.add_multimodal_tensor({"audio": torch.ones(3, 4)}, mm_type="audio")
+    result = s.make_request_output([0], None, FinishReason.STOP, None)
+    assert result is not None and not isinstance(result, PoolingRequestOutput)
+    hs = result.outputs[0].multimodal_output["audio"]
+    assert isinstance(hs, torch.Tensor) and hs.shape[0] == 3
+    assert "audio" not in s.mm_accumulated  # drained

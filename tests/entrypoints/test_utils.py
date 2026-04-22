@@ -458,3 +458,12 @@ class TestCumulativeStreamingCoercion:
         result = coerce_param_message_types([sp], is_streaming=is_streaming)[0]
         assert isinstance(result, SamplingParams)
         assert result.output_kind == expected
+
+    def test_coercion_applies_to_all_stages(self):
+        """Ensure all stages are coerced to DELTA for streaming."""
+        sp0 = SamplingParams(output_kind=RequestOutputKind.CUMULATIVE)
+        sp1 = SamplingParams(output_kind=RequestOutputKind.CUMULATIVE)
+        result = coerce_param_message_types([sp0, sp1], is_streaming=True)
+        assert all([isinstance(r, SamplingParams) for r in result])
+        assert result[0].output_kind == RequestOutputKind.DELTA
+        assert result[1].output_kind == RequestOutputKind.DELTA
