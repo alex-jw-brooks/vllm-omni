@@ -850,14 +850,13 @@ def detect_pid_host() -> bool:
 def coerce_param_message_types(params: list[OmniSamplingParams], is_streaming: bool):
     """Iterate over the sampling params and convert to the message types
     to DELTA messages, if streaming is enabled, or FINAL_ONLY if
-    it's disabled, while respecting `.is_clone` on the params.
+    it's disabled, while respecting `.skip_clone` on the params.
 
-    This is needed to avoid redundantly emitting redundant multimodal
-    data.
+    This is needed to avoid emitting redundant multimodal data.
     """
-    # Coerce vLLM's default CUMULATIVE to DELTA so later stages don't
-    # redundantly re-emit multimodal outputs. Explicit FINAL_ONLY /
-    # DELTA is preserved so callers keep their choice.
+    # Coerce vLLM's default output kinds as needed to handle streaming
+    # (i.e., DELTA output kind). Note that this is only applied to non
+    # Diffusion sampling params.
     #
     # NOTE: Hidden states will still be passed between stages.
     for idx, sp in enumerate(params):

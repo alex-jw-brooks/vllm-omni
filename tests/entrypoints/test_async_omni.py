@@ -107,9 +107,11 @@ def test_generate_accepts_request_after_repeated_cancellations():
     asyncio.run(run_test())
 
 
-@pytest.mark.parametrize("output_kind", [RequestOutputKind.DELTA, RequestOutputKind.FINAL_ONLY])
-def test_non_cumulative_preserved(output_kind):
-    """Ensure DELTA and FINAL_ONLY sampling params are not coerced."""
+@pytest.mark.parametrize(
+    "output_kind", [RequestOutputKind.DELTA, RequestOutputKind.FINAL_ONLY, RequestOutputKind.CUMULATIVE]
+)
+def test_output_kind_is_preserved_with_explicit_sampling_params(output_kind):
+    """Ensure we don't change the output kind in async generate if params are provided directly."""
 
     captured_params = []
 

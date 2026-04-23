@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from vllm.tokenizers import TokenizerLike
     from vllm.v1.engine import PauseMode
 
-    from vllm_omni.inputs.data import OmniPromptType, OmniSamplingParams
+    from vllm_omni.inputs.data import OmniPromptType
 
 logger = init_logger(__name__)
 _FINAL_OUTPUT_IDLE_SLEEP_S = 0.001
