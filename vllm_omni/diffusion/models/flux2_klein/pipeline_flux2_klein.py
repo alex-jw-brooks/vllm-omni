@@ -837,12 +837,14 @@ class Flux2KleinPipeline(nn.Module, CFGParallelMixin, SupportImageInput, Diffusi
             reference_image = None
         else:
             multi_modal_data = first_prompt.get("multi_modal_data", {})
-            prompt = first_prompt.get("prompt", "")
+            prompt = first_prompt.get("prompt") or ""
             raw_image = multi_modal_data.get("image")
             mask_image = multi_modal_data.get("mask_image")
             reference_image = multi_modal_data.get("reference_image")
 
-        if isinstance(raw_image, list):
+        if raw_image is None:
+            image = None
+        elif isinstance(raw_image, list):
             image = [PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image, im) for im in raw_image]
         else:
             image = PIL.Image.open(raw_image) if isinstance(raw_image, str) else cast(PIL.Image.Image, raw_image)
