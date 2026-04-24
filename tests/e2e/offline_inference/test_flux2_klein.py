@@ -65,6 +65,7 @@ def _extract_images_from_output(outputs: list) -> list[Image.Image]:
     return images
 
 
+# Regression test for https://github.com/vllm-project/vllm-omni/issues/3097
 @pytest.mark.core_model
 @pytest.mark.diffusion
 def test_flux2_klein_can_accept_text_inputs():
