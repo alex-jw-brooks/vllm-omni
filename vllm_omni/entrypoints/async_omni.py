@@ -376,6 +376,12 @@ class AsyncOmni(EngineClient, OmniBase):
         req_state = self.request_states[request_id]
         has_submitted_first_chunk = False
 
+        # NOTE: InputProcessor in vLLM should generally do this too, but for
+        # now we do it defensively. TODO (Alex) ensure clones/copying are optimized
+        if not stage0_params.skip_clone:
+            stage0_params = stage0_params.clone()
+            stage0_params.skip_clone = True
+
         async def handle_inputs() -> None:
             nonlocal has_submitted_first_chunk
             cancelled = False
