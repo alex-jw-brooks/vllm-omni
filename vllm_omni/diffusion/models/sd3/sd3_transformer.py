@@ -388,12 +388,10 @@ class SD3Transformer2DModel(nn.Module):
     The Transformer model introduced in [Stable Diffusion 3](https://huggingface.co/papers/2403.03206).
     """
 
-    _cache_dit_adapter_config = (
-        CacheDiTAdapterConfig(
-            block_forward_patterns={
-                "transformer_blocks": ForwardPattern.Pattern_1,
-            }
-        ),
+    _cache_dit_adapter_config = CacheDiTAdapterConfig(
+        block_forward_patterns={
+            "transformer_blocks": ForwardPattern.Pattern_1,
+        }
     )
 
     _repeated_blocks = ["SD3TransformerBlock"]

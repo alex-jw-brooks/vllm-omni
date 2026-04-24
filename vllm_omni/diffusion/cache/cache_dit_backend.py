@@ -1525,14 +1525,22 @@ class CacheDiTBackend(CacheBackend):
         # TODO (Alex): Handle this more flexibly after PR lands:
         # https://github.com/vllm-project/vllm-omni/pull/2811
         transformer = default_get_pipeline_transformer(pipeline)
-        if not hasattr(transformer, "_cache_dit_adapter_config"):
+
+        adapter_cfg: CacheDiTAdapterConfig | None = getattr(transformer, "_cache_dit_adapter_config", None)
+        if adapter_cfg is None:
             return None
 
-        block_attrs, forward_pattern = zip(*transformer._cache_dit_adapter_config.items())
+        block_attrs, forward_pattern = zip(*(adapter_cfg.block_forward_patterns).items())
+        missing_attrs = [block_attr for block_attr in block_attrs if not hasattr(transformer, block_attr)]
+
+        if missing_attrs:
+            logger.warning("Missing Cache DiT block attributes: %s", missing_attrs)
+
         block_adapter = BlockAdapter(
             transformer=transformer,
             blocks=[getattr(transformer, block_attr) for block_attr in block_attrs],
-            forward_pattern=forward_pattern,
+            forward_pattern=list(forward_pattern),
+            has_separate_cfg=adapter_cfg.has_separate_cfg,
         )
         return block_adapter
 

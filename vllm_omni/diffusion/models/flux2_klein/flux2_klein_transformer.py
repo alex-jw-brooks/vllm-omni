@@ -774,7 +774,7 @@ class Flux2Transformer2DModel(nn.Module):
         block_forward_patterns={
             "transformer_blocks": ForwardPattern.Pattern_1,
             "single_transformer_blocks": ForwardPattern.Pattern_2,
-        },
+        }
     )
 
     _repeated_blocks = ["Flux2TransformerBlock", "Flux2SingleTransformerBlock"]

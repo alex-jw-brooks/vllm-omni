@@ -530,7 +530,7 @@ class FluxTransformer2DModel(nn.Module):
         block_forward_patterns={
             "transformer_blocks": ForwardPattern.Pattern_1,
             "single_transformer_blocks": ForwardPattern.Pattern_1,
-        },
+        }
     )
 
     # the small and frequently-repeated block(s) of a model

@@ -588,6 +588,7 @@ class LongCatImageTransformer2DModel(nn.Module):
             "transformer_blocks": ForwardPattern.Pattern_1,
             "single_transformer_blocks": ForwardPattern.Pattern_1,
         },
+        has_separate_cfg=True,
     )
 
     _repeated_blocks = ["LongCatImageTransformerBlock", "LongCatImageSingleTransformerBlock"]
