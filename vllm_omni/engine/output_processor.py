@@ -16,6 +16,7 @@ from vllm.v1.engine.output_processor import (
 from vllm.v1.engine.parallel_sampling import ParentRequest
 from vllm.v1.metrics.stats import IterationStats
 
+from vllm_omni.engine.output_modality import DRAINABLE_MODALITIES
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -114,9 +115,6 @@ class OmniRequestState(RequestState):
             # Log and continue without crashing the output pipeline
             logger.exception("Error accumulating multimodal tensor")
 
-    # These keys are used for modality type objects that are dropped between outputs
-    _MODALITY_KEYS = frozenset({"image", "audio"})
-
     def _consolidate_multimodal_tensors(self) -> None:
         """Consolidate accumulated tensor lists into single tensors via concatenation.
 
@@ -130,7 +128,7 @@ class OmniRequestState(RequestState):
         skip_modality = self.output_kind == RequestOutputKind.DELTA
         try:
             for k, v in self.mm_accumulated.items():
-                if skip_modality and k in self._MODALITY_KEYS:
+                if skip_modality and k in DRAINABLE_MODALITIES:
                     continue
                 if isinstance(v, list) and v and isinstance(v[0], torch.Tensor):
                     try:
@@ -265,7 +263,7 @@ class OmniRequestState(RequestState):
                 setattr(base_output, "multimodal_output", self.mm_accumulated)
 
         if self.output_kind == RequestOutputKind.DELTA:
-            for modality_key in self._MODALITY_KEYS:
+            for modality_key in DRAINABLE_MODALITIES:
                 self.mm_accumulated.pop(modality_key, None)
 
         return base_output
