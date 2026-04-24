@@ -60,6 +60,7 @@ from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionMetadata,
 )
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig
 from vllm_omni.diffusion.distributed.parallel_state import (
     get_cfg_group,
     get_classifier_free_guidance_rank,
@@ -2019,10 +2020,12 @@ class HunyuanImagePostprocessor(nn.Module):
 
 
 class HunyuanImage3Model(nn.Module):
-    # FIXME: This is skipping fwd validate. I think it's wrong and should be pattern 3?
-    _block_fwd_patterns = {
-        "layers": ForwardPattern.Pattern_4,
-    }
+    # TODO: Check if this should be pattern 3 instead of 4
+    _cache_dit_adapter_config = CacheDiTAdapterConfig(
+        block_forward_patterns={
+            "layers": ForwardPattern.Pattern_4,
+        }
+    )
 
     _sp_plan = {
         # Split custom_pos_emb tuple elements (cos, sin) at model forward input

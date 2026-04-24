@@ -10,6 +10,7 @@ pipelines in vllm-omni, supporting both single and dual-transformer architecture
 import functools
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import dataclass
 from typing import Any, Optional, TypeAlias
 
 import cache_dit
@@ -35,11 +36,23 @@ from vllm_omni.diffusion.data import DiffusionCacheConfig, OmniDiffusionConfig
 
 logger = init_logger(__name__)
 
+refresh_cache_context_func: TypeAlias = Callable[[Any, int, bool], None]
+
+
+@dataclass
+class CacheDiTAdapterConfig:
+    """Config for creating a Cache DiT's block adapter; to enable CacheDiT,
+    most models just need to define an instance of this class as a class
+    var in the DiT.
+    """
+
+    block_forward_patterns: dict[str, ForwardPattern]
+    has_separate_cfg: bool = False
+
+
 # Registry of custom cache-dit enablers for specific models
 # Maps pipeline names to their cache-dit enablement functions
 CUSTOM_DIT_ENABLERS: dict[str, Callable] = {}
-
-refresh_cache_context_func: TypeAlias = Callable[[Any, int, bool], None]
 
 
 # Small helper to centralize cache-dit summaries.
@@ -162,7 +175,7 @@ def enable_cache_for_dit(
 
 ### Complex / custom enablers for DiT cache
 # NOTE: This case is rare (currently only Wan / Bagel); most DiT cache
-# enablement should be done by setting the _block_fwd_patterns in the models.
+# enablement should be done by setting the _cache_dit_adapter_config in the models.
 
 
 # from https://github.com/vipshop/cache-dit/pull/542
@@ -1506,16 +1519,16 @@ class CacheDiTBackend(CacheBackend):
 
     @staticmethod
     def maybe_build_block_adapter(pipeline) -> BlockAdapter | None:
-        """If a module defines `_block_fwd_patterns`, build the corresponding
+        """If a module defines `_cache_dit_adapter_config`, build the corresponding
         block adapter.
         """
         # TODO (Alex): Handle this more flexibly after PR lands:
         # https://github.com/vllm-project/vllm-omni/pull/2811
         transformer = default_get_pipeline_transformer(pipeline)
-        if not hasattr(transformer, "_block_fwd_patterns"):
+        if not hasattr(transformer, "_cache_dit_adapter_config"):
             return None
 
-        block_attrs, forward_pattern = zip(*transformer._block_fwd_patterns.items())
+        block_attrs, forward_pattern = zip(*transformer._cache_dit_adapter_config.items())
         block_adapter = BlockAdapter(
             transformer=transformer,
             blocks=[getattr(transformer, block_attr) for block_attr in block_attrs],
@@ -1542,7 +1555,7 @@ class CacheDiTBackend(CacheBackend):
             self._refresh_func = CUSTOM_DIT_ENABLERS[pipeline_name](pipeline, self.config)
         else:
             # Common case; either the model doesn't explicitly support dit cache yet,
-            # Or it defines its _block_fwd_patterns, which describes how we should
+            # Or it defines its _cache_dit_adapter_config, which describes how we should
             # create its block adapter.
             block_adapter = self.maybe_build_block_adapter(pipeline)
             self._refresh_func = enable_cache_for_dit(pipeline, self.config, block_adapter)

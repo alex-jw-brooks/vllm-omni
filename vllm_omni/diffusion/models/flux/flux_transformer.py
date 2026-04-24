@@ -26,6 +26,7 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig
 
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
@@ -525,10 +526,12 @@ class FluxTransformer2DModel(nn.Module):
             The dimensions to use for the rotary positional embeddings.
     """
 
-    _block_fwd_patterns = {
-        "transformer_blocks": ForwardPattern.Pattern_1,
-        "single_transformer_blocks": ForwardPattern.Pattern_1,
-    }
+    _cache_dit_adapter_config = CacheDiTAdapterConfig(
+        block_forward_patterns={
+            "transformer_blocks": ForwardPattern.Pattern_1,
+            "single_transformer_blocks": ForwardPattern.Pattern_1,
+        },
+    )
 
     # the small and frequently-repeated block(s) of a model
     # -- typically a transformer layer

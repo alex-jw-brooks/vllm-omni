@@ -19,6 +19,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig
 from vllm_omni.diffusion.data import DiffusionParallelConfig, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,
@@ -582,10 +583,12 @@ class LongCatImageTransformer2DModel(nn.Module):
     Supports Sequence Parallelism (Ulysses and Ring) when configured via OmniDiffusionConfig.
     """
 
-    _block_fwd_patterns = {
-        "transformer_blocks": ForwardPattern.Pattern_1,
-        "single_transformer_blocks": ForwardPattern.Pattern_1,
-    }
+    _cache_dit_adapter_config = CacheDiTAdapterConfig(
+        block_forward_patterns={
+            "transformer_blocks": ForwardPattern.Pattern_1,
+            "single_transformer_blocks": ForwardPattern.Pattern_1,
+        },
+    )
 
     _repeated_blocks = ["LongCatImageTransformerBlock", "LongCatImageSingleTransformerBlock"]
     _layerwise_offload_blocks_attrs = ["transformer_blocks", "single_transformer_blocks"]
