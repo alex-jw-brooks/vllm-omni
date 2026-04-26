@@ -52,8 +52,6 @@ async def generate(
         out = omni_output.request_output
         if stage_id == 0:
             num_tokens = sum(len(output.token_ids) for output in out.outputs)
-            # NOTE: Since these tests are against .generate() directly, the sampling
-            # params will be cumulative by default, which is why we set equal here.
             count = num_tokens
 
         await asyncio.sleep(0.0)
