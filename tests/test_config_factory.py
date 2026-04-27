@@ -1093,6 +1093,36 @@ class TestDeployConfigLoading:
         assert "foo" in stage.engine_extras
         assert stage.engine_extras["foo"] == {"a": 111, "b": {"d": 9, "e": 199}, "c": 3}
 
+    def test_deep_merge_does_not_mutate_inputs(self):
+        """Merging engine_args must not mutate the base stage dict."""
+        fake_config = {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "foo": {"a": 1, "b": {"x": 10, "y": 20}},
+                    "engine_args": {
+                        "foo": {"b": {"y": 99, "z": 30}, "c": 3},
+                    },
+                },
+            ]
+        }
+        original_foo = fake_config["stages"][0]["foo"]
+        original_b = original_foo["b"]
+
+        with patch("vllm_omni.config.stage_config.resolve_deploy_yaml", return_value=fake_config):
+            deploy = load_deploy_config("dummy.yaml")
+
+        # Values should merge into the new dict correctly
+        assert deploy.stages[0].engine_extras["foo"] == {
+            "a": 1,
+            "b": {"x": 10, "y": 99, "z": 30},
+            "c": 3,
+        }
+        # But the original nested dicts foo / b should be unchanged, since
+        # we recursively shallow copy to avoid mutating in place.
+        assert original_foo == {"a": 1, "b": {"x": 10, "y": 20}}
+        assert original_b == {"x": 10, "y": 20}
+
     def test_mixed_schema_engine_args_wins_scalars(self):
         """engine_args takes precedence over flat fields for scalar conflicts."""
         fake_config = {
