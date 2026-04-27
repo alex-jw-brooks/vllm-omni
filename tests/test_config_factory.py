@@ -5,8 +5,7 @@ Unit tests for StageConfigFactory and related classes.
 """
 
 import warnings
-from dataclasses import dataclass
-from dataclasses import fields as fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 from unittest.mock import patch
 
@@ -993,6 +992,40 @@ class TestDeployConfigLoading:
         assert stage.gpu_memory_utilization == 0.7
         assert stage.max_num_seqs == 8
 
+    def test_engine_parse_engine_fields(self):
+        """Test that we correctly parse & recursively merge stage deploy fields."""
+        fake_config = {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "compilation_config": {
+                        "encoder_cudagraph_token_budgets": [1024, 2048],
+                        "pass_config": {"fuse_norm_quant": True},
+                    },
+                    "engine_args": {
+                        "compilation_config": {
+                            "cudagraph_mm_encoder": True,
+                            "pass_config": {"fuse_allreduce_rms": False},
+                        },
+                    },
+                },
+            ]
+        }
+
+        with patch("vllm_omni.config.stage_config.resolve_deploy_yaml", return_value=fake_config):
+            deploy = load_deploy_config("dummy.yaml")
+
+        assert len(deploy.stages) == 1
+        stage = deploy.stages[0]
+        assert "compilation_config" in stage.engine_extras
+        assert stage.engine_extras["compilation_config"] == {
+            "encoder_cudagraph_token_budgets": [1024, 2048],
+            "pass_config": {
+                "fuse_norm_quant": True,
+                "fuse_allreduce_rms": False,
+            },
+            "cudagraph_mm_encoder": True,
+        }
 
     def test_engine_extras_deep_merges_dicts_simple(self):
         """Ensure dictionary valued keys merge properly for top level dicts."""

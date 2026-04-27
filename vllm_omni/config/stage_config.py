@@ -496,6 +496,8 @@ def _parse_stage_deploy(stage_data: dict[str, Any]) -> StageDeployConfig:
     # Get the non-reserved keys for this stage
     flat_args = {k: v for k, v in stage_data.items() if k not in _STAGE_RESERVED_KEYS}
     runtime_cfg = dict(stage_data.get("runtime", {}))
+    devices = runtime_cfg.get("devices", stage_data.get("devices"))
+    num_replicas = runtime_cfg.get("num_replicas", stage_data.get("num_replicas", 1))
 
     if "engine_args" in stage_data:
         for k, v in stage_data["engine_args"].items():
@@ -505,11 +507,6 @@ def _parse_stage_deploy(stage_data: dict[str, Any]) -> StageDeployConfig:
                 flat_args[k] = _recursive_merge_subdicts(existing, v)
             else:
                 flat_args[k] = v
-
-        devices = stage_data.get("runtime", {}).get("devices", stage_data.get("devices"))
-    else:
-        devices = stage_data.get("devices")
-    num_replicas = stage_data.get("num_replicas", runtime_cfg.get("num_replicas", 1))
 
     kwargs: dict[str, Any] = {
         "stage_id": stage_data["stage_id"],
