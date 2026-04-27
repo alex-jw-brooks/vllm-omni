@@ -504,7 +504,7 @@ def _parse_stage_deploy(stage_data: dict[str, Any]) -> StageDeployConfig:
             existing = flat_args.get(k)
             # If we have multiple dictionaries, merge recursively.
             if isinstance(v, dict) and isinstance(existing, dict):
-                flat_args[k] = _recursive_merge_subdicts(existing, v)
+                flat_args[k] = _get_recursively_merged_dict(existing, v)
             else:
                 flat_args[k] = v
 
@@ -528,30 +528,36 @@ _DEEP_MERGE_KEYS = frozenset({"default_sampling_params", "subtalker_sampling_par
 
 
 def _deep_merge_stage(base: dict, overlay: dict) -> dict:
-    """Deep-merge ``_DEEP_MERGE_KEYS`` so thin overlays don't drop base keys.
-
-    NOTE: reference types in the base dictionary will be updated in place.
-    """
+    """Deep-merge ``_DEEP_MERGE_KEYS`` so thin overlays don't drop base keys."""
     # Deep merge _DEEP_MERGE_KEYS recursively
     base_merge_dict = {k: v for k, v in base.items() if k in _DEEP_MERGE_KEYS}
     overlay_merge_dict = {k: v for k, v in overlay.items() if k in _DEEP_MERGE_KEYS}
 
     # Get the merge dict; priority is base > overlay > merged sub
-    merged_subdict = _recursive_merge_subdicts(original=base_merge_dict, update=overlay_merge_dict)
+    merged_subdict = _get_recursively_merged_dict(original=base_merge_dict, update=overlay_merge_dict)
     merged_dict = {**base, **overlay, **merged_subdict}
     return merged_dict
 
 
-def _recursive_merge_subdicts(original: dict, update: dict):
-    """Recursively merge dict valued keys in place."""
+def _get_recursively_merged_dict(original: dict, update: dict) -> dict:
+    """Recursively merge two dicts, returning a new dict."""
+    merged = original.copy()
     for k, update_v in update.items():
-        # If we have nested dict values, continue merging
-        orig_v = original.get(k)
+        orig_v = merged.get(k)
         if isinstance(orig_v, dict) and isinstance(update_v, dict):
-            _recursive_merge_subdicts(orig_v, update_v)
+            merged[k] = _get_recursively_merged_dict(orig_v, update_v)
         else:
-            original[k] = update_v
-    return original
+            if orig_v is not None:
+                logger.error(
+                    "Deep-merge key %r has non-dict value (base=%s, overlay=%s); "
+                    "overlay will fully replace base instead of merging.",
+                    k,
+                    type(orig_v).__name__,
+                    type(update_v).__name__,
+                )
+
+            merged[k] = update_v
+    return merged
 
 
 def _merge_stage_lists(

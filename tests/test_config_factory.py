@@ -1049,6 +1049,28 @@ class TestDeployConfigLoading:
         assert "foo" in stage.engine_extras
         assert stage.engine_extras["foo"] == {"a": 111, "b": 2, "c": 3}
 
+    def test_engine_extras_dict_type_mismatch(self):
+        """Ensure that we handle type mismatches with nested dicts correctly."""
+        fake_config = {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "foo": {"b": {1: 1}},
+                    "engine_args": {
+                        "foo": {"b": 2},
+                    },
+                },
+            ]
+        }
+
+        with patch("vllm_omni.config.stage_config.resolve_deploy_yaml", return_value=fake_config):
+            deploy = load_deploy_config("dummy.yaml")
+
+        assert len(deploy.stages) == 1
+        stage = deploy.stages[0]
+        assert "foo" in stage.engine_extras
+        assert stage.engine_extras["foo"] == {"b": 2}
+
     def test_mixed_engine_extras_deep_merges_dicts(self):
         """Ensure dictionary valued keys merge properly for nested dicts."""
         fake_config = {
