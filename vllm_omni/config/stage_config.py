@@ -533,7 +533,7 @@ def _deep_merge_stage(base: dict, overlay: dict) -> dict:
     base_merge_dict = {k: v for k, v in base.items() if k in _DEEP_MERGE_KEYS}
     overlay_merge_dict = {k: v for k, v in overlay.items() if k in _DEEP_MERGE_KEYS}
 
-    # Get the merge dict; priority is base > overlay > merged sub
+    # Get the merge dict; priority is base < overlay < merged sub
     merged_subdict = _get_recursively_merged_dict(original=base_merge_dict, update=overlay_merge_dict)
     merged_dict = {**base, **overlay, **merged_subdict}
     return merged_dict
@@ -548,7 +548,7 @@ def _get_recursively_merged_dict(original: dict, update: dict) -> dict:
             merged[k] = _get_recursively_merged_dict(orig_v, update_v)
         else:
             if orig_v is not None:
-                logger.error(
+                logger.warning(
                     "Deep-merge key %r has non-dict value (base=%s, overlay=%s); "
                     "overlay will fully replace base instead of merging.",
                     k,
