@@ -191,7 +191,7 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     the outputs may still diverge a bit even though we set the seed and temperature.
     This is mostly because the GEMM algorithm may vary based on the input tensors dims.
     Because of this, it's also important to run this test with real weights, since
-    dummy weights will be very close.
+    dummy weighted top log probs will effectively be random, making this check more volatile.
     """
     seed = 10
     img_res = generate_synthetic_image(224, 224, seed=seed)
@@ -222,9 +222,9 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     # Ensure that we have a prefix cache hit on the second request, that we have logprobs,
     # and that a nonzero amount of tokens were generated for both the cached & uncached request
     assert cached_response.cached_tokens is not None and cached_response.cached_tokens > 0
-    n_tokens = min(len(uncached_response.logprobs), len(cached_response.logprobs))
     assert uncached_response.logprobs is not None
     assert cached_response.logprobs is not None
+    n_tokens = min(len(uncached_response.logprobs), len(cached_response.logprobs))
     assert n_tokens > 0
 
     # For each token index where both responses have an output, ensure that the greedy token
