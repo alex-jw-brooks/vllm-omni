@@ -203,6 +203,7 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     )
 
     top_k = 10
+    sampling_params = {"seed": seed, "temperature": 0, "max_tokens": 8, "logprobs": top_k}
     request_config = {
         "model": omni_server.model,
         "messages": messages,
@@ -210,10 +211,7 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
         "modalities": ["text"],
         "logprobs": True,
         "top_logprobs": top_k,
-        "sampling_params_list": [
-            {"seed": seed, "temperature": 0, "max_tokens": 8, "logprobs": top_k},
-        ]
-        * 3,
+        "sampling_params_list": [sampling_params] * 3,
     }
 
     uncached_response = openai_client.send_omni_request(request_config, request_num=1)[0]
