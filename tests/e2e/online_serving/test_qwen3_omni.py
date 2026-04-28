@@ -42,8 +42,8 @@ def get_prefix_caching_config(config_path: str):
     path = modify_stage_config(
         config_path,
         updates={
-            "stage_args": {
-                0: {"engine_args.enable_prefix_caching": True},
+            "stages": {
+                0: {"enable_prefix_caching": True},
             },
         },
     )
@@ -200,19 +200,34 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
         content_text=get_prompt("text_image"),
     )
 
+    top_k = 10
     request_config = {
         "model": omni_server.model,
         "messages": messages,
         "stream": False,
         "modalities": ["text"],
-        "sampling_params_list": [{"seed": seed, "temperature": 0, "max_tokens": 16}] * 3,
+        "logprobs": True,
+        "top_logprobs": top_k,
+        "sampling_params_list": [
+            {"seed": seed, "temperature": 0, "max_tokens": 8, "logprobs": top_k},
+        ]
+        * 3,
     }
 
-    response_1 = openai_client.send_omni_request(request_config, request_num=1)[0]
-    response_2 = openai_client.send_omni_request(request_config, request_num=1)[0]
+    uncached_response = openai_client.send_omni_request(request_config, request_num=1)[0]
+    cached_response = openai_client.send_omni_request(request_config, request_num=1)[0]
 
-    # We should cache the vast majority of the prompt (image + up to last full block),
-    # and set seed + temperature, so the second request should give an identical
-    # response for the generated input image, even if we use dummy weights
-    assert response_2.cached_tokens is not None and response_2.cached_tokens > 0
-    assert response_1.text_content == response_2.text_content
+    # Ensure that we have a prefix cache hit on the second request, that we have logprobs,
+    # and that a nonzero amount of tokens were generated for both the cached & uncached request
+    assert cached_response.cached_tokens is not None and cached_response.cached_tokens > 0
+    n_tokens = min(len(uncached_response.logprobs), len(cached_response.logprobs))
+    assert uncached_response.logprobs is not None
+    assert cached_response.logprobs is not None
+    assert n_tokens > 0
+
+    # For each token index where both responses have an output, ensure that the greedy token
+    # predicted in the uncached case is in the top k logprobs for the cached case
+    for idx in range(n_tokens):
+        greedy_token = uncached_response.logprobs[idx].token
+        cached_top_k = {lp.token for lp in cached_response.logprobs[idx].top_logprobs}
+        assert greedy_token in cached_top_k

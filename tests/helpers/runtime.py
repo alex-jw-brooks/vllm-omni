@@ -588,6 +588,7 @@ class OmniResponse:
     success: bool = False
     error_message: str | None = None
     cached_tokens: int | None = None
+    logprobs: list | None = None
 
 
 @dataclass
@@ -662,6 +663,8 @@ class OpenAIClientHandler:
                 audio_content = convert_audio_bytes_to_text(result.audio_bytes)
             result.text_content = text_content
             result.audio_content = audio_content
+            if chat_completion.choices and chat_completion.choices[0].logprobs is not None:
+                result.logprobs = chat_completion.choices[0].logprobs.content
             result.success = True
         except Exception as e:
             result.error_message = f"Non-stream processing error: {str(e)}"
@@ -714,6 +717,10 @@ class OpenAIClientHandler:
             "stream": stream,
             "modalities": modalities,
         }
+        if "logprobs" in request_config:
+            create_kwargs["logprobs"] = request_config["logprobs"]
+        if "top_logprobs" in request_config:
+            create_kwargs["top_logprobs"] = request_config["top_logprobs"]
         if extra_body:
             create_kwargs["extra_body"] = extra_body
 
