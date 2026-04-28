@@ -180,8 +180,7 @@ def test_text_to_text_001(omni_server, openai_client) -> None:
 @pytest.mark.omni
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
 @pytest.mark.parametrize("omni_server", prefix_test_params, indirect=True)
-@pytest.mark.skip(reason="Flaky: identical greedy requests diverge on text_content (prefix caching path).")
-def test_thinker_prefix_caching(omni_server, openai_client) -> None:
+def test_thinker_prefix_caching(omni_server, openai_client, run_level) -> None:
     """
     Test thinker prefix caching by sending identical requests with an image (i.e.,
     a large shared prefix) and verifying that the second request uses cached tokens
@@ -190,8 +189,8 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     NOTE: The reason that we check against logprobs instead of direct text here is that
     the outputs may still diverge a bit even though we set the seed and temperature.
     This is mostly because the GEMM algorithm may vary based on the input tensors dims.
-    Because of this, it's also important to run this test with real weights, since
-    dummy weighted top log probs will effectively be random, making this check more volatile.
+    Because of this, we don't check the logprobs if it's a dummy load, since in that case
+    the top logprobs will all be very close.
     """
     seed = 10
     img_res = generate_synthetic_image(224, 224, seed=seed)
@@ -220,14 +219,16 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     # Ensure that we have a prefix cache hit on the second request, that we have logprobs,
     # and that a nonzero amount of tokens were generated for both the cached & uncached request
     assert cached_response.cached_tokens is not None and cached_response.cached_tokens > 0
+
     assert uncached_response.logprobs is not None
     assert cached_response.logprobs is not None
     n_tokens = min(len(uncached_response.logprobs), len(cached_response.logprobs))
     assert n_tokens > 0
 
-    # For each token index where both responses have an output, ensure that the greedy token
-    # predicted in the uncached case is in the top k logprobs for the cached case
-    for idx in range(n_tokens):
-        greedy_token = uncached_response.logprobs[idx].token
-        cached_top_k = {lp.token for lp in cached_response.logprobs[idx].top_logprobs}
-        assert greedy_token in cached_top_k
+    if run_level == "advanced_model":
+        # For each token index where both responses have an output, ensure that the greedy token
+        # predicted in the uncached case is in the top k logprobs for the cached case
+        for idx in range(n_tokens):
+            greedy_token = uncached_response.logprobs[idx].token
+            cached_top_k = {lp.token for lp in cached_response.logprobs[idx].top_logprobs}
+            assert greedy_token in cached_top_k
