@@ -65,7 +65,7 @@ from vllm.entrypoints.openai.speech_to_text.serving import (
 from vllm.entrypoints.openai.utils import validate_json_request
 from vllm.entrypoints.pooling.classify.serving import ServingClassification
 from vllm.entrypoints.pooling.embed.serving import ServingEmbedding as OpenAIServingEmbedding
-from vllm.entrypoints.pooling.pooling.serving import OpenAIServingPooling
+from vllm.entrypoints.pooling.pooling.serving import ServingPooling
 from vllm.entrypoints.pooling.score.serving import ServingScores
 from vllm.entrypoints.serve.disagg.serving import ServingTokens
 
@@ -810,10 +810,9 @@ async def omni_init_app_state(
         else None
     )
     state.openai_serving_pooling = (
-        OpenAIServingPooling(
+        ServingPooling(
             engine_client,
             state.openai_serving_models,
-            state.openai_serving_render,
             supported_tasks=tuple(supported_tasks),
             request_logger=request_logger,
             chat_template=resolved_chat_template,
