@@ -66,7 +66,7 @@ from vllm.entrypoints.openai.utils import validate_json_request
 from vllm.entrypoints.pooling.classify.serving import ServingClassification
 from vllm.entrypoints.pooling.embed.serving import ServingEmbedding as OpenAIServingEmbedding
 from vllm.entrypoints.pooling.pooling.serving import ServingPooling
-from vllm.entrypoints.pooling.score.serving import ServingScores
+from vllm.entrypoints.pooling.scoring.serving import ServingScores
 from vllm.entrypoints.serve.disagg.serving import ServingTokens
 
 # vLLM moved `base` from openai.basic.api_router to serve.instrumentator.basic.
