@@ -187,9 +187,11 @@ def test_thinker_prefix_caching(omni_server, openai_client) -> None:
     a large shared prefix) and verifying that the second request uses cached tokens
     & produces the same output with greedy decoding.
 
-    NOTE: The seed for this test is used as a regression test for the issue linked below;
-    https://github.com/vllm-project/vllm-omni/issues/2833; without passing the sampling
-    params, this test will fail with the current default stage configs.
+    NOTE: The reason that we check against logprobs instead of direct text here is that
+    the outputs may still diverge a bit even though we set the seed and temperature.
+    This is mostly because the GEMM algorithm may vary based on the input tensors dims.
+    Because of this, it's also important to run this test with real weights, since
+    dummy weights will be very close.
     """
     seed = 10
     img_res = generate_synthetic_image(224, 224, seed=seed)
