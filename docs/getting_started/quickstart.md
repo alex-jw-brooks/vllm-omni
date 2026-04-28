@@ -31,6 +31,12 @@ uv pip install -e .
 
 For additional installation methods — please see the [installation guide](installation/README.md).
 
+
+!!! note
+    It is important to install the same major & minor version of vLLM and vLLM Omni, otherwise things may not work as expected. If the versions are misaligned, you will see a warning when you install vLLM Omni.
+
+    If you are seeing strange behavior with the `vllm` command not handling the `--omni` flag correctly, you most likely have a version mismatch with vLLM < `0.20.0` and vLLM Omni `0.20.0`, as vLLM Omni no longer hijacks the vLLM entrypoint. Updating vLLM should resolve this issue.
+
 ## Offline Inference
 
 Text-to-image generation quickstart with vLLM-Omni:
