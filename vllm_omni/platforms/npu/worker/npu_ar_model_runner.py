@@ -587,7 +587,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
             self._copy_draft_token_ids_to_cpu(scheduler_output)
 
         (
-            num_nans_in_logits,
+            _num_nans_in_logits,
             logprobs_lists,
             valid_sampled_token_ids,
             prompt_logprobs_dict,

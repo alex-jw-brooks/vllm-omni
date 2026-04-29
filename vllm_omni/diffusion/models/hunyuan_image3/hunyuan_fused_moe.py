@@ -13,10 +13,9 @@ from vllm_omni.platforms import current_omni_platform
 def _set_forward_context_num_tokens(num_tokens: int) -> None:
     """Set num_tokens on the vLLM ForwardContext for MoE routing.
 
-    After the rebase to vLLM 0.20.0, SharedFusedMoE has been folding
-    into FusedMoE and expects ForwardContext.num_tokens to be set.
-    Without it, MoE expert routing may produce incorrect results
-    (silent correctness bug).
+    After the rebase to vLLM 0.18.0, FusedMoE expects
+    ForwardContext.num_tokens to be set. Without it, MoE expert
+    routing may produce incorrect results (silent correctness bug).
     """
     if not _vllm_fc.is_forward_context_available():
         return
