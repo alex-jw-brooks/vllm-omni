@@ -800,8 +800,7 @@ async def omni_init_app_state(
         else None
     )
     state.openai_serving_pooling = (
-        
-      (
+        ServingPooling(
             engine_client,
             state.openai_serving_models,
             supported_tasks=tuple(supported_tasks),
