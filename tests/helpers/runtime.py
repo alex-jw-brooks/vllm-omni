@@ -587,6 +587,7 @@ class OmniResponse:
     e2e_latency: float | None = None
     success: bool = False
     error_message: str | None = None
+    prompt_tokens: int | None = None
     cached_tokens: int | None = None
     logprobs: list | None = None
 
@@ -652,10 +653,12 @@ class OpenAIClientHandler:
                     audio_data = choice.message.audio.data
                 if hasattr(choice.message, "content") and choice.message.content is not None:
                     text_content = choice.message.content
-            # Extract cached_tokens for prefix caching tests
+            # Extract cached & prompt token counts for prefix caching tests
             usage = getattr(chat_completion, "usage", None)
-            if usage and (details := getattr(usage, "prompt_tokens_details", None)):
-                result.cached_tokens = details.cached_tokens
+            if usage:
+                result.prompt_tokens = usage.prompt_tokens
+                if details := getattr(usage, "prompt_tokens_details", None):
+                    result.cached_tokens = details.cached_tokens
             result.e2e_latency = time.perf_counter() - start_time
             audio_content = None
             if audio_data:

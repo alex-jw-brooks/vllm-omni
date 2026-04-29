@@ -37,19 +37,6 @@ def get_chunk_config(config_path: str | None = None):
     return modify_stage_config(config_path, updates={"async_chunk": True})
 
 
-def get_prefix_caching_config(config_path: str):
-    """Create a stage config with prefix caching enabled on the thinker (stage 0)."""
-    path = modify_stage_config(
-        config_path,
-        updates={
-            "stages": {
-                0: {"enable_prefix_caching": True},
-            },
-        },
-    )
-    return path
-
-
 # Platform-specific overrides live inside the new deploy yaml's ``platforms:``
 # section, so a single ``_CI_DEPLOY`` path serves CUDA, ROCm, and XPU.
 # TODO: re-add VLLM_TEST_PD_MODE branch once the PD-disaggregation deploy
@@ -59,22 +46,27 @@ if current_omni_platform.is_xpu():
     stage_configs = [_CI_DEPLOY]
 else:  # CUDA + ROCm MI325 share the same deploy config
     stage_configs = [get_chunk_config()]
-prefix_caching_stage_configs = [get_prefix_caching_config(_CI_DEPLOY)]
 
 # Create parameter combinations for model and stage config
 test_params = [
     OmniServerParams(model=model, stage_config_path=stage_config) for model in models for stage_config in stage_configs
 ]
-# For prefix caching, we need to enable prompt token details so that we
-# can determine if any tokens were cached.
+# For prefix caching, we enable it on the thinker (stage 0) via CLI override
+# and enable prompt token details so that we can determine if any tokens were cached.
+BLOCK_SIZE = 16
 prefix_test_params = [
     OmniServerParams(
         model=model,
-        stage_config_path=stage_config,
-        server_args=["--enable-prompt-tokens-details"],  # Enable prompt tokens details to get cached_tokens
+        stage_config_path=_CI_DEPLOY,
+        server_args=[
+            "--block-size",
+            str(BLOCK_SIZE),
+            "--stage-overrides",
+            '{"0": {"enable_prefix_caching": true}}',
+            "--enable-prompt-tokens-details",
+        ],
     )
     for model in models
-    for stage_config in prefix_caching_stage_configs
 ]
 
 
@@ -216,10 +208,17 @@ def test_thinker_prefix_caching(omni_server, openai_client, run_level) -> None:
     uncached_response = openai_client.send_omni_request(request_config, request_num=1)[0]
     cached_response = openai_client.send_omni_request(request_config, request_num=1)[0]
 
-    # Ensure that we have a prefix cache hit on the second request, that we have logprobs,
-    # and that a nonzero amount of tokens were generated for both the cached & uncached request
-    assert cached_response.cached_tokens is not None and cached_response.cached_tokens > 0
+    # Ensure that we have a prefix cache hit on the second request and that only the last
+    # partial block is uncached (since currently we don't cache partial blocks).
+    num_cached_tokens = cached_response.cached_tokens
+    num_prompt_tokens = cached_response.prompt_tokens
+    assert num_cached_tokens is not None and num_prompt_tokens is not None
+    num_uncached_tokens = num_prompt_tokens % BLOCK_SIZE
+    assert num_cached_tokens > 0
+    assert num_cached_tokens % BLOCK_SIZE == 0
+    assert (num_cached_tokens + num_uncached_tokens) == num_prompt_tokens
 
+    # Ensure that we have logprobs and tokens were generated for both requests
     assert uncached_response.logprobs is not None
     assert cached_response.logprobs is not None
     n_tokens = min(len(uncached_response.logprobs), len(cached_response.logprobs))
