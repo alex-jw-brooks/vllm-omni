@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from collections.abc import Callable
 
 import torch
 from vllm.logger import init_logger
@@ -10,6 +9,13 @@ from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionBackend,
     AttentionImpl,
     AttentionMetadata,
+)
+from vllm_omni.diffusion.attention.backends.utils.fa import (
+    HAS_FLASH_ATTN,
+    _pad_input,
+    _unpad_input,
+    _upad_input,
+    flash_attn_varlen_func,
 )
 
 logger = init_logger(__name__)
@@ -62,13 +68,6 @@ class FlashAttentionImpl(AttentionImpl):
         value: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        from vllm_omni.diffusion.attention.backends.utils.fa import (
-            _pad_input,
-            _unpad_input,
-            _upad_input,
-            flash_attn_varlen_func,
-        )
-
         assert attention_mask.ndim == 2, "attention_mask must be 2D, (batch_size, seq_len)"
         query_length = query.size(1)
         q, k, v, indices_q, (cu_seq_lens_q, cu_seq_lens_k), (max_length_q, max_length_k) = _upad_input(
@@ -96,7 +95,6 @@ class FlashAttentionImpl(AttentionImpl):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        flash_attn_varlen_func: Callable[..., torch.Tensor | tuple[torch.Tensor, ...]],
     ) -> torch.Tensor:
         """Common wrapper for calling flash_attn_varlen_func for XPU and CUDA in vLLM.
 
@@ -136,11 +134,6 @@ class FlashAttentionImpl(AttentionImpl):
         attn_metadata: AttentionMetadata = None,
     ) -> torch.Tensor:
         """CUDA/ROCm/MUSA flash attention implementation."""
-        from vllm_omni.diffusion.attention.backends.utils.fa import (
-            HAS_FLASH_ATTN,
-            flash_attn_varlen_func,
-        )
-
         if not HAS_FLASH_ATTN:
             raise ImportError(
                 "FlashAttentionBackend requires Flash Attention. "
@@ -162,7 +155,6 @@ class FlashAttentionImpl(AttentionImpl):
             query,
             key,
             value,
-            flash_attn_varlen_func,
         )
 
     def forward_xpu(
@@ -173,11 +165,6 @@ class FlashAttentionImpl(AttentionImpl):
         attn_metadata: AttentionMetadata = None,
     ) -> torch.Tensor:
         """XPU flash attention implementation."""
-        from vllm_omni.diffusion.attention.backends.utils.fa import (
-            HAS_FLASH_ATTN,
-            flash_attn_varlen_func,
-        )
-
         if not HAS_FLASH_ATTN:
             raise ImportError(
                 "FlashAttentionBackend requires Flash Attention. "
@@ -199,7 +186,6 @@ class FlashAttentionImpl(AttentionImpl):
             query,
             key,
             value,
-            flash_attn_varlen_func,
         )
 
     def forward_npu(
