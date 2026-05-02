@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from time import time
@@ -9,9 +10,9 @@ from vllm.compilation.cuda_graph import CUDAGraphStat
 from vllm.distributed.kv_events import KVEventBatch
 from vllm.distributed.kv_transfer.kv_connector.v1.metrics import KVConnectorStats
 from vllm.logger import init_logger
-from vllm.v1.core.sched.async_scheduler import AsyncScheduler as VLLMScheduler
+from vllm.v1.core.sched.async_scheduler import AsyncScheduler as AsyncVLLMScheduler
 from vllm.v1.core.sched.output import SchedulerOutput
-from vllm.v1.core.sched.scheduler import Scheduler as SyncScheduler
+from vllm.v1.core.sched.scheduler import Scheduler as VLLMScheduler
 from vllm.v1.core.sched.utils import remove_all
 from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs
 from vllm.v1.metrics.perf import PerfStats
@@ -40,13 +41,10 @@ class KVCacheTransferData:
         return asdict(self)
 
 
-class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
-    """
-    OmniARScheduler: Scheduler for vLLM-Omni multimodal processing.
-
-    This scheduler extends vLLM's scheduler to support multimodal and
-    non-autoregressive processing with additional fields and methods
-    specific to vLLM-Omni.
+class _OmniARSchedulerCore(OmniSchedulerMixin, ABC):
+    """AutoRegressive core scheduling logic for vLLM-Omni. This class should be
+    kept as agnostic to sync/async scheduling as possible, since we use it as the
+    base class for both the Sync / Async autoregressive schedulers.
     """
 
     def __init__(self, *args, **kwargs):
@@ -95,7 +93,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
 
         status_before_update = request.status
 
-        new_token_ids, stopped = SyncScheduler._update_request_with_output(self, request, new_token_ids)
+        new_token_ids, stopped = VLLMScheduler._update_request_with_output(self, request, new_token_ids)
 
         request.num_output_placeholders -= len(new_token_ids)
         assert request.num_output_placeholders >= 0
@@ -786,3 +784,11 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
 
         self.requests_needing_kv_transfer.clear()
         return requests
+
+
+class OmniARScheduler(_OmniARSchedulerCore, VLLMScheduler):
+    """Synchronous AutoRegressive scheduler."""
+
+
+class OmniARAsyncScheduler(_OmniARSchedulerCore, AsyncVLLMScheduler):
+    """Asynchronous AutoRegressive scheduler."""
