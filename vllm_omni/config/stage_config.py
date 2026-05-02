@@ -139,7 +139,7 @@ class StageExecutionType(str, Enum):
 
 def _resolve_scheduler(
     execution_type: StageExecutionType,
-    async_scheduling: bool = False,
+    async_scheduling: bool = True,
 ) -> type[VLLMScheduler] | None:
     """Return the scheduler class for the given execution_type.
 
@@ -796,7 +796,7 @@ def merge_pipeline_deploy(
         engine_args = _build_engine_args(ps, ds, pipeline, deploy, next_stage_proc)
         sched_cls = _resolve_scheduler(
             ps.execution_type,
-            engine_args.get("async_scheduling", False),
+            engine_args.get("async_scheduling", True),
         )
         if ps.execution_type == StageExecutionType.LLM_AR:
             engine_args["async_scheduling"] = sched_cls is OmniARAsyncScheduler

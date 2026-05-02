@@ -419,6 +419,9 @@ _CI_OVERLAYS: dict[str, dict[str, Any]] = {
                 "max_num_seqs": 3,
                 "gpu_memory_utilization": 0.45,
                 "load_format": "dummy",
+                # Image to image tests for bagel check pixel values
+                # that were saved with synchronous scheduling
+                "async_scheduling": False,
             },
             {
                 "stage_id": 1,
