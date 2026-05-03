@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from abc import ABC
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from time import time
@@ -41,10 +40,10 @@ class KVCacheTransferData:
         return asdict(self)
 
 
-class _OmniARSchedulerCore(OmniSchedulerMixin, ABC):
-    """AutoRegressive core scheduling logic for vLLM-Omni. This class should be
-    kept as agnostic to sync/async scheduling as possible, since we use it as the
-    base class for both the Sync / Async autoregressive schedulers.
+class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
+    """Synchronous AutoRegressive scheduler for vLLM-Omni. This class is also
+    used as a base class for the OmniARAsyncScheduler and holds most of the
+    core scheduling logic.
     """
 
     def __init__(self, *args, **kwargs):
@@ -81,28 +80,8 @@ class _OmniARSchedulerCore(OmniSchedulerMixin, ABC):
 
     def _get_confirmed_num_computed_tokens(self, request: Request) -> int:
         """num_computed_tokens minus async placeholders (KV actually on GPU)."""
+        # Output placeholders are zero when async scheduling isn't used
         return request.num_computed_tokens - request.num_output_placeholders
-
-    def _update_request_with_output(self, request: Request, new_token_ids: list[int]) -> tuple[list[int], bool]:
-        """Append output tokens, then cache blocks up to the confirmed count
-        so KV transfer never sees blocks whose data has not been computed yet.
-        """
-        if request.discard_latest_async_tokens:
-            request.discard_latest_async_tokens = False
-            return [], False
-
-        status_before_update = request.status
-
-        new_token_ids, stopped = VLLMScheduler._update_request_with_output(self, request, new_token_ids)
-
-        request.num_output_placeholders -= len(new_token_ids)
-        assert request.num_output_placeholders >= 0
-
-        if status_before_update == RequestStatus.RUNNING:
-            confirmed = self._get_confirmed_num_computed_tokens(request)
-            self.kv_cache_manager.cache_blocks(request, confirmed)
-
-        return new_token_ids, stopped
 
     def _get_kv_transfer_criteria(self) -> dict | None:
         # Note: vllm_config is available in Scheduler after super().__init__
@@ -786,9 +765,5 @@ class _OmniARSchedulerCore(OmniSchedulerMixin, ABC):
         return requests
 
 
-class OmniARScheduler(_OmniARSchedulerCore, VLLMScheduler):
-    """Synchronous AutoRegressive scheduler."""
-
-
-class OmniARAsyncScheduler(_OmniARSchedulerCore, AsyncVLLMScheduler):
+class OmniARAsyncScheduler(OmniARScheduler, AsyncVLLMScheduler):
     """Asynchronous AutoRegressive scheduler."""
