@@ -18,11 +18,11 @@ def test_serve_parser_accepts_no_async_chunk() -> None:
     """``--no-async-chunk`` should parse after deploy-overriding parser
     defaults are nullified."""
     try:
-        from vllm.utils.argparse_utils import FlexibleArgumentParser
+        from vllm_omni.utils.tracking_parser import TrackingArgumentParser
     except Exception as exc:
         pytest.skip(f"Cannot build parser in this environment: {exc}")
 
-    root = FlexibleArgumentParser()
+    root = TrackingArgumentParser()
     subparsers = root.add_subparsers(dest="subcommand")
     cmd = OmniServeCommand()
     cmd.subparser_init(subparsers)

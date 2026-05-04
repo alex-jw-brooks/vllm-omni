@@ -232,15 +232,14 @@ def test_all_omni_cli_flags_classified():
       - in SHARED_FIELDS
     """
     try:
-        from vllm.utils.argparse_utils import FlexibleArgumentParser
-
         from vllm_omni.engine.arg_utils import OmniEngineArgs
         from vllm_omni.entrypoints.cli.serve import OmniServeCommand
+        from vllm_omni.utils.tracking_parser import TrackingArgumentParser
     except Exception as exc:
         pytest.skip(f"Cannot build parser in this environment: {exc}")
 
     # Build the serve parser
-    root = FlexibleArgumentParser()
+    root = TrackingArgumentParser()
     subparsers = root.add_subparsers()
     cmd = OmniServeCommand()
     try:
@@ -394,13 +393,13 @@ def test_ambiguous_field_non_strict_routes_to_orchestrator():
 
 
 def _build_full_serve_parser():
-    from vllm.utils.argparse_utils import FlexibleArgumentParser
+    from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
     try:
         from vllm.entrypoints.openai.cli_args import make_arg_parser
     except ImportError:
         pytest.skip("vllm parser not importable")
-    return make_arg_parser(FlexibleArgumentParser())
+    return make_arg_parser(TrackingArgumentParser())
 
 
 def test_nullify_stage_engine_defaults_resets_inherited_defaults():

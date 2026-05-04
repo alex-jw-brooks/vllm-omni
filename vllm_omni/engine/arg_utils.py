@@ -631,18 +631,23 @@ def derive_server_dests_from_vllm_parser() -> frozenset[str]:
     CI tests to assert all CLI flags are classifiable without maintaining
     a hardcoded server list.
 
+    NOTE: TrackingArgumentParser is a thin rapper around vLLM's
+    FlexibleArgumentParser, which allows us to tell which values were set
+    by the user.
+
     Returns empty frozenset if vllm's parser cannot be built (e.g. in a
     minimal test environment).
     """
     try:
         from vllm.entrypoints.openai.cli_args import make_arg_parser
-        from vllm.utils.argparse_utils import FlexibleArgumentParser
+
+        from vllm_omni.utils.tracking_parser import TrackingArgumentParser
     except ImportError:
         logger.debug("Cannot import vllm parser — server-dest derivation skipped")
         return frozenset()
 
     try:
-        parser = make_arg_parser(FlexibleArgumentParser())
+        parser = make_arg_parser(TrackingArgumentParser())
         all_dests = {a.dest for a in parser._actions if a.dest and a.dest != "help"}
     except Exception as exc:
         logger.debug("Failed to build vllm parser: %s", exc)

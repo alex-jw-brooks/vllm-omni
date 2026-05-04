@@ -19,11 +19,11 @@ from vllm.entrypoints.cli.types import CLISubcommand
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import VLLM_SUBCMD_PARSER_EPILOG
 from vllm.logger import init_logger
-from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
+from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
 logger = init_logger(__name__)
 
@@ -84,7 +84,7 @@ class OmniServeCommand(CLISubcommand):
     name = "serve"
     # Parser stashed at subparser_init so ``cmd`` can resolve each user-typed
     # flag to its real ``dest`` via the parser's action table.
-    _parser: FlexibleArgumentParser | None = None
+    _parser: TrackingArgumentParser | None = None
 
     @staticmethod
     def cmd(args: argparse.Namespace) -> None:
@@ -170,7 +170,7 @@ class OmniServeCommand(CLISubcommand):
             return
         validate_parsed_serve_args(args)
 
-    def subparser_init(self, subparsers: argparse._SubParsersAction) -> FlexibleArgumentParser:
+    def subparser_init(self, subparsers: argparse._SubParsersAction) -> TrackingArgumentParser:
         serve_parser = subparsers.add_parser(
             self.name,
             description=DESCRIPTION,
