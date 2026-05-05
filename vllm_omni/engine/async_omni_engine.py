@@ -270,12 +270,9 @@ class AsyncOmniEngine:
         init_timeout: int = 600,
         diffusion_batch_size: int = 1,
         single_stage_mode: bool = False,
-<<<<<<< HEAD
         transfer_emitter: Any = None,
         log_stats: bool = False,
-=======
         tokenizer: str | None = None,
->>>>>>> 5faf2b2e (remove more dead code, unused engine_args path)
         **kwargs: Any,
     ) -> None:
         self.model = model
