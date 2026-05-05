@@ -39,6 +39,8 @@ from vllm_omni.engine.arg_utils import SHARED_FIELDS, EngineArgs, internal_black
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 class TestStageType:
     """Tests for StageType enum."""
