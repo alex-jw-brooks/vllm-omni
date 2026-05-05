@@ -705,13 +705,12 @@ def run_headless(args: TrackingNamespace) -> None:
     from vllm_omni.entrypoints.utils import inject_omni_kv_config, load_and_resolve_stage_configs
     from vllm_omni.platforms import current_omni_platform
 
-    model = args.get("model")
-    stage_id: int | None = args.get("stage_id")
-    omni_master_address: str | None = args.get("omni_master_address")
-    omni_master_port: int | None = args.get("omni_master_port")
-    replica_id: int = args.get("replica_id")
-    api_server_count: int = args.get("api_server_count", 0)
-    worker_backend: str | None = args.get("worker_backend")
+    model = args.model
+    stage_id: int | None = args.stage_id
+    omni_master_address: str | None = args.omni_master_address
+    omni_master_port: int | None = args.omni_master_port
+    worker_backend: str | None = args.worker_backend
+    stage_configs_path: str | None = args.stage_configs_path
     omni_replica_address: str | None = getattr(args, "omni_replica_address", None)
     omni_dp_size_local: int = max(1, int(getattr(args, "omni_dp_size_local", 1) or 1))
     stage_configs_path = args.get("stage_configs_path")
@@ -720,29 +719,27 @@ def run_headless(args: TrackingNamespace) -> None:
         raise ValueError("Failed to pass model from kwargs")
     if stage_id is None:
         raise ValueError("--stage-id is required in headless mode")
+    if omni_master_address is None or omni_master_port is None:
+        raise ValueError("--omni-master-address and --omni-master-port are required in headless mode")
+    if worker_backend != "multi_process":
+        raise ValueError("headless mode requires worker_backend=multi_process")
+
+    # Filter down to a dict of things explicitly requested by the user
+    args_dict = args.get_explicit_kwargs_dict()
 
     # ``--replica-id`` is deprecated and ignored — replica ids are
     # auto-assigned by ``OmniMasterServer`` so headless processes carry
     # no knowledge of their per-replica id at launch time. Warn (don't
     # error) when the operator still supplies it so existing launchers
     # keep working with a single log line.
-    explicit_cli_keys: set[str] = getattr(args, "_cli_explicit_keys", set()) or set()
-    if "replica_id" in explicit_cli_keys:
+    if "replica_id" in args_dict:
         logger.warning(
             "[Headless] --replica-id is deprecated and ignored "
             "(supplied value: %s). Replica ids are auto-assigned by the "
             "master server.",
             args.replica_id,
         )
-    if omni_master_address is None or omni_master_port is None:
-        raise ValueError("--omni-master-address and --omni-master-port are required in headless mode")
-    if api_server_count and api_server_count > 1:
-        raise ValueError("api_server_count can't be set in headless mode")
-    if worker_backend != "multi_process":
-        raise ValueError("headless mode requires worker_backend=multi_process")
 
-    # Filter down to a dict of things explicitly requested by the user
-    args_dict = args.get_explicit_kwargs_dict()
     config_path, stage_configs = load_and_resolve_stage_configs(
         model,
         stage_configs_path,

@@ -1,5 +1,4 @@
 import argparse
-import dataclasses
 import json
 import os
 import tempfile
@@ -190,30 +189,6 @@ class OmniEngineArgs(EngineArgs):
                 self.worker_cls = current_omni_platform.get_omni_generation_worker_cls()
         load_omni_general_plugins()
         super().__post_init__()
-
-    @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> "OmniEngineArgs":
-        attrs = [attr.name for attr in dataclasses.fields(cls)]
-        engine_args = cls(**{attr: getattr(args, attr) for attr in attrs if hasattr(args, attr)})
-        engine_args._explicit_fields = frozenset(
-            attr for attr in attrs if hasattr(args, attr) and getattr(args, attr) is not None
-        )
-        return engine_args
-
-    @classmethod
-    def create(cls, **explicit: Any) -> "OmniEngineArgs":
-        """Tracks caller-set fields for ``Omni(..., engine_args=ea)``."""
-        ea = cls(**explicit)
-        ea._explicit_fields = frozenset(explicit.keys())
-        return ea
-
-    def explicit_kwargs(self) -> dict[str, Any]:
-        explicit = getattr(self, "_explicit_fields", None)
-        if explicit is None:
-            return {
-                f.name: getattr(self, f.name) for f in dataclasses.fields(self) if getattr(self, f.name) is not None
-            }
-        return {k: getattr(self, k) for k in explicit}
 
     def _ensure_omni_models_registered(self):
         if hasattr(self, "_omni_models_registered"):
@@ -530,25 +505,3 @@ def internal_blacklist_keys() -> frozenset[str]:
     dataclass — this function updates automatically.
     """
     return orchestrator_field_names() - SHARED_FIELDS
-
-
-def nullify_stage_engine_defaults(parser: argparse.ArgumentParser) -> None:
-    """Reset stage-level engine flag defaults to ``None``; preserve real
-    default in help text. Only deploy-YAML override fields are touched.
-    Idempotent."""
-    from vllm_omni.config.stage_config import deploy_override_field_names
-
-    override_dests = deploy_override_field_names()
-
-    for action in parser._actions:
-        if action.dest in ("help", "version") or not action.option_strings:
-            continue
-        if action.dest not in override_dests:
-            continue
-        if action.default is None or action.default is argparse.SUPPRESS:
-            continue
-        if action.help and "(default:" not in action.help and "%(default)" not in action.help:
-            action.help = f"{action.help} (default: {action.default})"
-        action.default = None
-
-    parser._omni_nullified = True  # type: ignore[attr-defined]

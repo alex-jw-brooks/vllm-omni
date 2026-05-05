@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from pytest_mock import MockerFixture
