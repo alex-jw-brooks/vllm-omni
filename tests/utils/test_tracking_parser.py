@@ -6,7 +6,47 @@ import json
 import pytest
 import yaml
 
-from vllm_omni.utils.tracking_parser import TrackingArgumentParser
+from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
+
+
+### Tests for TrackingNamespace
+def test_tracking_namespaces_cant_be_nested():
+    """Ensuer tracking namespaces explode if we try to nest them."""
+    track_ns = TrackingNamespace(
+        unfiltered_ns=argparse.Namespace(foo="bar"),
+        explicit_keys=frozenset(),
+    )
+
+    with pytest.raises(ValueError):
+        TrackingNamespace(
+            unfiltered_ns=track_ns,
+            explicit_keys=frozenset(),
+        )
+
+
+def test_tracking_namespaces_init():
+    """Check simple initialization for tracking namespaces."""
+    unfiltered_ns = argparse.Namespace(foo="bar")
+    tracked_ns = TrackingNamespace(
+        unfiltered_ns=unfiltered_ns,
+        explicit_keys=frozenset({"foo"}),
+    )
+    assert tracked_ns.foo == "bar"
+    assert tracked_ns.explicit_keys == frozenset({"foo"})
+
+
+def test_tracking_filtering():
+    """Ensure tracking namespaces are filterable."""
+    unfiltered_ns = argparse.Namespace(foo="bar", baz="foobar")
+    tracked_ns = TrackingNamespace(
+        unfiltered_ns=unfiltered_ns,
+        explicit_keys=frozenset({"foo"}),
+    )
+    assert tracked_ns.foo == "bar"
+    assert tracked_ns.baz == "foobar"
+    assert tracked_ns.explicit_keys == frozenset({"foo"})
+    # baz gets dropped because it's not marked in explicit_keys
+    assert tracked_ns.get_explicit_kwargs_dict() == {"foo": "bar"}
 
 
 ### Tests for simple cases (no nested parsers or groups)
@@ -16,7 +56,7 @@ def test_default_not_detected():
     p.add_argument("--foo", type=int, default=42)
     ns = p.parse_args([])
     assert p.explicit_keys == set()
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.foo == 42
 
 
@@ -27,7 +67,7 @@ def test_explicit_value_equal_to_default(val):
     p.add_argument("--foo", type=int, default=42)
     ns = p.parse_args(["--foo", val])
     assert p.explicit_keys == {"foo"}
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.foo == int(val)
 
 
@@ -37,7 +77,7 @@ def test_equals_syntax():
     p.add_argument("--foo", type=int, default=42)
     ns = p.parse_args(["--foo=100"])
     assert p.explicit_keys == {"foo"}
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.foo == 100
 
 
@@ -48,7 +88,7 @@ def test_explicit_none_via_store_const():
     ns = parser.parse_args(["--foo"])
     # User explicitly passed --foo, so it should be in the explicit keys even though it's None
     assert parser.explicit_keys == {"foo"}
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.foo is None
 
 
@@ -60,7 +100,7 @@ def test_multiple_args_mixed():
     p.add_argument("--baz", type=float, default=0.5)
     ns = p.parse_args(["--foo", "10", "--baz", "0.9"])
     assert p.explicit_keys == {"foo", "baz"}
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.bar == "x"
 
 
@@ -70,7 +110,7 @@ def test_store_true_default():
     p.add_argument("--verbose", action="store_true")
     ns = p.parse_args([])
     assert p.explicit_keys == set()
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.verbose is False
 
 
@@ -80,7 +120,7 @@ def test_store_true_explicit():
     p.add_argument("--verbose", action="store_true")
     ns = p.parse_args(["--verbose"])
     assert p.explicit_keys == {"verbose"}
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.verbose is True
 
 
@@ -90,7 +130,7 @@ def test_store_false_default():
     p.add_argument("--disable-x", action="store_false", dest="enable_x", default=True)
     ns = p.parse_args([])
     assert p.explicit_keys == set()
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.enable_x is True
 
 
@@ -100,7 +140,7 @@ def test_store_false_explicit():
     p.add_argument("--disable-x", action="store_false")
     ns = p.parse_args(["--disable-x"])
     assert p.explicit_keys == {"disable_x"}
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.disable_x is False
 
 
@@ -109,8 +149,8 @@ def test_dest_is_reflected_in_explicit_keys():
     p = TrackingArgumentParser()
     p.add_argument("--foo", type=int, dest="bar")
     ns = p.parse_args(["--foo", "100"])
-    assert ns is not None
     assert p.explicit_keys == {"bar"}
+    assert isinstance(ns, TrackingNamespace)
     assert ns.bar == 100
 
 
@@ -119,8 +159,8 @@ def test_boolean_optional_action_default():
     p = TrackingArgumentParser()
     p.add_argument("--flag", action=argparse.BooleanOptionalAction)
     ns = p.parse_args([])
-    assert ns is not None
     assert p.explicit_keys == set()
+    assert isinstance(ns, TrackingNamespace)
     assert ns.flag is None
 
 
@@ -129,8 +169,8 @@ def test_boolean_optional_action_positive():
     p = TrackingArgumentParser()
     p.add_argument("--flag", action=argparse.BooleanOptionalAction, default=None)
     ns = p.parse_args(["--flag"])
-    assert ns is not None
     assert p.explicit_keys == {"flag"}
+    assert isinstance(ns, TrackingNamespace)
     assert ns.flag is True
 
 
@@ -139,8 +179,8 @@ def test_no_option_strings_are_handled():
     p = TrackingArgumentParser()
     p.add_argument("--flag", action=argparse.BooleanOptionalAction, default=None)
     ns = p.parse_args(["--no-flag"])
-    assert ns is not None
     assert p.explicit_keys == {"flag"}
+    assert isinstance(ns, TrackingNamespace)
     assert ns.flag is False
 
 
@@ -150,7 +190,7 @@ def test_json_type():
     p.add_argument("--cfg", type=json.loads, default="{}")
     ns = p.parse_args(["--cfg", '{"a": 1}'])
     assert "cfg" in p.explicit_keys
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.cfg == {"a": 1}
 
 
@@ -170,7 +210,7 @@ def test_explicit_positional_arg():
     p.add_argument("name", nargs="?", default=None)
     ns = p.parse_args(["hello"])
     assert "name" in p.explicit_keys
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.name == "hello"
 
 
@@ -179,8 +219,8 @@ def test_omitted_positional_arg():
     p = TrackingArgumentParser()
     p.add_argument("name", nargs="?", default=None)
     ns = p.parse_args([])
-    assert ns is not None
     assert "name" not in p.explicit_keys
+    assert isinstance(ns, TrackingNamespace)
     assert ns.name is None
 
 
@@ -189,8 +229,8 @@ def test_explicit_nargs():
     p = TrackingArgumentParser()
     p.add_argument("--items", nargs="*", default=None)
     ns = p.parse_args(["--items", "a", "b"])
-    assert ns is not None
     assert "items" in p.explicit_keys
+    assert isinstance(ns, TrackingNamespace)
     assert ns.items == ["a", "b"]
 
 
@@ -199,8 +239,8 @@ def test_omitted_nargs():
     p = TrackingArgumentParser()
     p.add_argument("--items", nargs="*", default=None)
     ns = p.parse_args([])
-    assert ns is not None
     assert "items" not in p.explicit_keys
+    assert isinstance(ns, TrackingNamespace)
     assert ns.items is None
 
 
@@ -210,6 +250,7 @@ def test_parse_known_args_tracking():
     p.add_argument("--foo", type=int, default=42)
     ns, remaining = p.parse_known_args(["--foo", "10", "--unknown", "val"])
     assert p.explicit_keys == {"foo"}
+    assert isinstance(ns, TrackingNamespace)
     assert ns.foo == 10
     assert remaining == ["--unknown", "val"]
 
@@ -221,8 +262,8 @@ def test_group_arg_default():
     g = p.add_argument_group("TestGroup")
     g.add_argument("--bar", type=str, default="baz")
     ns = p.parse_args([])
-    assert ns is not None
     assert p.explicit_keys == set()
+    assert isinstance(ns, TrackingNamespace)
     assert ns.bar == "baz"
 
 
@@ -232,8 +273,8 @@ def test_group_arg_explicit():
     g = p.add_argument_group("TestGroup")
     g.add_argument("--bar", type=str, default="baz")
     ns = p.parse_args(["--bar", "qux"])
-    assert ns is not None
     assert p.explicit_keys == {"bar"}
+    assert isinstance(ns, TrackingNamespace)
     assert ns.bar == "qux"
 
 
@@ -245,8 +286,8 @@ def test_multiple_groups():
     g1.add_argument("--a", type=int, default=1)
     g2.add_argument("--b", type=int, default=2)
     ns = p.parse_args(["--b", "20"])
-    assert ns is not None
     assert p.explicit_keys == {"b"}
+    assert isinstance(ns, TrackingNamespace)
     assert ns.a == 1
     assert ns.b == 20
 
@@ -258,8 +299,8 @@ def test_omitted_mutually_exclusive_group():
     grp.add_argument("--json", action="store_true")
     grp.add_argument("--text", action="store_true")
     ns = p.parse_args([])
-    assert ns is not None
     assert p.explicit_keys == set()
+    assert isinstance(ns, TrackingNamespace)
 
 
 def test_mutually_exclusive_group():
@@ -269,8 +310,8 @@ def test_mutually_exclusive_group():
     grp.add_argument("--json", action="store_true")
     grp.add_argument("--text", action="store_true")
     ns = p.parse_args(["--json"])
-    assert ns is not None
     assert p.explicit_keys == {"json"}
+    assert isinstance(ns, TrackingNamespace)
     assert ns.json is True
     assert ns.text is False
 
@@ -284,7 +325,8 @@ def test_subparser_explicit_detection():
     child.add_argument("--bar", type=str)
     ns = p.parse_args(["foo", "--bar", "baz"])
     assert isinstance(child, TrackingArgumentParser)
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
+    assert p.explicit_keys == {"bar"}
     assert ns.bar == "baz"
 
 
@@ -297,9 +339,8 @@ def test_subparser_group_args():
     g.add_argument("--port", type=int, default=8000)
     g.add_argument("--host", type=str, default="localhost")
     ns = p.parse_args(["foo", "--port", "9000"])
-
     assert p.explicit_keys == {"port"}
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert ns.host == "localhost"
 
 
@@ -312,7 +353,7 @@ def test_config_file_args_detected(tmp_path):
     cfg = tmp_path / "test.yaml"
     cfg.write_text(yaml.dump({"foo": 100}))
     ns = p.parse_args(["--config", str(cfg)])
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert p.explicit_keys == {"foo"}
     assert ns.foo == 100
 
@@ -324,6 +365,6 @@ def test_cli_overrides_config(tmp_path):
     cfg = tmp_path / "test.yaml"
     cfg.write_text(yaml.dump({"foo": 100}))
     ns = p.parse_args(["--config", str(cfg), "--foo", "200"])
-    assert ns is not None
+    assert isinstance(ns, TrackingNamespace)
     assert "foo" in p.explicit_keys
     assert ns.foo == 200

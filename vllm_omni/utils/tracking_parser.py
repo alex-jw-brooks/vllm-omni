@@ -15,6 +15,11 @@ class TrackingNamespace(argparse.Namespace):
     """
 
     def __init__(self, unfiltered_ns: argparse.Namespace, explicit_keys: frozenset[str]) -> None:
+        # We never have nested tracking namespaces, but explicitly guard
+        # against them to prevent bad behavior with nested __dict__ overrides.
+        if isinstance(unfiltered_ns, TrackingNamespace):
+            raise ValueError("Tracking namespaces cannot be nested")
+
         self.unfiltered_ns = unfiltered_ns
         self.explicit_keys = explicit_keys
 
@@ -23,8 +28,11 @@ class TrackingNamespace(argparse.Namespace):
         return {k: v for k, v in vars(self.unfiltered_ns).items() if k in self.explicit_keys}
 
     def __getattr__(self, name: str) -> Any:
-        # Any attribute access is forwarded to the real argument group.
         return getattr(self.unfiltered_ns, name)
+
+    @property
+    def __dict__(self):
+        return self.unfiltered_ns.__dict__
 
 
 class TrackingGroup:
@@ -123,6 +131,12 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         shadow_sub = self._shadow.add_subparsers(*args, **kwargs)
         return TrackingSubparsers(real_sub, shadow_sub)
 
+    def build_tracking_namespace(self, real_ns: argparse.Namespace, shadow_ns: argparse.Namespace) -> TrackingNamespace:
+        """Build a tracking namespace for the real / shadow namespaces
+        and update this instance's explicit_keys."""
+        self._explicit_keys = frozenset(k for k, v in vars(shadow_ns).items() if v is not UNSET)
+        return TrackingNamespace(real_ns, self._explicit_keys)
+
     def parse_args(
         self,
         args: list[str] | None = None,
@@ -133,19 +147,25 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         # given since shadow parser will set its own defaults to None.
         real_ns = super().parse_args(args, namespace)
         shadow_ns = self._shadow.parse_args(args)
-        # Explicit keys are entries in the shadow namespace that aren't UNSET.
-        # NOTE: This is distinct from `None`, since there are cases where `None`
-        # user can pass explicit values that set `None` on the namespace
-        self._explicit_keys = frozenset(k for k, v in vars(shadow_ns).items() if v is not UNSET)
-        return TrackingNamespace(real_ns, self._explicit_keys)
+        if real_ns is None or shadow_ns is None:
+            raise ValueError("Parse args created empty namespaces")
+
+        # If this is called through parse_known_args on self, we will already
+        # get a TrackingNamespace back, which will already have set the explicit
+        # keys through build_tracking_namespace, so no need to do it again.
+        if isinstance(real_ns, TrackingNamespace):
+            return real_ns
+
+        return self.build_tracking_namespace(real_ns, shadow_ns)
 
     def parse_known_args(
         self,
         args: list[str] | None = None,
         namespace: argparse.Namespace | None = None,
-    ) -> tuple[argparse.Namespace, list[str]]:
+    ) -> tuple[TrackingNamespace, list[str]]:
         """Parse the knwown args on the real/shadow parser & set the frozen explicit keys."""
         real_ns, remaining = super().parse_known_args(args, namespace)
         shadow_ns, _ = self._shadow.parse_known_args(args)
-        self._explicit_keys = frozenset(k for k, v in vars(shadow_ns).items() if v is not UNSET)
-        return real_ns, remaining
+        tracked_ns = self.build_tracking_namespace(real_ns, shadow_ns)
+
+        return tracked_ns, remaining
