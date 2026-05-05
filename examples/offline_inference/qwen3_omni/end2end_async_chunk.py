@@ -39,10 +39,10 @@ from vllm.assets.image import ImageAsset
 from vllm.assets.video import VideoAsset, video_to_ndarrays
 from vllm.multimodal.image import convert_image_mode
 from vllm.multimodal.media.audio import load_audio
-from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.async_omni import AsyncOmni
+from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
 logger = logging.getLogger(__name__)
 
@@ -453,7 +453,7 @@ async def run_all(args):
 
 
 def parse_args():
-    parser = FlexibleArgumentParser(
+    parser = TrackingArgumentParser(
         description=(
             "Offline inference with async_chunk enabled via AsyncOmni. "
             "Downstream stages start before upstream stages finish, "

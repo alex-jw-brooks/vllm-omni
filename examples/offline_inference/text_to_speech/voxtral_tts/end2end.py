@@ -27,11 +27,11 @@ except ImportError:
         "pip install -e ."
     )
 from vllm import SamplingParams
-from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from vllm_omni import AsyncOmni
 from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.omni import Omni
+from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +230,7 @@ def run_non_streaming(inputs, sampling_params_list, model_name, args, output_dir
 
 
 def parse_args() -> Namespace:
-    parser = FlexibleArgumentParser(description="Demo on using vLLM for offline inference with Voxtral TTS")
+    parser = TrackingArgumentParser(description="Demo on using vLLM for offline inference with Voxtral TTS")
     parser.add_argument(
         "--model",
         type=str,

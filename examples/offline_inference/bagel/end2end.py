@@ -121,9 +121,6 @@ def parse_args():
         help="Temperature for text generation sampling (default: 0.3).",
     )
 
-    from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
-
-    nullify_stage_engine_defaults(parser)
     args = parser.parse_args()
     return args
 
@@ -164,9 +161,7 @@ def main():
     if args.quantization:
         omni_kwargs["quantization_config"] = args.quantization
 
-    # Override CLI --model with the derived model_name.
-    omni_kwargs["model"] = model_name
-    omni = Omni(**omni_kwargs)
+    omni = Omni(model=model_name, **omni_kwargs)
 
     formatted_prompts = []
     for p in prompts:
