@@ -112,6 +112,10 @@ class TestStageConfig:
 
     def test_to_omegaconf_with_runtime_overrides(self):
         """Test that runtime overrides are applied to OmegaConf output."""
+<<<<<<< HEAD
+=======
+
+>>>>>>> 04fc62c8 (remove more dead code, unused engine_args path)
         config = StageConfig(
             stage_id=0,
             model_stage="thinker",
@@ -134,6 +138,10 @@ class TestStageConfig:
 
     def test_to_omegaconf_max_batch_size_deprecation(self):
         """Test that runtime.max_batch_size emits a FutureWarning."""
+<<<<<<< HEAD
+=======
+
+>>>>>>> 04fc62c8 (remove more dead code, unused engine_args path)
         config = StageConfig(
             stage_id=0,
             model_stage="thinker",

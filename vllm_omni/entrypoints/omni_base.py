@@ -4,7 +4,7 @@ import os
 import time
 import weakref
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import huggingface_hub
 from vllm.logger import init_logger
@@ -27,9 +27,6 @@ from vllm_omni.metrics.transfer import OmniTransferMetrics
 from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.tracking_parser import TrackingNamespace
-
-if TYPE_CHECKING:
-    from vllm_omni.engine.arg_utils import OmniEngineArgs
 
 logger = init_logger(__name__)
 
@@ -135,8 +132,6 @@ class OmniBase(PDDisaggregationMixin):
         model: str,
         **kwargs: Any,
     ) -> None:
-        engine_args: OmniEngineArgs | None = kwargs.pop("engine_args", None)
-
         stage_init_timeout = kwargs.pop("stage_init_timeout", 300)
         init_timeout = kwargs.pop("init_timeout", 600)
         log_stats = kwargs.pop("log_stats", False)
@@ -170,7 +165,6 @@ class OmniBase(PDDisaggregationMixin):
         st = time.time()
         self.engine = AsyncOmniEngine(
             model=model,
-            engine_args=engine_args,
             init_timeout=init_timeout,
             stage_init_timeout=stage_init_timeout,
             diffusion_batch_size=diffusion_batch_size,
