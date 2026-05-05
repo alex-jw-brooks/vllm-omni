@@ -10,41 +10,30 @@ import pytest
 from pytest_mock import MockerFixture
 
 from vllm_omni.entrypoints.cli.serve import OmniServeCommand, run_headless
+from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-def test_serve_parser_accepts_no_async_chunk() -> None:
-    """``--no-async-chunk`` should parse after deploy-overriding parser
-    defaults are nullified."""
-    try:
-        from vllm_omni.utils.tracking_parser import TrackingArgumentParser
-    except Exception as exc:
-        pytest.skip(f"Cannot build parser in this environment: {exc}")
-
-    root = TrackingArgumentParser()
-    subparsers = root.add_subparsers(dest="subcommand")
+def test_serve_parser_accepts_no_async_chunk_and_marks_it_explicit() -> None:
+    """``--no-async-chunk`` should parse to ``async_chunk=False`` and mark the
+    shared deploy-level dest as explicitly provided by the user."""
+    parser = TrackingArgumentParser()
+    subparsers = parser.add_subparsers(dest="subcommand")
     cmd = OmniServeCommand()
     cmd.subparser_init(subparsers)
 
     argv = ["serve", "fake-model", "--omni", "--no-async-chunk"]
-    args = root.parse_args(argv)
-
+    args = parser.parse_args(argv)
     assert args.async_chunk is False
 
+    explicit = args.get_explicit_kwargs_dict()
+    assert args.get_explicit_kwargs_dict()
+    assert not explicit["async_chunk"]
 
-# ---------------------------------------------------------------------------
-# run_headless validation
-# ---------------------------------------------------------------------------
 
-
-def _make_headless_args(**overrides: Any) -> argparse.Namespace:
-    """Build an argparse.Namespace shaped like the headless CLI passes in.
-
-    Defaults pass every validation gate so individual tests can mutate just
-    the field they're exercising.
-    """
-    defaults = dict(
+def _make_headless_args() -> TrackingNamespace:
+    ns = argparse.Namespace(
         model="fake-model",
         stage_id=0,
         replica_id=0,
@@ -61,8 +50,10 @@ def _make_headless_args(**overrides: Any) -> argparse.Namespace:
         stage_init_timeout=600,
         tokenizer=None,
     )
-    defaults.update(overrides)
-    return argparse.Namespace(**defaults)
+    return TrackingNamespace(
+        unfiltered_ns=ns,
+        explicit_keys=frozenset(ns.__dict__.keys()),
+    )
 
 
 def test_run_headless_requires_stage_id() -> None:
