@@ -23,17 +23,6 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 logger = init_logger(__name__)
 
 
-def _warn_deprecated_explicit_keys(kwargs: dict[str, Any]) -> None:
-    if "cli_explicit_keys" in kwargs:
-        import warnings
-
-        warnings.warn(
-            "cli_explicit_keys= is deprecated and ignored. Remove the kwarg.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
-
 _DIFFUSERS_CLASS_TO_CONFIG: dict[str, str] = {
     "GlmImagePipeline": "glm_image",
 }
@@ -342,8 +331,6 @@ def load_stage_configs_from_model(
     Returns:
         List of stage configuration dictionaries
     """
-    _warn_deprecated_explicit_keys(deprecated_kwargs)
-
     if base_engine_args is None:
         base_engine_args = {}
 
@@ -560,8 +547,6 @@ def load_and_resolve_stage_configs(
                 "--stage-configs-path is deprecated; migrate %r and use --deploy-config.",
                 stage_configs_path,
             )
-
-    _warn_deprecated_explicit_keys(deprecated_kwargs)
 
     if deploy_config_path is not None:
         config_path = deploy_config_path
