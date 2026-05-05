@@ -12,7 +12,6 @@ import signal
 import threading
 from multiprocessing import connection
 from types import FrameType
-from typing import Any
 
 import uvloop
 from vllm.entrypoints.cli.types import CLISubcommand
@@ -23,7 +22,7 @@ from vllm.logger import init_logger
 from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
-from vllm_omni.utils.tracking_parser import TrackingArgumentParser
+from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 logger = init_logger(__name__)
 
@@ -84,10 +83,10 @@ class OmniServeCommand(CLISubcommand):
     name = "serve"
     # Parser stashed at subparser_init so ``cmd`` can resolve each user-typed
     # flag to its real ``dest`` via the parser's action table.
-    _parser: TrackingArgumentParser | None = None
+    _parser: TrackingArgumentParser
 
     @staticmethod
-    def cmd(args: argparse.Namespace) -> None:
+    def cmd(args: TrackingNamespace) -> None:
         if not os.environ.get("VLLM_DISABLE_LOG_LOGO"):
             os.environ["VLLM_DISABLE_LOG_LOGO"] = "1"
             log_logo()
@@ -671,18 +670,7 @@ class OmniServeCommand(CLISubcommand):
         return serve_parser
 
 
-def _create_default_diffusion_stage_cfg(args: argparse.Namespace) -> list[dict[str, Any]]:
-    """Create default diffusion stage configuration.
-
-    Uses AsyncOmniEngine's implementation which doesn't have OmegaConf
-    compatibility issues.
-    """
-    from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
-
-    return AsyncOmniEngine._create_default_diffusion_stage_cfg(vars(args))
-
-
-def run_headless(args: argparse.Namespace) -> None:
+def run_headless(args: TrackingNamespace) -> None:
     """Run a single stage in headless mode.
 
     Honors ``--omni-dp-size-local``: launches that many replicas locally for
@@ -719,13 +707,19 @@ def run_headless(args: argparse.Namespace) -> None:
     from vllm_omni.entrypoints.utils import inject_omni_kv_config, load_and_resolve_stage_configs
     from vllm_omni.platforms import current_omni_platform
 
-    model = args.model
-    stage_id: int | None = args.stage_id
-    omni_master_address: str | None = args.omni_master_address
-    omni_master_port: int | None = args.omni_master_port
+    model = args.get("model")
+    stage_id: int | None = args.get("stage_id")
+    omni_master_address: str | None = args.get("omni_master_address")
+    omni_master_port: int | None = args.get("omni_master_port")
+    replica_id: int = args.get("replica_id")
+    api_server_count: int = args.get("api_server_count", 0)
+    worker_backend: str | None = args.get("worker_backend")
     omni_replica_address: str | None = getattr(args, "omni_replica_address", None)
     omni_dp_size_local: int = max(1, int(getattr(args, "omni_dp_size_local", 1) or 1))
+    stage_configs_path = args.get("stage_configs_path")
 
+    if not model:
+        raise ValueError("Failed to pass model from kwargs")
     if stage_id is None:
         raise ValueError("--stage-id is required in headless mode")
 
@@ -744,22 +738,16 @@ def run_headless(args: argparse.Namespace) -> None:
         )
     if omni_master_address is None or omni_master_port is None:
         raise ValueError("--omni-master-address and --omni-master-port are required in headless mode")
-    api_server_count = args.api_server_count or 0
-    if api_server_count > 1:
+    if api_server_count and api_server_count > 1:
         raise ValueError("api_server_count can't be set in headless mode")
-    if args.worker_backend != "multi_process":
+    if worker_backend != "multi_process":
         raise ValueError("headless mode requires worker_backend=multi_process")
 
-    args_dict = vars(args).copy()
-    args_dict.pop("_cli_explicit_keys", None)
-    # Forward ``--deploy-config`` so the headless reads the same YAML the
-    # head was launched with — otherwise ``load_and_resolve_stage_configs``
-    # falls back to ``vllm_omni/deploy/<model>.yaml`` and the headless's
-    # view of ``stage.runtime.devices`` diverges from the head's, breaking
-    # the per-replica device split.
+    # Filter down to a dict of things explicitly requested by the user
+    args_dict = args.get_explicit_kwargs_dict()
     config_path, stage_configs = load_and_resolve_stage_configs(
         model,
-        args_dict.get("stage_configs_path"),
+        stage_configs_path,
         args_dict,
         deploy_config_path=args_dict.get("deploy_config"),
     )

@@ -9,7 +9,25 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 UNSET = object()
 
 
-class _TrackingGroup:
+class TrackingNamespace(argparse.Namespace):
+    """Proxy the wraps an argparse namespace with explicit keys, which can
+    can be filtered down to a dict containing only explicitly passed values.
+    """
+
+    def __init__(self, unfiltered_ns: argparse.Namespace, explicit_keys: frozenset[str]) -> None:
+        self.unfiltered_ns = unfiltered_ns
+        self.explicit_keys = explicit_keys
+
+    def get_explicit_kwargs_dict(self):
+        """Given an instance of this class, return a dict with all dropped items."""
+        return {k: v for k, v in vars(self.unfiltered_ns).items() if k in self.explicit_keys}
+
+    def __getattr__(self, name: str) -> Any:
+        # Any attribute access is forwarded to the real argument group.
+        return getattr(self.unfiltered_ns, name)
+
+
+class TrackingGroup:
     """Proxy that wraps an argument group and its corresponding shadow group."""
 
     def __init__(
@@ -32,7 +50,7 @@ class _TrackingGroup:
         return getattr(self._real, name)
 
 
-class _TrackingSubparsers:
+class TrackingSubparsers:
     """Proxy that wraps a subparser and its corresponding shadow subparser."""
 
     def __init__(
@@ -90,26 +108,26 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         self._shadow.add_argument(*args, **shadow_kwargs)
         return action
 
-    def add_argument_group(self, *args, **kwargs) -> _TrackingGroup:
+    def add_argument_group(self, *args, **kwargs) -> TrackingGroup:
         real_group = super().add_argument_group(*args, **kwargs)
         shadow_group = self._shadow.add_argument_group(*args, **kwargs)
-        return _TrackingGroup(real_group, shadow_group)
+        return TrackingGroup(real_group, shadow_group)
 
-    def add_mutually_exclusive_group(self, *args, **kwargs) -> _TrackingGroup:
+    def add_mutually_exclusive_group(self, *args, **kwargs) -> TrackingGroup:
         real_group = super().add_mutually_exclusive_group(*args, **kwargs)
         shadow_group: argparse._MutuallyExclusiveGroup = self._shadow.add_mutually_exclusive_group(*args, **kwargs)
-        return _TrackingGroup(real_group, shadow_group)
+        return TrackingGroup(real_group, shadow_group)
 
-    def add_subparsers(self, *args, **kwargs) -> _TrackingSubparsers:
+    def add_subparsers(self, *args, **kwargs) -> TrackingSubparsers:
         real_sub = super().add_subparsers(*args, **kwargs)
         shadow_sub = self._shadow.add_subparsers(*args, **kwargs)
-        return _TrackingSubparsers(real_sub, shadow_sub)
+        return TrackingSubparsers(real_sub, shadow_sub)
 
     def parse_args(
         self,
         args: list[str] | None = None,
         namespace: argparse.Namespace | None = None,
-    ):
+    ) -> TrackingNamespace:
         """Parse the args on the real/shadow parser & set the frozen explicit keys."""
         # Only the real parser should use the namespace if one is,
         # given since shadow parser will set its own defaults to None.
@@ -119,7 +137,7 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         # NOTE: This is distinct from `None`, since there are cases where `None`
         # user can pass explicit values that set `None` on the namespace
         self._explicit_keys = frozenset(k for k, v in vars(shadow_ns).items() if v is not UNSET)
-        return real_ns
+        return TrackingNamespace(real_ns, self._explicit_keys)
 
     def parse_known_args(
         self,

@@ -136,6 +136,7 @@ from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_reques
 from vllm_omni.entrypoints.openai.video_api_utils import decode_input_reference
 from vllm_omni.entrypoints.openpi.serving import ServingRealtimeRobotOpenPI
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
+from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 logger = init_logger(__name__)
 router = APIRouter()
@@ -510,7 +511,7 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
 
 @asynccontextmanager
 async def build_async_omni(
-    args: Namespace,
+    args: TrackingNamespace,
     *,
     disable_frontend_multiprocessing: bool | None = None,
     client_config: dict[str, Any] | None = None,
@@ -550,7 +551,7 @@ async def build_async_omni(
 
 @asynccontextmanager
 async def build_async_omni_from_stage_config(
-    args: Namespace,
+    args: TrackingNamespace,
     *,
     disable_frontend_multiprocessing: bool = False,
 ) -> AsyncIterator[EngineClient]:
@@ -604,8 +605,7 @@ async def build_async_omni_from_stage_config(
             logger.debug("Pre-loading transformers_modules failed: %s", e)
 
     try:
-        kwargs = vars(args).copy()
-        kwargs.pop("model", None)
+        kwargs = args.get_explicit_kwargs_dict()
         async_omni = AsyncOmni(model=args.model, **kwargs)
 
         # # Don't keep the dummy data in memory
@@ -3034,18 +3034,19 @@ async def omni_wakeup(request: OmniWakeupRequest, raw_request: Request):
 
 
 if __name__ == "__main__":
-    import argparse
     import asyncio
 
     from vllm.entrypoints.openai.cli_args import make_arg_parser
 
     from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 
-    parser = argparse.ArgumentParser(description="vLLM-Omni OpenAI-Compatible REST API server")
+    parser = TrackingArgumentParser(description="vLLM-Omni OpenAI-Compatible REST API server")
     parser = make_arg_parser(parser)
     registered_flags = set()
     for action in parser._actions:
         registered_flags.update(action.option_strings)
+
+    # FIXME - this is broken on `main`. `make_arg_parser` does not handle omni engine args properly.
     if "--omni" not in registered_flags:
         parser.add_argument("--omni", action="store_true", default=False, help="Enable vLLM-Omni mode.")
     if "--enable-sleep-mode" not in registered_flags:
