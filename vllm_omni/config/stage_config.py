@@ -1160,7 +1160,6 @@ class StageConfigFactory:
         model: str,
         cli_overrides: dict[str, Any] | None = None,
         deploy_config_path: str | None = None,
-        **deprecated_kwargs: Any,
     ) -> list[StageConfig] | None:
         """Load pipeline + deploy config, merge with CLI overrides.
 
@@ -1245,7 +1244,6 @@ class StageConfigFactory:
         model_type: str,
         cli_overrides: dict[str, Any],
         deploy_config_path: str | None = None,
-        **deprecated_kwargs: Any,
     ) -> list[StageConfig]:
         """Create StageConfigs from pipeline registry + deploy YAML.
 

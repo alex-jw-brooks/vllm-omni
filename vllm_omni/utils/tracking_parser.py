@@ -10,7 +10,7 @@ UNSET = object()
 
 
 class TrackingNamespace(argparse.Namespace):
-    """Proxy the wraps an argparse namespace with explicit keys, which can
+    """Proxy that wraps an argparse namespace with explicit keys, which
     can be filtered down to a dict containing only explicitly passed values.
     """
 
@@ -23,8 +23,14 @@ class TrackingNamespace(argparse.Namespace):
         self.unfiltered_ns = unfiltered_ns
         self.explicit_keys = explicit_keys
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in ("unfiltered_ns", "explicit_keys"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.unfiltered_ns, name, value)
+
     def get_explicit_kwargs_dict(self):
-        """Given an instance of this class, return a dict with all dropped items."""
+        """Return a dict containing only the explicitly passed key-value pairs."""
         return {k: v for k, v in vars(self.unfiltered_ns).items() if k in self.explicit_keys}
 
     def __getattr__(self, name: str) -> Any:
@@ -110,7 +116,7 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         return self._explicit_keys
 
     def add_argument(self, *args: Any, **kwargs: Any) -> argparse.Action:
-        """Add an arg to the parser & the shadow, where the latter has None for the default."""
+        """Add an arg to the parser & the shadow, where the latter has UNSET for the default."""
         action = super().add_argument(*args, **kwargs)
         shadow_kwargs = {**kwargs, "default": UNSET}
         self._shadow.add_argument(*args, **shadow_kwargs)
@@ -163,7 +169,7 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         args: list[str] | None = None,
         namespace: argparse.Namespace | None = None,
     ) -> tuple[TrackingNamespace, list[str]]:
-        """Parse the knwown args on the real/shadow parser & set the frozen explicit keys."""
+        """Parse the known args on the real/shadow parser & set the frozen explicit keys."""
         real_ns, remaining = super().parse_known_args(args, namespace)
         shadow_ns, _ = self._shadow.parse_known_args(args)
         tracked_ns = self.build_tracking_namespace(real_ns, shadow_ns)

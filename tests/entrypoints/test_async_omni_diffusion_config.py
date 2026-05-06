@@ -8,7 +8,7 @@ import pytest
 from vllm_omni.config.stage_config import deploy_override_field_names
 from vllm_omni.diffusion.data import AttentionConfig
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
-from vllm_omni.entrypoints.cli.serve import OmniServeCommand, _create_default_diffusion_stage_cfg
+from vllm_omni.entrypoints.cli.serve import OmniServeCommand
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -237,7 +237,8 @@ def test_serve_cli_accepts_ulysses_mode():
         ]
     )
 
-    stage_cfg = _create_default_diffusion_stage_cfg(args)[0]
+    explicit_kwargs = args.get_explicit_kwargs_dict()
+    stage_cfg = AsyncOmniEngine._create_default_diffusion_stage_cfg(explicit_kwargs)[0]
     parallel_config = stage_cfg["engine_args"]["parallel_config"]
 
     assert args.ulysses_mode == "advanced_uaa"
@@ -260,7 +261,8 @@ def test_serve_cli_accepts_diffusion_pipeline_profiler_flag():
         ]
     )
 
-    stage_cfg = _create_default_diffusion_stage_cfg(args)[0]
+    explicit_kwargs = args.get_explicit_kwargs_dict()
+    stage_cfg = AsyncOmniEngine._create_default_diffusion_stage_cfg(explicit_kwargs)[0]
 
     assert args.enable_diffusion_pipeline_profiler is True
     assert stage_cfg["engine_args"]["enable_diffusion_pipeline_profiler"] is True

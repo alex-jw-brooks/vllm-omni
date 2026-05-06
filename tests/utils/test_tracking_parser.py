@@ -54,7 +54,7 @@ def mock_stages(monkeypatch):
 
 ### Tests for TrackingNamespace
 def test_tracking_namespaces_cant_be_nested():
-    """Ensuer tracking namespaces explode if we try to nest them."""
+    """Ensure tracking namespaces explode if we try to nest them."""
     track_ns = TrackingNamespace(
         unfiltered_ns=argparse.Namespace(foo="bar"),
         explicit_keys=frozenset(),
@@ -90,6 +90,25 @@ def test_tracking_filtering():
     assert tracked_ns.explicit_keys == frozenset({"foo"})
     # baz gets dropped because it's not marked in explicit_keys
     assert tracked_ns.get_explicit_kwargs_dict() == {"foo": "bar"}
+
+
+def test_setattr_writes_through_to_unfiltered_ns():
+    """Ensure mutating an attribute on TrackingNamespace forwards to
+    get_explicit_kwargs_dict() and vars()."""
+    unfiltered_ns = argparse.Namespace(model="original")
+    tracked_ns = TrackingNamespace(
+        unfiltered_ns=unfiltered_ns,
+        explicit_keys=frozenset({"model"}),
+    )
+    assert tracked_ns.model == "original"
+    assert tracked_ns.get_explicit_kwargs_dict() == {"model": "original"}
+    assert vars(tracked_ns) == {"model": "original"}
+
+    # Ensure if we update the namespace, it's forwarded correctly
+    tracked_ns.model = "updated"
+    assert tracked_ns.model == "updated"
+    assert tracked_ns.get_explicit_kwargs_dict() == {"model": "updated"}
+    assert vars(tracked_ns) == {"model": "updated"}
 
 
 ### Tests for simple cases (no nested parsers or groups)

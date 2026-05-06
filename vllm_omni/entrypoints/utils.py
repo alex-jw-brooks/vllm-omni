@@ -312,7 +312,6 @@ def load_stage_configs_from_model(
     base_engine_args: dict | None = None,
     deploy_config_path: str | None = None,
     stage_overrides: dict[str, dict[str, Any]] | None = None,
-    **deprecated_kwargs: Any,
 ) -> list:
     """Load stage configurations from model's default config file.
 
@@ -504,7 +503,6 @@ def load_and_resolve_stage_configs(
     default_stage_cfg_factory: Any = None,
     deploy_config_path: str | None = None,
     stage_overrides: dict[str, dict[str, Any]] | None = None,
-    **deprecated_kwargs: Any,
 ) -> tuple[str, list]:
     """Load stage configurations from model or YAML file with fallback to defaults.
 

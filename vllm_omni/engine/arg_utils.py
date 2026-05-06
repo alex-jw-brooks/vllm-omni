@@ -395,8 +395,7 @@ class OrchestratorArgs:
           forwarding).
 
     Fields that BOTH orchestrator and engine genuinely need (e.g. ``model``,
-    ``log_stats``) should be listed in ``SHARED_FIELDS`` below; ``split_kwargs``
-    will copy them to both buckets.
+    ``log_stats``) should be listed in ``SHARED_FIELDS`` below.
     """
 
     # === Lifecycle ===

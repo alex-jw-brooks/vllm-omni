@@ -383,7 +383,9 @@ async def run_all(args):
     print(f"[Info] Creating AsyncOmni with deploy_config={args.deploy_config}")
     async_omni = None
     try:
-        async_omni = AsyncOmni(**vars(args))
+        # ``from_cli_args`` forwards only explicitly-passed CLI args so
+        # argparse defaults do not silently override deploy YAML values.
+        async_omni = AsyncOmni.from_cli_args(args, model=args.model)
 
         # Use default sampling params from stage config (they are pre-configured
         # in the YAML for each stage).

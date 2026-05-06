@@ -606,7 +606,8 @@ async def build_async_omni_from_stage_config(
 
     try:
         kwargs = args.get_explicit_kwargs_dict()
-        async_omni = AsyncOmni(model=args.model, **kwargs)
+        model = kwargs.pop("model", None) or args.model
+        async_omni = AsyncOmni(model=model, **kwargs)
 
         # # Don't keep the dummy data in memory
         # await async_llm.reset_mm_cache()
