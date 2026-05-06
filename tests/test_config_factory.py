@@ -989,8 +989,7 @@ class TestDeployConfigLoading:
 
         assert len(deploy.stages) == 1
         stage = deploy.stages[0]
-        assert "compilation_config" in stage.engine_extras
-        assert stage.engine_extras["compilation_config"] == {
+        assert stage.compilation_config == {
             "encoder_cudagraph_token_budgets": [1024, 2048],
             "pass_config": {
                 "fuse_norm_quant": True,
