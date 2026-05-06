@@ -547,7 +547,7 @@ def _get_recursively_merged_dict(original: dict, update: dict) -> dict:
         if isinstance(orig_v, dict) and isinstance(update_v, dict):
             merged[k] = _get_recursively_merged_dict(orig_v, update_v)
         else:
-            if orig_v is not None:
+            if orig_v is not None and (isinstance(orig_v, dict) != isinstance(update_v, dict)):
                 logger.warning(
                     "Deep-merge key %r has non-dict value (base=%s, overlay=%s); "
                     "overlay will fully replace base instead of merging.",
