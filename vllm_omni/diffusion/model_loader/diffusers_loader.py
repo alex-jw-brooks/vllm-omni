@@ -469,36 +469,31 @@ class DiffusersPipelineLoader:
         if unexpected_missing:
             raise ValueError(f"Following weights were not initialized from checkpoint: {unexpected_missing}")
 
+    def _get_gguf_model_from_config(self) -> str | None:
+        """Extract gguf_model from quant_config (handles both dict and object)."""
+        if self.quant_config is None:
+            return None
+        if isinstance(self.quant_config, dict):
+            return self.quant_config.get("gguf_model")
+        return getattr(self.quant_config, "gguf_model", None)
+
     def _is_gguf_quantization(self) -> bool:
         """Check whether or not this pipeline loader is pointing at a GGUF config."""
-        if self.quant_config is None:
-            return False
-
-        if isinstance(self.quant_config, DiffusionGGUFConfig):
-            if self.quant_config.gguf_model is None:
+        maybe_gguf_model = self._get_gguf_model_from_config()
+        is_gguf = (
+            isinstance(self.quant_config, DiffusionGGUFConfig)
+            or (isinstance(self.quant_config, dict) and self.quant_config.get("method") == "gguf")
+            or (hasattr(self.quant_config, "get_name") and self.quant_config.get_name() == "gguf")
+        )
+        if is_gguf:
+            if not maybe_gguf_model:
                 raise ValueError("GGUF quantization requires gguf_model")
             return True
 
-        # Dict-style config: {"method": "gguf", "gguf_model": "..."}
         if isinstance(self.quant_config, dict):
-            if self.quant_config.get("method") == "gguf":
-                if not self.quant_config.get("gguf_model"):
-                    raise ValueError("GGUF quantization requires gguf_model")
-                return True
             return False
 
-        # Check by name for any config that reports as "gguf"
-        if hasattr(self.quant_config, "get_name") and self.quant_config.get_name() == "gguf":
-            gguf_model = getattr(self.quant_config, "gguf_model", None)
-            if gguf_model is None:
-                raise ValueError("GGUF quantization requires gguf_model")
-            return True
-
-        # Fallback: object with gguf_model attribute but no get_name
-        if hasattr(self.quant_config, "gguf_model") and self.quant_config.gguf_model:
-            return True
-
-        return False
+        return bool(maybe_gguf_model)
 
     def _is_transformer_source(self, source: "ComponentSource") -> bool:
         if source.subfolder == "transformer":
@@ -542,7 +537,7 @@ class DiffusersPipelineLoader:
         source: "ComponentSource",
         model: nn.Module,
     ) -> Generator[tuple[str, torch.Tensor], None, None]:
-        gguf_model = getattr(self.quant_config, "gguf_model", None)
+        gguf_model = self._get_gguf_model_from_config()
         if gguf_model is None:
             raise ValueError("GGUF quantization requires quantization_config.gguf_model")
         gguf_file = self._resolve_gguf_model_path(gguf_model, self.od_config.revision)
