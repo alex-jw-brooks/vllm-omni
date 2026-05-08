@@ -8,6 +8,7 @@ import pytest
 import torch
 from diffusers import DiffusionPipeline  # pyright: ignore[reportPrivateImportUsage]
 from PIL import Image
+from torch import nn
 
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServer, OmniServerParams, OpenAIClientHandler, dummy_messages_from_mix_data
@@ -66,6 +67,16 @@ def _make_request(**overrides) -> OmniDiffusionRequest:
     return OmniDiffusionRequest(**defaults)
 
 
+def _make_adapter(**attrs) -> DiffusersAdapterPipeline:
+    """Create a dummy adapter for testing HSDP validation."""
+    adapter = object.__new__(DiffusersAdapterPipeline)
+    nn.Module.__init__(adapter)
+    adapter.is_initialized = False
+    for k, v in attrs.items():
+        setattr(adapter, k, v)
+    return adapter
+
+
 @pytest.mark.core_model
 @pytest.mark.cpu
 class TestPipelineArgumentsHandling:
@@ -78,6 +89,7 @@ class TestPipelineArgumentsHandling:
         MockPipelineOutput = namedtuple("MockPipelineOutput", ["image"])
         MockPipeline = type("MockPipeline", (DiffusionPipeline,), {})
         adapter._pipeline = MockPipeline()
+        adapter.is_initialized = True
 
         mocker.patch.object(
             MockPipeline,
@@ -92,7 +104,7 @@ class TestPipelineArgumentsHandling:
 
     @pytest.mark.parametrize(
         "feature_id",
-        ["cfg_parallel", "ulysses", "ring", "teacache", "cache_dit", "enforce_eager", "quantization"],
+        ["cfg_parallel", "ulysses", "ring", "teacache", "cache_dit", "quantization"],
     )
     def test_adapter_guard_unsupported_feature(self, feature_id):
         if feature_id == "cfg_parallel":
@@ -139,6 +151,7 @@ class TestPipelineArgumentsHandling:
 
         MockPipeline = type("MockPipeline", (DiffusionPipeline,), {})
         adapter._pipeline = MockPipeline()
+        adapter.is_initialized = True
 
         mocker.patch.object(
             MockPipeline,
@@ -404,6 +417,45 @@ class TestPipelineArgumentsHandling:
         )
         with pytest.raises(ValueError):
             pipeline.forward(problematic_request)
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
+class TestDiffusersAdapterHSDP:
+    def test_hsdp_matches_only_direct_modulelist_names(self):
+        """Ensure we match only names that are direct child Modulelist-like."""
+        condition = DiffusersAdapterPipeline._build_hsdp_condition({"blocks", "layers"})
+        stub = nn.Module()
+        assert condition("blocks.0", stub) is True
+        assert condition("layers.2", stub) is True
+        assert condition("other.0", stub) is False
+        assert condition("blocks.0.sublayer.1", stub) is False
+        assert condition("blocks.name", stub) is False
+
+    def test_set_dit_hsdp_conditions_sets_shard_conditions_on_transformer(self):
+        """Ensure set DiT hsdp conditions matches direct child module lists."""
+        transformer = nn.Module()
+        transformer.blocks = nn.ModuleList([nn.Linear(4, 4) for _ in range(3)])
+
+        adapter = _make_adapter(is_initialized=True, _transformer=transformer)
+        adapter._set_dit_hsdp_conditions()
+
+        conditions = transformer._hsdp_shard_conditions
+        matched = [name for name, mod in transformer.named_modules() if any(c(name, mod) for c in conditions)]
+        assert matched == ["blocks.0", "blocks.1", "blocks.2"]
+
+    def test_set_dit_hsdp_conditions_raises_without_transformer(self):
+        """Ensure set DiT hsdp conditions needs a DiT."""
+        adapter = _make_adapter(is_initialized=True, _transformer=None)
+        with pytest.raises(RuntimeError, match="HSDP requires an encapsulated DiT"):
+            adapter._set_dit_hsdp_conditions()
+
+    @pytest.mark.parametrize("attr_name", ["pipeline", "transformer"])
+    def test_pipeline_property_guards_before_load_weights(self, attr_name):
+        """Ensure that attributes that require loading raise if accessed too early."""
+        adapter = _make_adapter()
+        with pytest.raises(RuntimeError):
+            getattr(adapter, attr_name)
 
 
 @pytest.mark.advanced_model
