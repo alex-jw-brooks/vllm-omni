@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 import torch.nn as nn
+from huggingface_hub import snapshot_download
 from vllm.config.load import LoadConfig
 
 from vllm_omni.diffusion.config import get_current_diffusion_config, get_current_diffusion_config_or_none
@@ -23,6 +24,12 @@ from vllm_omni.diffusion.registry import initialize_model
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 model_path = "hf-internal-testing/tiny-helios-modular-pipe"
+
+
+@pytest.fixture(scope="module")
+def prefetch_helios_model():
+    """Downloads the tiny helios model prior to running a test."""
+    snapshot_download(model_path)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -195,7 +202,7 @@ def test_load_model_custom_pipeline_sets_current_diffusion_config(monkeypatch):
     assert get_current_diffusion_config_or_none() is None
 
 
-def test_get_all_weights():
+def test_get_all_weights(prefetch_helios_model):
     """Ensure that get all weights on a tiny model resolves to nonempty weights."""
     od_config = OmniDiffusionConfig(
         model_class_name="HeliosPipeline",
@@ -207,12 +214,11 @@ def test_get_all_weights():
     )
     pipeline = HeliosPipeline(od_config=od_config)
 
-    weight_iter = loader.get_all_weights(pipeline)
-    # Ensure that the Helios model has nonempty weights
-    next(weight_iter)
+    weights = list(loader.get_all_weights(pipeline))
+    assert len(weights) > 0
 
 
-def test_load_model():
+def test_load_model(prefetch_helios_model):
     """Ensure that load model creates an instance of the expected pipeline class."""
     od_config = OmniDiffusionConfig(
         model_class_name="HeliosPipeline",
