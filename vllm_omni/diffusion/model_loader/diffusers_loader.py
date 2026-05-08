@@ -454,9 +454,11 @@ class DiffusersPipelineLoader:
         are logged as a warning.  Any *other* missing weight raises
         ``ValueError`` regardless of quantization.
         """
-        od_config = getattr(self, "od_config", None)
-        if od_config is None or od_config.quantization_config is None:
-            raise ValueError(f"Following weights were not initialized from checkpoint: {weights_not_loaded}")
+        if self.od_config.quantization_config is None:
+            raise ValueError(
+                "The quantization config is None, and the following weights "
+                f"were not initialized from checkpoint: {weights_not_loaded}"
+            )
 
         expected_missing = {w for w in weights_not_loaded if self._is_expected_quantized_weight(w)}
         unexpected_missing = weights_not_loaded - expected_missing
