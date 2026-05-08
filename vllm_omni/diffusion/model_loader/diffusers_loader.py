@@ -646,6 +646,9 @@ class DiffusersPipelineLoader:
 
         # Collect all transformers to shard (some models have transformer_2 for MoE)
         transformers_to_shard = []
+
+        # NOTE: In the case of DiffusersAdapterPipeline, this .transformer unwraps
+        # the transformer attribute on the encapsulated pipeline for now.
         transformer = getattr(model, "transformer", None)
         if transformer is None:
             raise ValueError("Model has no transformer attribute for HSDP")
@@ -661,10 +664,8 @@ class DiffusersPipelineLoader:
             logger.debug("Applying HSDP to %s", name)
             apply_hsdp_to_model(trans, hsdp_config)
 
-        # If we are trying to run HSDP on a DiffusersAdapterPipeline,
-        # then we need to unwrap it to run module discovery, since the
-        # internal Diffusers pipeline is what will have the modules,
-        # not the wrapper
+        # If we are trying to run HSDP on a DiffusersAdapterPipeline, unwrap the
+        # adapter prior to module discovery, since we want to run it on the pipeline module
         pipeline = model.pipeline if isinstance(model, DiffusersAdapterPipeline) else model
 
         # HSDP only shards transformer modules. All other runtime modules must
