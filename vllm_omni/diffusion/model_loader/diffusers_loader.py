@@ -245,9 +245,6 @@ class DiffusersPipelineLoader:
         return prefixed_weights_iterator
 
     def _get_source_quant_config(self, source: "ComponentSource") -> object | None:
-        if self.od_config is None:
-            return None
-
         quant_config = self.od_config.quantization_config
         if hasattr(quant_config, "resolve"):
             return quant_config.resolve(source.prefix.rstrip("."))

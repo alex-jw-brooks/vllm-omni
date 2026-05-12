@@ -31,7 +31,7 @@ def prefetch_helios_model():
     snapshot_download(model_path)
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="function")
 def mock_tp_group(mocker):
     """Mocks the tensor parallel group; this is needed to initialize the Helios model."""
     mocker.patch("vllm.model_executor.layers.linear.get_tensor_model_parallel_world_size", return_value=1)
@@ -202,7 +202,7 @@ def test_load_model_custom_pipeline_sets_current_diffusion_config(monkeypatch):
     assert get_current_diffusion_config_or_none() is None
 
 
-def test_get_all_weights(prefetch_helios_model):
+def test_get_all_weights(prefetch_helios_model, mock_tp_group):
     """Ensure that get all weights on a tiny model resolves to nonempty weights."""
     od_config = OmniDiffusionConfig(
         model_class_name="HeliosPipeline",
@@ -218,7 +218,7 @@ def test_get_all_weights(prefetch_helios_model):
     assert len(weights) > 0
 
 
-def test_load_model(prefetch_helios_model):
+def test_load_model(prefetch_helios_model, mock_tp_group):
     """Ensure that load model creates an instance of the expected pipeline class."""
     od_config = OmniDiffusionConfig(
         model_class_name="HeliosPipeline",
