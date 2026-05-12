@@ -18,8 +18,6 @@ import numpy as np
 import torch
 from PIL import Image
 
-from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
-
 TASK_CHOICES = ("t2t", "t2i", "t2s", "i2i", "i2t", "s2t", "v2t")
 
 TASK_DEFAULT_RUNTIME = {

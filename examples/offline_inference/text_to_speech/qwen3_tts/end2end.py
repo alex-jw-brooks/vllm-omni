@@ -546,7 +546,6 @@ def parse_args():
         help="Number of prompts per batch (default: 1, sequential).",
     )
 
-    nullify_stage_engine_defaults(parser)
     return parser.parse_args()
 
 

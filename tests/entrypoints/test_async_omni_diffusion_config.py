@@ -270,7 +270,7 @@ def test_serve_cli_accepts_diffusion_pipeline_profiler_flag():
 
 def test_serve_cli_accepts_diffusion_attention_backend():
     """Ensure diffusion serve CLI exposes the shorthand backend flag."""
-    parser = FlexibleArgumentParser()
+    parser = TrackingArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
     OmniServeCommand().subparser_init(subparsers)
 
@@ -284,7 +284,8 @@ def test_serve_cli_accepts_diffusion_attention_backend():
         ]
     )
 
-    stage_cfg = _create_default_diffusion_stage_cfg(args)[0]
+    explicit_kwargs = args.get_explicit_kwargs_dict()
+    stage_cfg = AsyncOmniEngine._create_default_diffusion_stage_cfg(explicit_kwargs)[0]
     diffusion_attention_config = stage_cfg["engine_args"]["diffusion_attention_config"]
 
     assert args.diffusion_attention_backend == "FLASH_ATTN"
