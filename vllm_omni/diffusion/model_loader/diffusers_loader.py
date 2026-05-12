@@ -41,7 +41,6 @@ from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
 from vllm_omni.diffusion.models.diffusers_adapter.pipeline_diffusers_adapter import DiffusersAdapterPipeline
 from vllm_omni.diffusion.offloader.module_collector import ModuleDiscovery
 from vllm_omni.diffusion.registry import initialize_model
-from vllm_omni.quantization.gguf_config import DiffusionGGUFConfig
 
 logger = init_logger(__name__)
 
@@ -479,6 +478,8 @@ class DiffusersPipelineLoader:
 
     def _is_gguf_quantization(self) -> bool:
         """Check whether or not this pipeline loader is pointing at a GGUF config."""
+        from vllm_omni.quantization.gguf_config import DiffusionGGUFConfig
+
         maybe_gguf_model = self._get_gguf_model_from_config()
         is_gguf = (
             isinstance(self.quant_config, DiffusionGGUFConfig)
