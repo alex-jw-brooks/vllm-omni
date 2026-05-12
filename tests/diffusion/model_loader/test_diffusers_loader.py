@@ -6,7 +6,6 @@ Tests for the DiffusersPipelineLoader.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -33,18 +32,14 @@ def prefetch_helios_model():
 
 
 @pytest.fixture(scope="function", autouse=True)
-def mock_tp_group():
+def mock_tp_group(mocker):
     """Mocks the tensor parallel group; this is needed to initialize the Helios model."""
-    with (
-        patch("vllm.model_executor.layers.linear.get_tensor_model_parallel_world_size", return_value=1),
-        patch("vllm.model_executor.layers.linear.get_tensor_model_parallel_rank", return_value=0),
-        patch("vllm.distributed.parallel_state.get_tp_group") as mock_get_tp_group,
-    ):
-        mock_tp_group = MagicMock()
-        mock_tp_group.world_size = 1
-        mock_tp_group.rank_in_group = 0
-        mock_get_tp_group.return_value = mock_tp_group
-        yield
+    mocker.patch("vllm.model_executor.layers.linear.get_tensor_model_parallel_world_size", return_value=1)
+    mocker.patch("vllm.model_executor.layers.linear.get_tensor_model_parallel_rank", return_value=0)
+    mock_group = mocker.MagicMock()
+    mock_group.world_size = 1
+    mock_group.rank_in_group = 0
+    mocker.patch("vllm.distributed.parallel_state.get_tp_group", return_value=mock_group)
 
 
 class _DummyPipelineModel(nn.Module):
