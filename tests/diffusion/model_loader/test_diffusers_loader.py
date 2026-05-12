@@ -74,7 +74,13 @@ class _DummyPipelineModel(nn.Module):
 
 
 def _make_loader_with_weights(weight_names: list[str]) -> DiffusersPipelineLoader:
-    loader = object.__new__(DiffusersPipelineLoader)
+    od_config = SimpleNamespace(
+        dtype=torch.float32,
+        parallel_config=SimpleNamespace(use_hsdp=False),
+        quantization_config=None,
+    )
+    loader = DiffusersPipelineLoader(LoadConfig(), od_config)
+
     loader.counter_before_loading_weights = 0.0
     loader.counter_after_loading_weights = 0.0
 
@@ -182,16 +188,15 @@ def test_load_model_custom_pipeline_sets_current_diffusion_config(monkeypatch):
         quantization_config=None,
     )
 
-    loader = object.__new__(DiffusersPipelineLoader)
+    loader = DiffusersPipelineLoader(LoadConfig(), od_config)
     loader.load_weights = lambda model: None  # type: ignore[assignment]
     loader._process_weights_after_loading = lambda model, target_device: None  # type: ignore[assignment]
-    loader._is_gguf_quantization = lambda _od_config: False  # type: ignore[assignment]
+    loader._is_gguf_quantization = lambda: False  # type: ignore[assignment]
 
     monkeypatch.setattr(loader_mod, "resolve_obj_by_qualname", lambda _name: _ConfigAwareModel)
     monkeypatch.setattr(loader_mod.torch, "device", lambda _name: _DeviceContext("cpu"))
 
     model = loader.load_model(
-        od_config,
         load_device="cpu",
         load_format="custom_pipeline",
         custom_pipeline_name="tests.dummy.ConfigAwarePipeline",
