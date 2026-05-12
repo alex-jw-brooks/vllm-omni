@@ -324,7 +324,7 @@ class DiffusersPipelineLoader:
         # For online quantization, load on device so quantization can run on accelerator,
         # then move back to CPU afterward.
         offload_after_quant = False
-        if load_device == "cpu" and self.od_config.quantization_config is not None:
+        if load_device == "cpu" and self.od_config.quantization_config is not None and device is not None:
             quant_cfg = self.od_config.quantization_config
             is_offline = getattr(quant_cfg, "data_type", None) == "mx_fp" or getattr(
                 quant_cfg, "is_checkpoint_quantized", False
