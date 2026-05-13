@@ -14,7 +14,6 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.nn.attention.flex_attention import flex_attention
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2PreTrainedModel,
@@ -200,11 +199,6 @@ class BagelMLP(nn.Module):
         return x
 
 
-torch._dynamo.config.cache_size_limit = 512
-torch._dynamo.config.accumulated_cache_size_limit = 4096
-flex_attention = torch.compile(flex_attention)
-
-
 class Qwen2MoTConfig(Qwen2Config):
     """Configuration for Qwen2MoT (Mixture of Tokens) model.
 
@@ -373,42 +367,35 @@ class PackedAttentionMoT(nn.Module):
 
         self.rotary_op = RotaryEmbedding(is_neox_style=True)
 
-        # SP (Ulysses / Ring) attention for generation mode denoising
-        sp_size = parallel_config.sequence_parallel_size if parallel_config is not None else 1
-        if sp_size is not None and sp_size > 1:
-            self.sp_attn = DiffusionAttention(
-                num_heads=self.total_num_heads,
-                head_size=self.head_dim,
-                softmax_scale=1.0 / (self.head_dim**0.5),
-                causal=False,
-                num_kv_heads=self.total_num_kv_heads,
-            )
-        else:
-            self.sp_attn = None
+        self.attn_noncausal = DiffusionAttention(
+            num_heads=self.total_num_heads,
+            head_size=self.head_dim,
+            softmax_scale=1.0 / (self.head_dim**0.5),
+            causal=False,
+            num_kv_heads=self.total_num_kv_heads,
+        )
 
     def _is_sp_active(self) -> bool:
         """Check if SP is active for this attention layer."""
-        if self.sp_attn is None:
-            return False
         if not is_forward_context_available():
             return False
         return get_forward_context().sp_active
 
-    def _forward_sp_gen(
+    def _forward_gen(
         self,
         packed_query_sequence: torch.Tensor,
         packed_query_position_embeddings: torch.Tensor,
         past_key_values: NaiveCache | None,
         packed_vae_token_indexes: torch.Tensor,
         packed_text_indexes: torch.Tensor,
+        update_past_key_values: bool = False,
     ) -> tuple[torch.Tensor, NaiveCache | None]:
-        """SP-aware attention for gen mode denoising.
+        """Unified gen-mode attention using DiffusionAttention.
 
-        Converts packed format to batched (1, S, H, D) and uses the diffusion
-        Attention layer (Ulysses / Ring) with joint mechanism:
-          - Main Q/K/V: VAE tokens (split across SP ranks)
-          - Joint Q: text marker Q (replicated)
-          - Joint K/V: KV cache K/V + text marker K/V (replicated)
+        Handles both SP and non-SP cases:
+          - SP active: uses joint mechanism (VAE as main, text+cache as joint)
+            so Ulysses/Ring can split VAE across ranks while replicating text+cache
+          - SP inactive: concatenates all Q/K/V and calls DiffusionAttention directly
         """
         packed_query_sequence = packed_query_sequence.to(torch.bfloat16)
 
@@ -437,11 +424,8 @@ class PackedAttentionMoT(nn.Module):
         vae_q = self.q_norm_moe_gen(vae_q.to(torch.float32))
         vae_k = self.k_norm_moe_gen(vae_k.to(torch.float32))
 
-        # Apply RoPE - need to build per-token cos/sin for text and vae separately
-        # packed_query_position_embeddings are ordered as the packed sequence
+        # Apply RoPE per token set
         cos_full, sin_full = [x[..., : self.head_dim // 2] for x in packed_query_position_embeddings]
-
-        # Extract cos/sin for text and vae positions
         text_cos = cos_full[packed_text_indexes]
         text_sin = sin_full[packed_text_indexes]
         vae_cos = cos_full[packed_vae_token_indexes]
@@ -459,37 +443,48 @@ class PackedAttentionMoT(nn.Module):
         vae_k = vae_k.to(torch.bfloat16)
         vae_v = vae_v.to(torch.bfloat16)
 
-        # Build joint K/V: [kv_cache, text_markers] (replicated across SP ranks)
+        # Build context K/V: [kv_cache, text_markers]
         if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
             cache_k = past_key_values.key_cache[self.layer_idx]
             cache_v = past_key_values.value_cache[self.layer_idx]
-            joint_k = torch.cat([cache_k, text_k], dim=0).unsqueeze(0)
-            joint_v = torch.cat([cache_v, text_v], dim=0).unsqueeze(0)
+            ctx_k = torch.cat([cache_k, text_k], dim=0)
+            ctx_v = torch.cat([cache_v, text_v], dim=0)
         else:
-            joint_k = text_k.unsqueeze(0)
-            joint_v = text_v.unsqueeze(0)
+            ctx_k = text_k
+            ctx_v = text_v
 
-        # Reshape to batched (1, S, H, D) for diffusion Attention
         vae_q_4d = vae_q.unsqueeze(0)
         vae_k_4d = vae_k.unsqueeze(0)
         vae_v_4d = vae_v.unsqueeze(0)
         text_q_4d = text_q.unsqueeze(0)
+        ctx_k_4d = ctx_k.unsqueeze(0)
+        ctx_v_4d = ctx_v.unsqueeze(0)
 
-        # Call SP-aware attention: VAE as main, text+cache as joint
-        attn_out = self.sp_attn(
-            vae_q_4d,
-            vae_k_4d,
-            vae_v_4d,
-            DiffusionAttentionMetadata(
-                joint_query=text_q_4d,
-                joint_key=joint_k,
-                joint_value=joint_v,
-                joint_strategy="front",
-            ),
-        )
-        # attn_out: (1, text_len + local_vae_len, H, D)
+        if self._is_sp_active():
+            # SP: use joint mechanism — Ulysses/Ring splits VAE across ranks,
+            # replicates text+cache via joint
+            attn_out = self.attn_noncausal(
+                vae_q_4d,
+                vae_k_4d,
+                vae_v_4d,
+                DiffusionAttentionMetadata(
+                    joint_query=text_q_4d,
+                    joint_key=ctx_k_4d,
+                    joint_value=ctx_v_4d,
+                    joint_strategy="front",
+                ),
+            )
+        else:
+            # Non-SP: concatenate all Q/K/V directly since
+            # NoParallelAttention does not handle joint metadata
+            q = torch.cat([text_q_4d, vae_q_4d], dim=1)
+            k = torch.cat([ctx_k_4d, vae_k_4d], dim=1)
+            v = torch.cat([ctx_v_4d, vae_v_4d], dim=1)
+            attn_out = self.attn_noncausal(q, k, v)
+
+        # attn_out: (1, text_len + vae_len, H, D) — text first, then VAE
         text_len = text_q.shape[0]
-        attn_out = attn_out.squeeze(0)  # (text_len + local_vae_len, H, D)
+        attn_out = attn_out.squeeze(0)
         text_attn = attn_out[:text_len].reshape(text_len, self.q_size)
         vae_attn = attn_out[text_len:].reshape(-1, self.q_size)
 
@@ -502,6 +497,12 @@ class PackedAttentionMoT(nn.Module):
         full_output = text_out.new_zeros((total_len, self.hidden_size))
         full_output[packed_text_indexes] = text_out
         full_output[packed_vae_token_indexes] = vae_out
+
+        if update_past_key_values:
+            new_k = torch.cat([ctx_k, vae_k], dim=0)
+            new_v = torch.cat([ctx_v, vae_v], dim=0)
+            past_key_values.key_cache[self.layer_idx] = new_k
+            past_key_values.value_cache[self.layer_idx] = new_v
 
         return full_output, past_key_values
 
@@ -520,73 +521,25 @@ class PackedAttentionMoT(nn.Module):
         packed_vae_token_indexes=None,
         packed_text_indexes=None,
     ):
-        # SP path for gen-mode denoising (non-causal, no KV update)
-        if (
-            mode == "gen"
-            and not update_past_key_values
-            and not is_causal
-            and self._is_sp_active()
-            and packed_vae_token_indexes is not None
-            and packed_text_indexes is not None
-        ):
-            return self._forward_sp_gen(
+        if mode == "gen":
+            assert not is_causal, "gen mode requires non-causal attention"
+            return self._forward_gen(
                 packed_query_sequence=packed_query_sequence,
                 packed_query_position_embeddings=packed_query_position_embeddings,
                 past_key_values=past_key_values,
                 packed_vae_token_indexes=packed_vae_token_indexes,
                 packed_text_indexes=packed_text_indexes,
+                update_past_key_values=update_past_key_values,
             )
 
-        if mode == "und":
-            qkv, _ = self.qkv_proj(packed_query_sequence)
-            q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-            packed_query_states = q.view(-1, self.num_heads, self.head_dim)
-            packed_key_states = k.view(-1, self.num_kv_heads, self.head_dim)
-            packed_value_states = v.view(-1, self.num_kv_heads, self.head_dim)
-            packed_query_states = self.q_norm(packed_query_states)
-            packed_key_states = self.k_norm(packed_key_states)
-        elif mode == "gen":
-            packed_query_sequence = packed_query_sequence.to(torch.bfloat16)
-
-            packed_text_query_sequence = packed_query_sequence[packed_text_indexes]
-            packed_vae_query_sequence = packed_query_sequence[packed_vae_token_indexes]
-
-            # Project text tokens through base qkv
-            text_qkv, _ = self.qkv_proj(packed_text_query_sequence)
-            text_q, text_k, text_v = text_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-
-            # Project vae tokens through moe_gen qkv
-            vae_qkv, _ = self.qkv_proj_moe_gen(packed_vae_query_sequence)
-            vae_q, vae_k, vae_v = vae_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-
-            # Merge into packed tensors
-            total_len = packed_query_sequence.shape[0]
-            packed_query_states = packed_query_sequence.new_zeros((total_len, self.q_size))
-            packed_key_states = packed_query_sequence.new_zeros((total_len, self.kv_size))
-            packed_value_states = packed_query_sequence.new_zeros((total_len, self.kv_size))
-
-            packed_query_states[packed_text_indexes] = text_q
-            packed_query_states[packed_vae_token_indexes] = vae_q
-            packed_key_states[packed_text_indexes] = text_k
-            packed_key_states[packed_vae_token_indexes] = vae_k
-            packed_value_states[packed_text_indexes] = text_v
-            packed_value_states[packed_vae_token_indexes] = vae_v
-
-            packed_query_states = packed_query_states.view(-1, self.num_heads, self.head_dim)
-            packed_key_states = packed_key_states.view(-1, self.num_kv_heads, self.head_dim)
-            packed_value_states = packed_value_states.view(-1, self.num_kv_heads, self.head_dim)
-
-            packed_query_states = packed_query_states.to(torch.float32)
-            packed_query_states[packed_text_indexes] = self.q_norm(packed_query_states[packed_text_indexes])
-            packed_query_states[packed_vae_token_indexes] = self.q_norm_moe_gen(
-                packed_query_states[packed_vae_token_indexes]
-            )
-
-            packed_key_states = packed_key_states.to(torch.float32)
-            packed_key_states[packed_text_indexes] = self.k_norm(packed_key_states[packed_text_indexes])
-            packed_key_states[packed_vae_token_indexes] = self.k_norm_moe_gen(
-                packed_key_states[packed_vae_token_indexes]
-            )
+        # --- und (understanding) mode: uses flash_attn_varlen_func directly ---
+        qkv, _ = self.qkv_proj(packed_query_sequence)
+        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        packed_query_states = q.view(-1, self.num_heads, self.head_dim)
+        packed_key_states = k.view(-1, self.num_kv_heads, self.head_dim)
+        packed_value_states = v.view(-1, self.num_kv_heads, self.head_dim)
+        packed_query_states = self.q_norm(packed_query_states)
+        packed_key_states = self.k_norm(packed_key_states)
 
         cos, sin = [x[..., : self.head_dim // 2] for x in packed_query_position_embeddings]
         packed_query_states = self.rotary_op(packed_query_states.to(cos.dtype).unsqueeze(0), cos, sin).squeeze(0)
@@ -627,15 +580,7 @@ class PackedAttentionMoT(nn.Module):
             causal=is_causal,
         )
         packed_attn_output = packed_attn_output.reshape(-1, self.q_size)
-        if mode == "und":
-            packed_attn_output, _ = self.o_proj(packed_attn_output)
-        elif mode == "gen":
-            text_out, _ = self.o_proj(packed_attn_output[packed_text_indexes])
-            vae_out, _ = self.o_proj_moe_gen(packed_attn_output[packed_vae_token_indexes])
-            full_output = text_out.new_zeros((packed_attn_output.shape[0], self.hidden_size))
-            full_output[packed_text_indexes] = text_out
-            full_output[packed_vae_token_indexes] = vae_out
-            packed_attn_output = full_output
+        packed_attn_output, _ = self.o_proj(packed_attn_output)
 
         if update_past_key_values:
             past_key_values.key_cache[self.layer_idx] = merged_key_states
