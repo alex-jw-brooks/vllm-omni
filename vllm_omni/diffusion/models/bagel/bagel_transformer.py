@@ -35,7 +35,6 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.transformers_utils.configs.bagel import BagelConfig
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata as DiffusionAttentionMetadata
-from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
 from vllm_omni.diffusion.attention.layer import Attention as DiffusionAttention
 from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.diffusion.distributed.parallel_state import (
@@ -367,6 +366,13 @@ class PackedAttentionMoT(nn.Module):
 
         self.rotary_op = RotaryEmbedding(is_neox_style=True)
 
+        self.attn_causal = DiffusionAttention(
+            num_heads=self.total_num_heads,
+            head_size=self.head_dim,
+            softmax_scale=1.0 / (self.head_dim**0.5),
+            causal=True,
+            num_kv_heads=self.total_num_kv_heads,
+        )
         self.attn_noncausal = DiffusionAttention(
             num_heads=self.total_num_heads,
             head_size=self.head_dim,
@@ -390,13 +396,6 @@ class PackedAttentionMoT(nn.Module):
         packed_text_indexes: torch.Tensor,
         update_past_key_values: bool = False,
     ) -> tuple[torch.Tensor, NaiveCache | None]:
-        """Unified gen-mode attention using DiffusionAttention.
-
-        Handles both SP and non-SP cases:
-          - SP active: uses joint mechanism (VAE as main, text+cache as joint)
-            so Ulysses/Ring can split VAE across ranks while replicating text+cache
-          - SP inactive: concatenates all Q/K/V and calls DiffusionAttention directly
-        """
         packed_query_sequence = packed_query_sequence.to(torch.bfloat16)
 
         packed_text_query_sequence = packed_query_sequence[packed_text_indexes]
@@ -453,36 +452,25 @@ class PackedAttentionMoT(nn.Module):
             ctx_k = text_k
             ctx_v = text_v
 
-        vae_q_4d = vae_q.unsqueeze(0)
-        vae_k_4d = vae_k.unsqueeze(0)
-        vae_v_4d = vae_v.unsqueeze(0)
-        text_q_4d = text_q.unsqueeze(0)
-        ctx_k_4d = ctx_k.unsqueeze(0)
-        ctx_v_4d = ctx_v.unsqueeze(0)
-
         if self._is_sp_active():
-            # SP: use joint mechanism — Ulysses/Ring splits VAE across ranks,
-            # replicates text+cache via joint
+            # Joint mechanism keeps text+cache replicated across SP ranks
             attn_out = self.attn_noncausal(
-                vae_q_4d,
-                vae_k_4d,
-                vae_v_4d,
+                vae_q.unsqueeze(0),
+                vae_k.unsqueeze(0),
+                vae_v.unsqueeze(0),
                 DiffusionAttentionMetadata(
-                    joint_query=text_q_4d,
-                    joint_key=ctx_k_4d,
-                    joint_value=ctx_v_4d,
+                    joint_query=text_q.unsqueeze(0),
+                    joint_key=ctx_k.unsqueeze(0),
+                    joint_value=ctx_v.unsqueeze(0),
                     joint_strategy="front",
                 ),
             )
         else:
-            # Non-SP: concatenate all Q/K/V directly since
-            # NoParallelAttention does not handle joint metadata
-            q = torch.cat([text_q_4d, vae_q_4d], dim=1)
-            k = torch.cat([ctx_k_4d, vae_k_4d], dim=1)
-            v = torch.cat([ctx_v_4d, vae_v_4d], dim=1)
+            q = torch.cat([text_q, vae_q], dim=0).unsqueeze(0)
+            k = torch.cat([ctx_k, vae_k], dim=0).unsqueeze(0)
+            v = torch.cat([ctx_v, vae_v], dim=0).unsqueeze(0)
             attn_out = self.attn_noncausal(q, k, v)
 
-        # attn_out: (1, text_len + vae_len, H, D) — text first, then VAE
         text_len = text_q.shape[0]
         attn_out = attn_out.squeeze(0)
         text_attn = attn_out[:text_len].reshape(text_len, self.q_size)
@@ -505,6 +493,55 @@ class PackedAttentionMoT(nn.Module):
             past_key_values.value_cache[self.layer_idx] = new_v
 
         return full_output, past_key_values
+
+    def _forward_und(
+        self,
+        packed_query_sequence: torch.Tensor,
+        packed_query_position_embeddings: torch.Tensor,
+        past_key_values: NaiveCache | None,
+        is_causal: bool,
+        update_past_key_values: bool = True,
+    ) -> tuple[torch.Tensor, NaiveCache | None]:
+        qkv, _ = self.qkv_proj(packed_query_sequence)
+        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        q = q.view(-1, self.num_heads, self.head_dim)
+        k = k.view(-1, self.num_kv_heads, self.head_dim)
+        v = v.view(-1, self.num_kv_heads, self.head_dim)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        cos, sin = [x[..., : self.head_dim // 2] for x in packed_query_position_embeddings]
+        q = self.rotary_op(q.to(cos.dtype).unsqueeze(0), cos, sin).squeeze(0)
+        k = self.rotary_op(k.to(cos.dtype).unsqueeze(0), cos, sin).squeeze(0)
+
+        q = q.to(torch.bfloat16)
+        k = k.to(torch.bfloat16)
+        v = v.to(torch.bfloat16)
+
+        if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
+            cache_k = past_key_values.key_cache[self.layer_idx]
+            cache_v = past_key_values.value_cache[self.layer_idx]
+            full_k = torch.cat([cache_k, k], dim=0)
+            full_v = torch.cat([cache_v, v], dim=0)
+        else:
+            full_k = k
+            full_v = v
+
+        attn = self.attn_causal if is_causal else self.attn_noncausal
+        attn_out = attn(
+            q.unsqueeze(0),
+            full_k.unsqueeze(0),
+            full_v.unsqueeze(0),
+        )
+
+        attn_out = attn_out.squeeze(0).reshape(-1, self.q_size)
+        attn_out, _ = self.o_proj(attn_out)
+
+        if update_past_key_values:
+            past_key_values.key_cache[self.layer_idx] = full_k
+            past_key_values.value_cache[self.layer_idx] = full_v
+
+        return attn_out, past_key_values
 
     def forward(
         self,
@@ -532,61 +569,14 @@ class PackedAttentionMoT(nn.Module):
                 update_past_key_values=update_past_key_values,
             )
 
-        # --- und (understanding) mode: uses flash_attn_varlen_func directly ---
-        qkv, _ = self.qkv_proj(packed_query_sequence)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        packed_query_states = q.view(-1, self.num_heads, self.head_dim)
-        packed_key_states = k.view(-1, self.num_kv_heads, self.head_dim)
-        packed_value_states = v.view(-1, self.num_kv_heads, self.head_dim)
-        packed_query_states = self.q_norm(packed_query_states)
-        packed_key_states = self.k_norm(packed_key_states)
-
-        cos, sin = [x[..., : self.head_dim // 2] for x in packed_query_position_embeddings]
-        packed_query_states = self.rotary_op(packed_query_states.to(cos.dtype).unsqueeze(0), cos, sin).squeeze(0)
-        packed_key_states = self.rotary_op(packed_key_states.to(cos.dtype).unsqueeze(0), cos, sin).squeeze(0)
-
-        packed_query_states = packed_query_states.to(torch.bfloat16)
-        packed_key_states = packed_key_states.to(torch.bfloat16)
-        packed_value_states = packed_value_states.to(torch.bfloat16)
-
-        if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
-            past_key_states = past_key_values.key_cache[self.layer_idx]
-            past_value_states = past_key_values.value_cache[self.layer_idx]
-
-            seqlens = sum(query_lens) + sum(key_values_lens)
-            merged_key_states = past_key_states.new_zeros(size=[seqlens, self.num_kv_heads, self.head_dim])
-            merged_value_states = past_key_states.new_zeros(size=[seqlens, self.num_kv_heads, self.head_dim])
-            merged_key_states[packed_query_indexes] = packed_key_states
-            merged_key_states[packed_key_value_indexes] = past_key_states
-            merged_value_states[packed_query_indexes] = packed_value_states
-            merged_value_states[packed_key_value_indexes] = past_value_states
-            key_values_lens = key_values_lens + query_lens
-        else:
-            merged_key_states = packed_key_states
-            merged_value_states = packed_value_states
-            key_values_lens = query_lens
-
-        cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(query_lens, dim=0), (1, 0))
-        cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(key_values_lens, dim=0), (1, 0))
-
-        packed_attn_output = flash_attn_varlen_func(
-            q=packed_query_states,
-            k=merged_key_states,
-            v=merged_value_states,
-            cu_seqlens_q=cu_seqlens_q.to(torch.int32),
-            cu_seqlens_k=cu_seqlens_k.to(torch.int32),
-            max_seqlen_q=max(query_lens).item(),
-            max_seqlen_k=max(key_values_lens).item(),
-            causal=is_causal,
+        assert query_lens.shape[0] == 1
+        return self._forward_und(
+            packed_query_sequence=packed_query_sequence,
+            packed_query_position_embeddings=packed_query_position_embeddings,
+            past_key_values=past_key_values,
+            is_causal=is_causal,
+            update_past_key_values=update_past_key_values,
         )
-        packed_attn_output = packed_attn_output.reshape(-1, self.q_size)
-        packed_attn_output, _ = self.o_proj(packed_attn_output)
-
-        if update_past_key_values:
-            past_key_values.key_cache[self.layer_idx] = merged_key_states
-            past_key_values.value_cache[self.layer_idx] = merged_value_states
-
-        return packed_attn_output, past_key_values
 
 
 class Qwen2MoTDecoderLayer(nn.Module):
