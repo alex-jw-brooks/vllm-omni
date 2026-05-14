@@ -339,7 +339,7 @@ class DiffusersPipelineLoader:
         with set_default_torch_dtype(self.od_config.dtype):
             if self.parallel_config.use_hsdp:
                 model = self._load_model_with_hsdp(
-                    target_device=target_device, load_format=load_format, custom_pipeline_name=custom_pipeline_name
+                    target_device=device, load_format=load_format, custom_pipeline_name=custom_pipeline_name
                 )
             else:
                 model = self._init_from_load_format(load_format, target_device, custom_pipeline_name, is_hsdp=False)
