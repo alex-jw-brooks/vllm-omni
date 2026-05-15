@@ -1883,14 +1883,23 @@ class LTX2VideoTransformer3DModel(nn.Module):
             # because CacheDiT expects the first 2 args to be hidden_states
             # and encoder_hidden_states, so passing them as kwargs will cause
             # positional / keywords arg collisions.
-            hidden_states, audio_hidden_states = block(
-                hidden_states,
-                audio_hidden_states,
-                encoder_hidden_states,
-                audio_encoder_hidden_states,
-                **block_kwargs,
-            )
-
+            if torch.is_grad_enabled() and self.gradient_checkpointing:
+                hidden_states, audio_hidden_states = self._gradient_checkpointing_func(
+                    block,
+                    hidden_states,
+                    audio_hidden_states,
+                    encoder_hidden_states,
+                    audio_encoder_hidden_states,
+                    **block_kwargs,
+                )
+            else:
+                hidden_states, audio_hidden_states = block(
+                    hidden_states,
+                    audio_hidden_states,
+                    encoder_hidden_states,
+                    audio_encoder_hidden_states,
+                    **block_kwargs,
+                )
         # 6. Output layers (including unpatchification)
         scale_shift_values = self.scale_shift_table[None, None] + embedded_timestep[:, :, None]
         shift, scale = scale_shift_values[:, :, 0], scale_shift_values[:, :, 1]
