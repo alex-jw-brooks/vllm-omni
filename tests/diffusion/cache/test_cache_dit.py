@@ -10,12 +10,12 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 from cache_dit.caching.cache_blocks.pattern_0_1_2 import CachedBlocks_Pattern_0_1_2
-from vllm.platforms import current_platform
 
 import vllm_omni.diffusion.cache.cache_dit_backend as cd_backend
 from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTBackend
 from vllm_omni.diffusion.data import DiffusionCacheConfig
 from vllm_omni.diffusion.models.ltx2.ltx2_transformer import LTX2VideoTransformer3DModel
+from vllm_omni.platforms import current_omni_platform
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -47,7 +47,7 @@ def test_separate_cfg(mock_cache_dit, mock_block_adapter, enabler):
 
 # This test is skipped on ROCm since rocm_unquantized_gemm doesn't support CPU backend
 @pytest.mark.skipif(
-    current_platform.is_rocm(),
+    current_omni_platform.is_rocm(),
     reason="vLLM ROCm custom ops lack CPU fallback",
 )
 def test_ltx2_cache_dit_receives_audio_as_encoder(init_fake_tp_group):
