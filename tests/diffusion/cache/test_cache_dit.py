@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 from cache_dit.caching.cache_blocks.pattern_0_1_2 import CachedBlocks_Pattern_0_1_2
+from vllm.platforms import current_platform
 
 import vllm_omni.diffusion.cache.cache_dit_backend as cd_backend
 from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTBackend
@@ -44,6 +45,11 @@ def test_separate_cfg(mock_cache_dit, mock_block_adapter, enabler):
     assert adapter_kwargs["has_separate_cfg"] is True
 
 
+# This test is skipped on ROCm since rocm_unquantized_gemm doesn't support CPU backend
+@pytest.mark.skipif(
+    current_platform.is_rocm(),
+    reason="vLLM ROCm custom ops lack CPU fallback",
+)
 def test_ltx2_cache_dit_receives_audio_as_encoder(init_fake_tp_group):
     """CacheDiT Pattern_0 treats the second positional arg as encoder_hidden_states,
     which is a collision for one of the kwargs in LTX2 since we treat the audio
