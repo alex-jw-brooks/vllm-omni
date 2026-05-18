@@ -307,7 +307,6 @@ def extract_bagel_context(
     packed_vae_position_ids: torch.LongTensor,
     packed_text_ids: torch.LongTensor,
     packed_text_indexes: torch.LongTensor,
-    packed_indexes: torch.LongTensor,
     packed_position_ids: torch.LongTensor,
     packed_seqlens: torch.IntTensor,
     past_key_values: Any,
