@@ -396,6 +396,7 @@ class PackedAttentionMoT(nn.Module):
         packed_text_indexes: torch.Tensor,
         update_past_key_values: bool = False,
     ) -> tuple[torch.Tensor, NaiveCache | None]:
+        """Forward pass for generation mode."""
         packed_query_sequence = packed_query_sequence.to(torch.bfloat16)
 
         packed_text_query_sequence = packed_query_sequence[packed_text_indexes]
@@ -502,6 +503,7 @@ class PackedAttentionMoT(nn.Module):
         is_causal: bool,
         update_past_key_values: bool = True,
     ) -> tuple[torch.Tensor, NaiveCache | None]:
+        """Forward pass for understanding mode."""
         qkv, _ = self.qkv_proj(packed_query_sequence)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q = q.view(-1, self.num_heads, self.head_dim)
@@ -548,10 +550,7 @@ class PackedAttentionMoT(nn.Module):
         packed_query_sequence: torch.Tensor,
         query_lens: torch.Tensor,
         packed_query_position_embeddings: torch.Tensor,
-        packed_query_indexes: torch.Tensor,
         past_key_values: NaiveCache | None = None,
-        key_values_lens: torch.Tensor | None = None,
-        packed_key_value_indexes: torch.Tensor | None = None,
         update_past_key_values=True,
         is_causal=True,
         mode="und",
@@ -618,14 +617,10 @@ class Qwen2MoTDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: torch.Tensor | None = None,
         packed_query_sequence: torch.Tensor | None = None,
         query_lens: torch.Tensor = None,
         packed_query_position_embeddings: torch.Tensor = None,
-        packed_query_indexes: torch.Tensor = None,
         past_key_values: NaiveCache | None = None,
-        key_values_lens: torch.Tensor | None = None,
-        packed_key_value_indexes: torch.Tensor | None = None,
         update_past_key_values=True,
         is_causal=True,
         mode="und",
@@ -652,10 +647,7 @@ class Qwen2MoTDecoderLayer(nn.Module):
             packed_query_sequence=packed_query_sequence,
             query_lens=query_lens,
             packed_query_position_embeddings=packed_query_position_embeddings,
-            packed_query_indexes=packed_query_indexes,
             past_key_values=past_key_values,
-            key_values_lens=key_values_lens,
-            packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=update_past_key_values,
             is_causal=is_causal,
             mode=mode,
@@ -736,10 +728,7 @@ class Qwen2MoTModel(Qwen2PreTrainedModel):
         packed_query_sequence: torch.Tensor | None = None,
         query_lens: torch.Tensor | None = None,
         packed_query_position_ids: torch.Tensor | None = None,
-        packed_query_indexes: torch.Tensor | None = None,
         past_key_values: NaiveCache | None = None,
-        key_values_lens: torch.Tensor | None = None,
-        packed_key_value_indexes: torch.Tensor | None = None,
         update_past_key_values=True,
         is_causal=True,
         mode="und",
@@ -779,13 +768,9 @@ class Qwen2MoTModel(Qwen2PreTrainedModel):
         for layer_idx, decoder_layer in enumerate(self.layers):
             packed_query_sequence, past_key_values = decoder_layer(
                 hidden_states=packed_query_sequence,
-                encoder_hidden_states=None,
                 query_lens=query_lens,
                 packed_query_position_embeddings=packed_query_position_embeddings,
-                packed_query_indexes=packed_query_indexes,
                 past_key_values=past_key_values,
-                key_values_lens=key_values_lens,
-                packed_key_value_indexes=packed_key_value_indexes,
                 update_past_key_values=update_past_key_values,
                 is_causal=is_causal,
                 **extra_inputs,
@@ -853,10 +838,7 @@ class Qwen2MoTForCausalLM(Qwen2PreTrainedModel):
         packed_query_sequence: torch.Tensor | None = None,
         query_lens: torch.Tensor | None = None,
         packed_query_position_ids: torch.Tensor | None = None,
-        packed_query_indexes: torch.Tensor | None = None,
         past_key_values: NaiveCache | None = None,
-        key_values_lens: torch.Tensor | None = None,
-        packed_key_value_indexes: torch.Tensor | None = None,
         update_past_key_values=True,
         is_causal=True,
         mode="und",
@@ -869,10 +851,7 @@ class Qwen2MoTForCausalLM(Qwen2PreTrainedModel):
             packed_query_sequence=packed_query_sequence,
             query_lens=query_lens,
             packed_query_position_ids=packed_query_position_ids,
-            packed_query_indexes=packed_query_indexes,
             past_key_values=past_key_values,
-            key_values_lens=key_values_lens,
-            packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=update_past_key_values,
             is_causal=is_causal,
             mode=mode,
@@ -1160,32 +1139,21 @@ class Bagel(nn.Module):
         packed_text_ids = list()
         packed_text_position_ids = list()
         text_token_lens = list()
-        packed_text_indexes = list()
-        packed_key_value_indexes = list()
 
-        curr = 0
         newlens, new_rope = list(), list()
         for prompt, curr_kvlen, curr_position_id in zip(prompts, curr_kvlens, curr_rope):
-            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
-            curr += curr_kvlen
-
             text_ids = tokenizer.encode(prompt, add_special_tokens=False)
             text_ids = [new_token_ids["bos_token_id"]] + text_ids + [new_token_ids["eos_token_id"]]
             text_token_lens.append(len(text_ids))
             packed_text_ids.extend(text_ids)
             packed_text_position_ids.extend(range(curr_position_id, curr_position_id + len(text_ids)))
-            packed_text_indexes.extend(range(curr, curr + len(text_ids)))
             newlens.append(curr_kvlen + len(text_ids))
             new_rope.append(curr_position_id + len(text_ids))
-            curr += len(text_ids)
 
         generation_input = {
             "text_token_lens": torch.tensor(text_token_lens, dtype=torch.int),
             "packed_text_ids": torch.tensor(packed_text_ids, dtype=torch.long),
             "packed_text_position_ids": torch.tensor(packed_text_position_ids, dtype=torch.long),
-            "packed_text_indexes": torch.tensor(packed_text_indexes, dtype=torch.long),
-            "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
-            "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
         }
 
         return generation_input, newlens, new_rope
@@ -1196,9 +1164,6 @@ class Bagel(nn.Module):
         packed_text_ids: torch.IntTensor,
         packed_text_position_ids: torch.LongTensor,
         text_token_lens: torch.LongTensor,
-        packed_text_indexes: torch.LongTensor,
-        packed_key_value_indexes: torch.LongTensor,
-        key_values_lens: torch.IntTensor,
     ):
         extra_inputs = {}
         if self.use_moe:
@@ -1208,10 +1173,7 @@ class Bagel(nn.Module):
             packed_text_ids=packed_text_ids,
             query_lens=text_token_lens,
             packed_query_position_ids=packed_text_position_ids,
-            packed_query_indexes=packed_text_indexes,
             past_key_values=past_key_values,
-            packed_key_value_indexes=packed_key_value_indexes,
-            key_values_lens=key_values_lens,
             update_past_key_values=True,
             is_causal=True,
             **extra_inputs,
@@ -1224,20 +1186,14 @@ class Bagel(nn.Module):
         patchified_vae_latent_shapes, packed_vae_position_ids = list(), list()
         packed_vae_token_indexes = list()
         packed_text_ids, packed_text_indexes = list(), list()
-        packed_seqlens, packed_position_ids, packed_indexes = list(), list(), list()
-        packed_key_value_indexes = list()
+        packed_seqlens, packed_position_ids = list(), list()
 
-        _curr = curr = 0
+        _curr = 0
         vae_image_tensors = list()
         newlens, new_rope = list(), list()
         for image, curr_kvlen, curr_position_id in zip(images, curr_kvlens, curr_rope):
-            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
-            curr += curr_kvlen
-
             packed_text_ids.append(new_token_ids["start_of_image"])
             packed_text_indexes.append(_curr)
-            packed_indexes.append(curr)
-            curr += 1
             _curr += 1
 
             image_tensor = transforms(image)
@@ -1256,14 +1212,10 @@ class Bagel(nn.Module):
 
             num_img_tokens = w * h
             packed_vae_token_indexes.extend(range(_curr, _curr + num_img_tokens))
-            packed_indexes.extend(range(curr, curr + num_img_tokens))
-            curr += num_img_tokens
             _curr += num_img_tokens
 
             packed_text_ids.append(new_token_ids["end_of_image"])
             packed_text_indexes.append(_curr)
-            packed_indexes.append(curr)
-            curr += 1
             _curr += 1
 
             packed_position_ids.extend([curr_position_id] * (num_img_tokens + 2))
@@ -1287,9 +1239,6 @@ class Bagel(nn.Module):
             "packed_text_indexes": torch.tensor(packed_text_indexes, dtype=torch.long),
             "packed_position_ids": torch.tensor(packed_position_ids, dtype=torch.long),
             "packed_seqlens": torch.tensor(packed_seqlens, dtype=torch.int),
-            "packed_indexes": torch.tensor(packed_indexes, dtype=torch.long),
-            "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
-            "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
         }
 
         return generation_input, newlens, new_rope
@@ -1307,9 +1256,6 @@ class Bagel(nn.Module):
         packed_text_indexes: torch.LongTensor,
         packed_position_ids: torch.LongTensor,
         packed_seqlens: torch.IntTensor,
-        packed_indexes: torch.LongTensor,
-        key_values_lens: torch.IntTensor,
-        packed_key_value_indexes: torch.Tensor,
     ):
         padded_latent = vae_model.encode(padded_images)
 
@@ -1348,10 +1294,7 @@ class Bagel(nn.Module):
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
             packed_query_position_ids=packed_position_ids,
-            packed_query_indexes=packed_indexes,
             past_key_values=past_key_values,
-            key_values_lens=key_values_lens,
-            packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=True,
             is_causal=False,
             **extra_inputs,
@@ -1364,19 +1307,13 @@ class Bagel(nn.Module):
         packed_vit_token_indexes = list()
         vit_token_seqlens, packed_vit_tokens, packed_vit_position_ids = list(), list(), list()
         packed_text_ids, packed_text_indexes = list(), list()
-        packed_seqlens, packed_position_ids, packed_indexes = list(), list(), list()
-        packed_key_value_indexes = list()
+        packed_seqlens, packed_position_ids = list(), list()
 
-        _curr = curr = 0
+        _curr = 0
         newlens, new_rope = list(), list()
         for image, curr_kvlen, curr_position_id in zip(images, curr_kvlens, curr_rope):
-            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
-            curr += curr_kvlen
-
             packed_text_ids.append(new_token_ids["start_of_image"])
             packed_text_indexes.append(_curr)
-            packed_indexes.append(curr)
-            curr += 1
             _curr += 1
 
             image_tensor = transforms(image)
@@ -1392,14 +1329,10 @@ class Bagel(nn.Module):
             packed_vit_position_ids.append(vit_position_ids)
             vit_token_seqlens.append(num_img_tokens)
             packed_vit_token_indexes.extend(range(_curr, _curr + num_img_tokens))
-            packed_indexes.extend(range(curr, curr + num_img_tokens))
-            curr += num_img_tokens
             _curr += num_img_tokens
 
             packed_text_ids.append(new_token_ids["end_of_image"])
             packed_text_indexes.append(_curr)
-            packed_indexes.append(curr)
-            curr += 1
             _curr += 1
 
             packed_position_ids.extend([curr_position_id] * (num_img_tokens + 2))
@@ -1416,9 +1349,6 @@ class Bagel(nn.Module):
             "packed_vit_token_indexes": torch.tensor(packed_vit_token_indexes, dtype=torch.long),
             "packed_position_ids": torch.tensor(packed_position_ids, dtype=torch.long),
             "packed_seqlens": torch.tensor(packed_seqlens, dtype=torch.int),
-            "packed_indexes": torch.tensor(packed_indexes, dtype=torch.long),
-            "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
-            "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
         }
 
         return generation_input, newlens, new_rope
@@ -1434,9 +1364,6 @@ class Bagel(nn.Module):
         vit_token_seqlens: torch.IntTensor,
         packed_position_ids: torch.LongTensor,
         packed_seqlens: torch.IntTensor,
-        packed_indexes: torch.LongTensor,
-        packed_key_value_indexes: torch.LongTensor,
-        key_values_lens: torch.IntTensor,
     ):
         packed_text_embedding = self.language_model.forward(
             packed_text_ids=packed_text_ids,
@@ -1469,10 +1396,7 @@ class Bagel(nn.Module):
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
             packed_query_position_ids=packed_position_ids,
-            packed_query_indexes=packed_indexes,
             past_key_values=past_key_values,
-            packed_key_value_indexes=packed_key_value_indexes,
-            key_values_lens=key_values_lens,
             update_past_key_values=True,
             is_causal=False,
             **extra_inputs,
@@ -1484,19 +1408,12 @@ class Bagel(nn.Module):
     def prepare_input(self, curr_kvlens, curr_rope, image_sizes, new_token_ids=None):
         packed_text_ids, packed_text_indexes = list(), list()
         packed_vae_position_ids, packed_vae_token_indexes, packed_init_noises = list(), list(), list()
-        packed_position_ids, packed_seqlens, packed_indexes = list(), list(), list()
-        packed_key_value_indexes = list()
+        packed_position_ids, packed_seqlens = list(), list()
 
-        query_curr = curr = 0
+        query_curr = 0
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
-            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
-            curr += curr_kvlen
-
             packed_text_ids.append(new_token_ids["start_of_image"])
             packed_text_indexes.append(query_curr)
-
-            packed_indexes.append(curr)
-            curr += 1
             query_curr += 1
 
             vae_position_ids = self.get_flattened_position_ids(
@@ -1510,16 +1427,10 @@ class Bagel(nn.Module):
             packed_init_noises.append(torch.randn(num_image_tokens, self.latent_channel * self.latent_patch_size**2))
             packed_vae_token_indexes.extend(range(query_curr, query_curr + num_image_tokens))
             packed_seqlens.append(num_image_tokens + 2)
-
-            packed_indexes.extend(range(curr, curr + num_image_tokens))
-            curr += num_image_tokens
             query_curr += num_image_tokens
 
             packed_text_ids.append(new_token_ids["end_of_image"])
             packed_text_indexes.append(query_curr)
-
-            packed_indexes.append(curr)
-            curr += 1
             query_curr += 1
 
             packed_position_ids.extend([curr_position_id] * (num_image_tokens + 2))
@@ -1533,9 +1444,6 @@ class Bagel(nn.Module):
             "packed_vae_token_indexes": torch.tensor(packed_vae_token_indexes, dtype=torch.long),
             "packed_seqlens": torch.tensor(packed_seqlens, dtype=torch.int),
             "packed_position_ids": torch.tensor(packed_position_ids, dtype=torch.long),
-            "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
-            "packed_indexes": torch.tensor(packed_indexes, dtype=torch.long),
-            "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
         }
 
         return generation_input
@@ -1544,34 +1452,15 @@ class Bagel(nn.Module):
         return self.prepare_input(curr_kvlens, curr_rope, image_sizes, new_token_ids)
 
     def prepare_vae_latent_cfg(self, curr_kvlens, curr_rope, image_sizes):
-        packed_position_ids, packed_indexes, packed_key_value_indexes = list(), list(), list()
+        packed_position_ids = list()
 
-        query_curr = curr = 0
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
-            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
-            curr += curr_kvlen
-
-            packed_indexes.append(curr)
-            curr += 1
-            query_curr += 1
-
             h, w = H // self.latent_downsample, W // self.latent_downsample
             num_image_tokens = h * w
-            packed_indexes.extend(range(curr, curr + num_image_tokens))
-            curr += num_image_tokens
-            query_curr += num_image_tokens
-
-            packed_indexes.append(curr)
-            curr += 1
-            query_curr += 1
-
             packed_position_ids.extend([curr_position_id] * (num_image_tokens + 2))
 
         generation_input = {
             "cfg_packed_position_ids": torch.tensor(packed_position_ids, dtype=torch.long),
-            "cfg_key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
-            "cfg_packed_query_indexes": torch.tensor(packed_indexes, dtype=torch.long),
-            "cfg_packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
         }
 
         return generation_input
@@ -1598,21 +1487,15 @@ class Bagel(nn.Module):
 
         Ported from the original BAGEL ``Bagel.prepare_start_tokens``.
         """
-        packed_start_tokens, packed_key_value_indexes = list(), list()
+        packed_start_tokens = list()
         packed_query_position_ids = list()
 
-        curr = 0
         for curr_kvlen, curr_position_id in zip(curr_kvlens, curr_rope):
-            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
             packed_start_tokens.append(new_token_ids["bos_token_id"])
             packed_query_position_ids.append(curr_position_id)
-            curr += curr_kvlen
-
         generation_input = {
             "packed_start_tokens": torch.tensor(packed_start_tokens, dtype=torch.long),
             "packed_query_position_ids": torch.tensor(packed_query_position_ids, dtype=torch.long),
-            "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
-            "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
         }
         return generation_input
 
@@ -1620,8 +1503,6 @@ class Bagel(nn.Module):
     def generate_text(
         self,
         past_key_values: NaiveCache,
-        packed_key_value_indexes: torch.LongTensor,
-        key_values_lens: torch.IntTensor,
         packed_start_tokens: torch.LongTensor,
         packed_query_position_ids: torch.LongTensor,
         max_length: int,
@@ -1640,26 +1521,12 @@ class Bagel(nn.Module):
         while step < max_length:
             generated_sequence.append(curr_tokens)
             query_lens = torch.ones_like(curr_tokens)
-            packed_query_indexes = torch.cumsum(key_values_lens, dim=0) + torch.arange(
-                0,
-                len(key_values_lens),
-                device=key_values_lens.device,
-                dtype=key_values_lens.dtype,
-            )
-
-            uppacked = list(packed_key_value_indexes.split(key_values_lens.tolist(), dim=0))
-            for i in range(len(uppacked)):
-                uppacked[i] += i
-            packed_key_value_indexes = torch.cat(uppacked, dim=0)
 
             output = self.language_model(
                 packed_text_ids=curr_tokens,
                 query_lens=query_lens,
                 packed_query_position_ids=packed_query_position_ids,
-                packed_query_indexes=packed_query_indexes,
                 past_key_values=past_key_values,
-                key_values_lens=key_values_lens,
-                packed_key_value_indexes=packed_key_value_indexes,
                 update_past_key_values=True,
                 is_causal=True,
                 mode="und",
@@ -1674,13 +1541,6 @@ class Bagel(nn.Module):
             else:
                 curr_tokens = torch.argmax(pred_logits, dim=-1)
 
-            uppacked = list(packed_key_value_indexes.split(key_values_lens.tolist(), dim=0))
-            for i in range(len(uppacked)):
-                uppacked[i] = torch.cat(
-                    [uppacked[i], torch.tensor([uppacked[i][-1] + 1], device=uppacked[i].device)], dim=0
-                )
-            packed_key_value_indexes = torch.cat(uppacked, dim=0)
-            key_values_lens = key_values_lens + 1
             packed_query_position_ids = packed_query_position_ids + 1
             step += 1
 
@@ -1699,10 +1559,7 @@ class Bagel(nn.Module):
         packed_vae_token_indexes: torch.LongTensor,
         packed_seqlens: torch.IntTensor,
         packed_position_ids: torch.LongTensor,
-        packed_indexes: torch.LongTensor,
         past_key_values: NaiveCache,
-        key_values_lens: torch.IntTensor,
-        packed_key_value_indexes: torch.LongTensor,
         num_timesteps: int = 24,
         timestep_shift: float = 1.0,
         cfg_renorm_min: float = 0.0,
@@ -1710,18 +1567,12 @@ class Bagel(nn.Module):
         cfg_interval: tuple[float, float] = [0, 1],
         # cfg_text
         cfg_text_scale: float = 1.0,
-        cfg_text_packed_query_indexes: torch.LongTensor | None = None,
         cfg_text_packed_position_ids: torch.LongTensor | None = None,
         cfg_text_past_key_values: NaiveCache | None = None,
-        cfg_text_key_values_lens: torch.IntTensor | None = None,
-        cfg_text_packed_key_value_indexes: torch.LongTensor | None = None,
         # cfg_img
         cfg_img_scale: float = 1.0,
-        cfg_img_packed_query_indexes: torch.LongTensor | None = None,
         cfg_img_packed_position_ids: torch.LongTensor | None = None,
         cfg_img_past_key_values: NaiveCache | None = None,
-        cfg_img_key_values_lens: torch.IntTensor | None = None,
-        cfg_img_packed_key_value_indexes: torch.LongTensor | None = None,
         return_trajectory_latents: bool = False,
         scheduler: object | None = None,
         scheduler_kwargs: dict | None = None,
@@ -1758,25 +1609,16 @@ class Bagel(nn.Module):
                 packed_vae_token_indexes=packed_vae_token_indexes,
                 packed_seqlens=packed_seqlens,
                 packed_position_ids=packed_position_ids,
-                packed_indexes=packed_indexes,
                 past_key_values=past_key_values,
-                key_values_lens=key_values_lens,
-                packed_key_value_indexes=packed_key_value_indexes,
                 cfg_renorm_min=cfg_renorm_min,
                 cfg_renorm_type=cfg_renorm_type,
                 cfg_interval=cfg_interval,
                 cfg_text_scale=cfg_text_scale,
-                cfg_text_packed_query_indexes=cfg_text_packed_query_indexes,
                 cfg_text_packed_position_ids=cfg_text_packed_position_ids,
                 cfg_text_past_key_values=cfg_text_past_key_values,
-                cfg_text_key_values_lens=cfg_text_key_values_lens,
-                cfg_text_packed_key_value_indexes=cfg_text_packed_key_value_indexes,
                 cfg_img_scale=cfg_img_scale,
-                cfg_img_packed_query_indexes=cfg_img_packed_query_indexes,
                 cfg_img_packed_position_ids=cfg_img_packed_position_ids,
                 cfg_img_past_key_values=cfg_img_past_key_values,
-                cfg_img_key_values_lens=cfg_img_key_values_lens,
-                cfg_img_packed_key_value_indexes=cfg_img_packed_key_value_indexes,
                 return_trajectory_latents=return_trajectory_latents,
                 scheduler=scheduler,
                 scheduler_kwargs=scheduler_kwargs,
@@ -1805,31 +1647,22 @@ class Bagel(nn.Module):
 
                 v_t = self.forward_single_branch(
                     **common,
-                    packed_indexes=packed_indexes,
                     packed_position_ids=packed_position_ids,
-                    key_values_lens=key_values_lens,
                     past_key_values=past_key_values,
-                    packed_key_value_indexes=packed_key_value_indexes,
                 )
 
                 if cfg_text_scale_ > 1.0:
                     cfg_text_v_t = self.forward_single_branch(
                         **common,
-                        packed_indexes=cfg_text_packed_query_indexes,
                         packed_position_ids=cfg_text_packed_position_ids,
-                        key_values_lens=cfg_text_key_values_lens,
                         past_key_values=cfg_text_past_key_values,
-                        packed_key_value_indexes=cfg_text_packed_key_value_indexes,
                     )
                     cfg_img_v_t = None
                     if cfg_img_scale_ > 1.0:
                         cfg_img_v_t = self.forward_single_branch(
                             **common,
-                            packed_indexes=cfg_img_packed_query_indexes,
                             packed_position_ids=cfg_img_packed_position_ids,
-                            key_values_lens=cfg_img_key_values_lens,
                             past_key_values=cfg_img_past_key_values,
-                            packed_key_value_indexes=cfg_img_packed_key_value_indexes,
                         )
                     v_t = self._combine_cfg(
                         v_t,
@@ -1868,12 +1701,9 @@ class Bagel(nn.Module):
                     packed_vae_position_ids=packed_vae_position_ids,
                     packed_text_ids=packed_text_ids,
                     packed_text_indexes=packed_text_indexes,
-                    packed_indexes=packed_indexes,
                     packed_position_ids=packed_position_ids,
                     packed_seqlens=packed_seqlens,
-                    key_values_lens=key_values_lens,
                     past_key_values=past_key_values,
-                    packed_key_value_indexes=packed_key_value_indexes,
                 )
                 if scheduler is not None:
                     out = scheduler.step(v_t.to(x_t.device), timesteps[i], x_t, dts[i], **_sched_kw)
@@ -1897,46 +1727,25 @@ class Bagel(nn.Module):
             seq_len = int(packed_seqlens.sum())
 
             # Branch 0: main (gen_context), always present
-            branches_qi = [packed_indexes]
-            branches_kvi = [packed_key_value_indexes]
-            branches_kvl = [key_values_lens]
             branches_pid = [packed_position_ids]
             branches_cache = [past_key_values]
 
             # Branch 1: cfg_text (unconditional text), always present when use_cfg_text
-            branches_qi.append(cfg_text_packed_query_indexes)
-            branches_kvi.append(cfg_text_packed_key_value_indexes)
-            branches_kvl.append(cfg_text_key_values_lens)
             branches_pid.append(cfg_text_packed_position_ids)
             branches_cache.append(cfg_text_past_key_values)
 
             # Branch 2: cfg_img (text-only, no image), optional
             if use_cfg_img:
-                branches_qi.append(cfg_img_packed_query_indexes)
-                branches_kvi.append(cfg_img_packed_key_value_indexes)
-                branches_kvl.append(cfg_img_key_values_lens)
                 branches_pid.append(cfg_img_packed_position_ids)
                 branches_cache.append(cfg_img_past_key_values)
 
             num_branches = len(branches_cache)
-
-            # Compute per-branch offsets in the merged KV+Q attention tensor
-            merged_offsets = [0]
-            for b_idx in range(num_branches):
-                merged_offsets.append(merged_offsets[-1] + int(branches_kvl[b_idx].sum()) + seq_len)
 
             cfg_batched = {
                 "num_branches": num_branches,
                 "seq_len": seq_len,
                 "batched_query_lens": packed_seqlens.repeat(num_branches),
                 "batched_position_ids": torch.cat(branches_pid),
-                "batched_kv_lens": torch.cat(branches_kvl),
-                "batched_query_indexes": torch.cat(
-                    [qi + merged_offsets[b_idx] for b_idx, qi in enumerate(branches_qi)]
-                ),
-                "batched_kv_indexes": torch.cat(
-                    [kvi + merged_offsets[b_idx] for b_idx, kvi in enumerate(branches_kvi)]
-                ),
                 "batched_text_indexes": torch.cat(
                     [packed_text_indexes + b_idx * seq_len for b_idx in range(num_branches)]
                 ),
@@ -1965,11 +1774,8 @@ class Bagel(nn.Module):
                 packed_text_ids=packed_text_ids,
                 packed_text_indexes=packed_text_indexes,
                 packed_position_ids=packed_position_ids,
-                packed_indexes=packed_indexes,
                 packed_seqlens=packed_seqlens,
-                key_values_lens=key_values_lens,
                 past_key_values=past_key_values,
-                packed_key_value_indexes=packed_key_value_indexes,
                 cfg_renorm_min=cfg_renorm_min,
                 cfg_renorm_type=cfg_renorm_type,
                 cfg_text_scale=cfg_text_scale_,
@@ -2002,25 +1808,16 @@ class Bagel(nn.Module):
         packed_vae_token_indexes: torch.LongTensor,
         packed_seqlens: torch.IntTensor,
         packed_position_ids: torch.LongTensor,
-        packed_indexes: torch.LongTensor,
         past_key_values: NaiveCache,
-        key_values_lens: torch.IntTensor,
-        packed_key_value_indexes: torch.LongTensor,
         cfg_renorm_min: float,
         cfg_renorm_type: str,
         cfg_interval: tuple[float, float],
         cfg_text_scale: float,
-        cfg_text_packed_query_indexes: torch.LongTensor | None,
         cfg_text_packed_position_ids: torch.LongTensor | None,
         cfg_text_past_key_values: NaiveCache | None,
-        cfg_text_key_values_lens: torch.IntTensor | None,
-        cfg_text_packed_key_value_indexes: torch.LongTensor | None,
         cfg_img_scale: float,
-        cfg_img_packed_query_indexes: torch.LongTensor | None,
         cfg_img_packed_position_ids: torch.LongTensor | None,
         cfg_img_past_key_values: NaiveCache | None,
-        cfg_img_key_values_lens: torch.IntTensor | None,
-        cfg_img_packed_key_value_indexes: torch.LongTensor | None,
         return_trajectory_latents: bool = False,
         scheduler: object | None = None,
         scheduler_kwargs: dict | None = None,
@@ -2059,24 +1856,15 @@ class Bagel(nn.Module):
         if cfg_rank == 0:
             # Gen branch: use main inputs directly
             branch_position_ids = packed_position_ids
-            branch_indexes = packed_indexes
             branch_past_key_values = past_key_values
-            branch_key_values_lens = key_values_lens
-            branch_key_value_indexes = packed_key_value_indexes
         elif cfg_rank == 1:
             # Text CFG branch
             branch_position_ids = cfg_text_packed_position_ids
-            branch_indexes = cfg_text_packed_query_indexes
             branch_past_key_values = cfg_text_past_key_values
-            branch_key_values_lens = cfg_text_key_values_lens
-            branch_key_value_indexes = cfg_text_packed_key_value_indexes
         elif cfg_rank == 2:
             # Image CFG branch
             branch_position_ids = cfg_img_packed_position_ids
-            branch_indexes = cfg_img_packed_query_indexes
             branch_past_key_values = cfg_img_past_key_values
-            branch_key_values_lens = cfg_img_key_values_lens
-            branch_key_value_indexes = cfg_img_packed_key_value_indexes
         else:
             raise RuntimeError(f"Unexpected cfg_rank={cfg_rank} for Bagel 3-branch CFG parallel")
 
@@ -2103,12 +1891,9 @@ class Bagel(nn.Module):
                     packed_vae_position_ids=packed_vae_position_ids,
                     packed_text_ids=packed_text_ids,
                     packed_text_indexes=packed_text_indexes,
-                    packed_indexes=branch_indexes,
                     packed_position_ids=branch_position_ids,
                     packed_seqlens=packed_seqlens,
-                    key_values_lens=branch_key_values_lens,
                     past_key_values=branch_past_key_values,
-                    packed_key_value_indexes=branch_key_value_indexes,
                 )
 
                 gathered = cfg_group.all_gather(local_v_t, separate_tensors=True)
@@ -2130,12 +1915,9 @@ class Bagel(nn.Module):
                     packed_vae_position_ids=packed_vae_position_ids,
                     packed_text_ids=packed_text_ids,
                     packed_text_indexes=packed_text_indexes,
-                    packed_indexes=packed_indexes,
                     packed_position_ids=packed_position_ids,
                     packed_seqlens=packed_seqlens,
-                    key_values_lens=key_values_lens,
                     past_key_values=past_key_values,
-                    packed_key_value_indexes=packed_key_value_indexes,
                 )
 
             if scheduler is not None:
@@ -2213,12 +1995,9 @@ class Bagel(nn.Module):
         packed_vae_position_ids: torch.LongTensor,
         packed_text_ids: torch.LongTensor,
         packed_text_indexes: torch.LongTensor,
-        packed_indexes: torch.LongTensor,
         packed_position_ids: torch.LongTensor,
         packed_seqlens: torch.IntTensor,
-        key_values_lens: torch.IntTensor,
         past_key_values: NaiveCache,
-        packed_key_value_indexes: torch.LongTensor,
     ) -> torch.Tensor:
         """Run a single-branch forward pass (no CFG batching).
 
@@ -2262,24 +2041,6 @@ class Bagel(nn.Module):
                 x_t_emb = x_t_emb.to(packed_sequence.dtype)
             packed_sequence[local_vae_indexes] = x_t_emb
 
-            # Build local packed_indexes for KV cache merging.
-            # In the denoising loop packed_indexes is always contiguous
-            # (arange(kv_len, kv_len + total)), so we can safely build
-            # the local slice from scratch.
-            local_total = int(local_seqlens.sum())
-            kv_len = int(key_values_lens.sum())
-            original_total = int(packed_seqlens.sum())
-            assert torch.equal(
-                packed_indexes,
-                torch.arange(kv_len, kv_len + original_total, device=packed_indexes.device, dtype=packed_indexes.dtype),
-            ), "packed_indexes must be contiguous for SP; non-contiguous layout not supported"
-            local_packed_indexes = torch.arange(
-                kv_len,
-                kv_len + local_total,
-                device=packed_indexes.device,
-                dtype=packed_indexes.dtype,
-            )
-
             extra_inputs = {}
             if self.use_moe:
                 extra_inputs["mode"] = "gen"
@@ -2290,10 +2051,7 @@ class Bagel(nn.Module):
                 packed_query_sequence=packed_sequence,
                 query_lens=local_seqlens,
                 packed_query_position_ids=local_position_ids,
-                packed_query_indexes=local_packed_indexes,
                 past_key_values=past_key_values,
-                key_values_lens=key_values_lens,
-                packed_key_value_indexes=packed_key_value_indexes,
                 update_past_key_values=False,
                 is_causal=False,
                 **extra_inputs,
@@ -2329,10 +2087,7 @@ class Bagel(nn.Module):
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
             packed_query_position_ids=packed_position_ids,
-            packed_query_indexes=packed_indexes,
             past_key_values=past_key_values,
-            key_values_lens=key_values_lens,
-            packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=False,
             is_causal=False,
             **extra_inputs,
@@ -2349,12 +2104,9 @@ class Bagel(nn.Module):
         packed_vae_position_ids: torch.LongTensor,
         packed_text_ids: torch.LongTensor,
         packed_text_indexes: torch.LongTensor,
-        packed_indexes: torch.LongTensor,
         packed_position_ids: torch.LongTensor,
         packed_seqlens: torch.IntTensor,
-        key_values_lens: torch.IntTensor,
         past_key_values: NaiveCache,
-        packed_key_value_indexes: torch.LongTensor,
         cfg_renorm_min: float = 0.0,
         cfg_renorm_type: str = "global",
         cfg_text_scale: float = 1.0,
@@ -2400,10 +2152,7 @@ class Bagel(nn.Module):
                 packed_query_sequence=batched_sequence,
                 query_lens=cfg_batched["batched_query_lens"],
                 packed_query_position_ids=cfg_batched["batched_position_ids"],
-                packed_query_indexes=cfg_batched["batched_query_indexes"],
                 past_key_values=cfg_batched["merged_cache"],
-                key_values_lens=cfg_batched["batched_kv_lens"],
-                packed_key_value_indexes=cfg_batched["batched_kv_indexes"],
                 update_past_key_values=False,
                 is_causal=False,
                 **extra_inputs,
@@ -2436,10 +2185,7 @@ class Bagel(nn.Module):
                 packed_query_sequence=packed_sequence,
                 query_lens=packed_seqlens,
                 packed_query_position_ids=packed_position_ids,
-                packed_query_indexes=packed_indexes,
                 past_key_values=past_key_values,
-                key_values_lens=key_values_lens,
-                packed_key_value_indexes=packed_key_value_indexes,
                 update_past_key_values=False,
                 is_causal=False,
                 **extra_inputs,
