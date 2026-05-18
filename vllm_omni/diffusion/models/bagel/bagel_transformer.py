@@ -617,6 +617,7 @@ class Qwen2MoTDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor | None = None,
         packed_query_sequence: torch.Tensor | None = None,
         query_lens: torch.Tensor = None,
         packed_query_position_embeddings: torch.Tensor = None,
@@ -768,6 +769,7 @@ class Qwen2MoTModel(Qwen2PreTrainedModel):
         for layer_idx, decoder_layer in enumerate(self.layers):
             packed_query_sequence, past_key_values = decoder_layer(
                 hidden_states=packed_query_sequence,
+                encoder_hidden_states=None,
                 query_lens=query_lens,
                 packed_query_position_embeddings=packed_query_position_embeddings,
                 past_key_values=past_key_values,
