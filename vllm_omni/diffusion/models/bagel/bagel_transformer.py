@@ -396,9 +396,25 @@ class PackedAttentionMoT(nn.Module):
         packed_text_indexes: torch.Tensor,
         update_past_key_values: bool = False,
     ) -> tuple[torch.Tensor, NaiveCache | None]:
-        """Forward pass for generation mode."""
-        packed_query_sequence = packed_query_sequence.to(torch.bfloat16)
+        """Forward pass for generation mode.
 
+        This path does the following:
+
+        1. Apply qkv projection to the text seq & vae seqs
+        2. Reshape both to 3D & apply RMS norms
+        3. Apply RoPE to text / VAE components independently
+        4. Create the full K/V; Bagel currently manages its own KV cache
+           (NaiveCache) independently since it is a diffusion model
+        5. Apply non-causal attention, while taking sequence parallelism into account
+        6. Apply output projections on the split parts
+        7. Merge back into the packed format
+        8. Update the NaiveCache.
+
+        TODO (Alex): it would be best to remove packing from Bagel to simplify the code.
+        Currently we shouldn't need it in the model, and it would be ideal to handle
+        packing/batching etc in a more model agnostic way.
+        """
+        packed_query_sequence = packed_query_sequence.to(torch.bfloat16)
         packed_text_query_sequence = packed_query_sequence[packed_text_indexes]
         packed_vae_query_sequence = packed_query_sequence[packed_vae_token_indexes]
 
@@ -424,7 +440,8 @@ class PackedAttentionMoT(nn.Module):
         vae_q = self.q_norm_moe_gen(vae_q.to(torch.float32))
         vae_k = self.k_norm_moe_gen(vae_k.to(torch.float32))
 
-        # Apply RoPE per token set
+        # Apply RoPE - need to build per-token cos/sin for text and vae separately
+        # packed_query_position_embeddings are ordered as the packed sequence
         cos_full, sin_full = [x[..., : self.head_dim // 2] for x in packed_query_position_embeddings]
         text_cos = cos_full[packed_text_indexes]
         text_sin = sin_full[packed_text_indexes]
@@ -443,7 +460,7 @@ class PackedAttentionMoT(nn.Module):
         vae_k = vae_k.to(torch.bfloat16)
         vae_v = vae_v.to(torch.bfloat16)
 
-        # Build context K/V: [kv_cache, text_markers]
+        # Build joint K/V: [kv_cache, text_markers] (replicated across SP ranks)
         if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
             cache_k = past_key_values.key_cache[self.layer_idx]
             cache_v = past_key_values.value_cache[self.layer_idx]
@@ -453,6 +470,8 @@ class PackedAttentionMoT(nn.Module):
             ctx_k = text_k
             ctx_v = text_v
 
+        # NOTE: we reshape to batched (1, S, H, D) for diffusion Attention
+        # attn_out should be: (1, text_len + local_vae_len, H, D)
         if self._is_sp_active():
             # Joint mechanism keeps text+cache replicated across SP ranks
             attn_out = self.attn_noncausal(
@@ -503,7 +522,20 @@ class PackedAttentionMoT(nn.Module):
         is_causal: bool,
         update_past_key_values: bool = True,
     ) -> tuple[torch.Tensor, NaiveCache | None]:
-        """Forward pass for understanding mode."""
+        """Forward pass for understanding mode.
+
+        This path does the following (not hard to read):
+
+        1. Apply qkv projection to the text seq
+        2. Reshape to 3D & apply RMS norms
+        3. Apply RoPE
+        4. Create the full K/V; Bagel currently manages its own KV cache
+           (NaiveCache) independently since it is a diffusion model
+        5. Apply attention based on causality kwarg
+        6. Apply output projection
+        8. Update the NaiveCache.
+        """
+
         qkv, _ = self.qkv_proj(packed_query_sequence)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q = q.view(-1, self.num_heads, self.head_dim)
@@ -558,7 +590,8 @@ class PackedAttentionMoT(nn.Module):
         packed_text_indexes=None,
     ):
         if mode == "gen":
-            assert not is_causal, "gen mode requires non-causal attention"
+            if is_causal:
+                raise ValueError("Generation model for Bagel requires non-causal attention")
             return self._forward_gen(
                 packed_query_sequence=packed_query_sequence,
                 packed_query_position_embeddings=packed_query_position_embeddings,
@@ -568,7 +601,6 @@ class PackedAttentionMoT(nn.Module):
                 update_past_key_values=update_past_key_values,
             )
 
-        assert query_lens.shape[0] == 1
         return self._forward_und(
             packed_query_sequence=packed_query_sequence,
             packed_query_position_embeddings=packed_query_position_embeddings,
@@ -767,6 +799,10 @@ class Qwen2MoTModel(Qwen2PreTrainedModel):
                 )
 
         for layer_idx, decoder_layer in enumerate(self.layers):
+            # TODO (Alex): Remove encoder_hidden_states as a kwarg; currently we keep it
+            # for compatibility with the current custom CacheDiT adapter, as we need to be
+            # careful to not break the NaiveCache handling when switching from pattern
+            # 0 -> 4.
             packed_query_sequence, past_key_values = decoder_layer(
                 hidden_states=packed_query_sequence,
                 encoder_hidden_states=None,
