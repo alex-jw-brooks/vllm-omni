@@ -38,6 +38,9 @@ class TrackingNamespace(argparse.Namespace):
 
     @property
     def __dict__(self):
+        # NOTE: We do this so that vars() etc forward directly into the encapsulated namespace,
+        # which makes this class a drop-in replacement for the original namespace, while also
+        # ensuring that updates to the encapsulated namespace are correctly reflected.
         return self.unfiltered_ns.__dict__
 
 

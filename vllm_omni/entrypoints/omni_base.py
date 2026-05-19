@@ -113,7 +113,7 @@ class OmniBase(PDDisaggregationMixin):
             )
 
         explicit_kwargs = args.get_explicit_kwargs_dict()
-        args_model = explicit_kwargs.pop("model", None)
+        args_model = explicit_kwargs.pop("model", None) or args.model
         if model is not None and args_model is not None and model != args_model:
             raise ValueError(
                 f"explicit model kwarg and args.model were both provided, but do not match [{model} != {args_model}]"
