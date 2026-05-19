@@ -323,7 +323,6 @@ def extract_bagel_context(
         packed_vae_position_ids: Position IDs for VAE tokens
         packed_text_ids: Text token IDs
         packed_text_indexes: Indexes for text tokens in packed sequence
-        packed_indexes: Global indexes
         packed_position_ids: Global position IDs
         packed_seqlens: Sequence lengths
         past_key_values: KV cache
