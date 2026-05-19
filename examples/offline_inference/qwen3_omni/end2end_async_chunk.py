@@ -40,7 +40,6 @@ from vllm.assets.video import VideoAsset, video_to_ndarrays
 from vllm.multimodal.image import convert_image_mode
 from vllm.multimodal.media.audio import load_audio
 
-from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
@@ -591,7 +590,6 @@ def parse_args():
         default=16000,
         help="Sampling rate for audio loading.",
     )
-    nullify_stage_engine_defaults(parser)
     return parser.parse_args()
 
 

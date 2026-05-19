@@ -29,7 +29,6 @@ except ImportError:
 from vllm import SamplingParams
 
 from vllm_omni import AsyncOmni
-from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
@@ -313,7 +312,6 @@ def parse_args() -> Namespace:
         default=None,
         help="Quantization method (e.g. 'fp8'). Applied to the language model only.",
     )
-    nullify_stage_engine_defaults(parser)
     return parser.parse_args()
 
 
