@@ -115,6 +115,7 @@ class SDPAImpl(AttentionImpl):
             dropout_p=0.0,
             is_causal=self.causal,
             scale=self.softmax_scale,
+            enable_gqa=True,
         )
         out = output.permute(0, 2, 1, 3)
         return out
