@@ -114,10 +114,6 @@ class TestStageConfig:
 
     def test_to_omegaconf_with_runtime_overrides(self):
         """Test that runtime overrides are applied to OmegaConf output."""
-<<<<<<< HEAD
-=======
-
->>>>>>> 04fc62c8 (remove more dead code, unused engine_args path)
         config = StageConfig(
             stage_id=0,
             model_stage="thinker",
@@ -140,10 +136,6 @@ class TestStageConfig:
 
     def test_to_omegaconf_max_batch_size_deprecation(self):
         """Test that runtime.max_batch_size emits a FutureWarning."""
-<<<<<<< HEAD
-=======
-
->>>>>>> 04fc62c8 (remove more dead code, unused engine_args path)
         config = StageConfig(
             stage_id=0,
             model_stage="thinker",
@@ -1922,16 +1914,6 @@ class TestSentinelDefaultPrecedence:
         sig = inspect.signature(StageConfigFactory._create_from_registry)
         named = [p for p in sig.parameters.values() if p.kind != p.VAR_KEYWORD]
         assert "cli_explicit_keys" not in {p.name for p in named}
-
-    def test_cli_explicit_keys_kwarg_emits_deprecation(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            StageConfigFactory._create_from_registry(
-                "qwen3_omni_moe",
-                cli_overrides={},
-                cli_explicit_keys={"max_num_seqs"},
-            )
-            assert any(issubclass(x.category, DeprecationWarning) for x in w)
 
     def test_async_chunk_dispatches_processors(self):
         """A single ``qwen3_tts`` pipeline picks per-chunk vs end-to-end

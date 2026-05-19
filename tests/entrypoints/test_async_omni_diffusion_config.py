@@ -296,7 +296,7 @@ def test_serve_cli_accepts_diffusion_attention_backend():
 
 def test_serve_cli_accepts_additional_config():
     """Ensure diffusion serve CLI exposes additional_config and forwards it to stage config."""
-    parser = FlexibleArgumentParser()
+    parser = TrackingArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
     OmniServeCommand().subparser_init(subparsers)
 
@@ -310,7 +310,8 @@ def test_serve_cli_accepts_additional_config():
         ]
     )
 
-    stage_cfg = _create_default_diffusion_stage_cfg(args)[0]
+    stage_cfg = AsyncOmniEngine._create_default_diffusion_stage_cfg(vars(args))[0]
+
     engine_args = stage_cfg["engine_args"]
 
     assert args.additional_config == {"torchair_graph_config": {"enabled": True}}
