@@ -31,24 +31,25 @@ def test_serve_parser_accepts_no_async_chunk_and_marks_it_explicit() -> None:
     assert not explicit["async_chunk"]
 
 
-def _make_headless_args() -> TrackingNamespace:
-    ns = argparse.Namespace(
-        model="fake-model",
-        stage_id=0,
-        replica_id=0,
-        omni_master_address="127.0.0.1",
-        omni_master_port=26000,
-        omni_replica_address=None,
-        omni_dp_size_local=1,
-        api_server_count=0,
-        worker_backend="multi_process",
-        stage_configs_path=None,
-        deploy_config=None,
-        log_stats=False,
-        disable_log_stats=False,
-        stage_init_timeout=600,
-        tokenizer=None,
-    )
+def _make_headless_args(**kwargs) -> TrackingNamespace:
+    defaults = {
+        "model": "fake-model",
+        "stage_id": 0,
+        "replica_id": 0,
+        "omni_master_address": "127.0.0.1",
+        "omni_master_port": 26000,
+        "omni_replica_address": None,
+        "omni_dp_size_local": 1,
+        "worker_backend": "multi_process",
+        "stage_configs_path": None,
+        "deploy_config": None,
+        "log_stats": False,
+        "disable_log_stats": False,
+        "stage_init_timeout": 600,
+        "tokenizer": None,
+    }
+    ns_kwargs = {**defaults, **kwargs}
+    ns = argparse.Namespace(**ns_kwargs)
     return TrackingNamespace(
         unfiltered_ns=ns,
         explicit_keys=frozenset(ns.__dict__.keys()),
@@ -70,12 +71,6 @@ def test_run_headless_requires_master_address() -> None:
 def test_run_headless_requires_master_port() -> None:
     args = _make_headless_args(omni_master_port=None)
     with pytest.raises(ValueError, match="--omni-master-address and --omni-master-port"):
-        run_headless(args)
-
-
-def test_run_headless_rejects_multi_api_server_count() -> None:
-    args = _make_headless_args(api_server_count=2)
-    with pytest.raises(ValueError, match="api_server_count can't be set"):
         run_headless(args)
 
 

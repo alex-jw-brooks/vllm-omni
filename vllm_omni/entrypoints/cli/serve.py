@@ -12,6 +12,7 @@ import signal
 import threading
 from multiprocessing import connection
 from types import FrameType
+from typing import Any
 
 import uvloop
 from vllm.entrypoints.cli.types import CLISubcommand
@@ -713,7 +714,6 @@ def run_headless(args: TrackingNamespace) -> None:
     stage_configs_path: str | None = args.stage_configs_path
     omni_replica_address: str | None = getattr(args, "omni_replica_address", None)
     omni_dp_size_local: int = max(1, int(getattr(args, "omni_dp_size_local", 1) or 1))
-    stage_configs_path = args.get("stage_configs_path")
 
     if not model:
         raise ValueError("Failed to pass model from kwargs")
