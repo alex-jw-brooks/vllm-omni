@@ -1968,6 +1968,7 @@ async def generate_images(
             extra_args["bot_task"] = request.bot_task
         if request.flow_shift is not None:
             extra_args["flow_shift"] = request.flow_shift
+        extra_args["use_prompt_upscaling"] = request.use_prompt_upscaling
         if extra_args:
             gen_params.extra_args = extra_args
         # Parse per-request LoRA (compatible with chat's extra_body.lora shape).
