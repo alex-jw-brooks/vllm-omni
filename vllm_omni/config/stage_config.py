@@ -915,6 +915,10 @@ def merge_pipeline_deploy(
     deploy = _apply_platform_overrides(deploy)
     deploy_by_id = {s.stage_id: s for s in deploy.stages}
 
+    # async_chunk is irrelevant for single-stage pipelines, so we always disable it
+    if len(pipeline.stages) <= 1:
+        deploy.async_chunk = False
+
     # A pipeline supports async_chunk if any stage has either an explicit
     # async-chunk-only processor slot OR a custom next-stage processor (some
     # pipelines like qwen3_omni wire async-chunk processing directly through
