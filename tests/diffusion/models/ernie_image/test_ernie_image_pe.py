@@ -48,7 +48,6 @@ class _FakePEModel:
 
 def test_enhance_prompt_uses_rank0_result_in_distributed(monkeypatch):
     pipe = ErnieImagePipeline.__new__(ErnieImagePipeline)
-    pipe.has_external_prompt_upscaler = True
     pipe.pe_model = None
     pipe.pe_tokenizer = None
 
@@ -107,7 +106,6 @@ def test_enhance_prompt_triggers_lazy_load(monkeypatch):
     pipe = ErnieImagePipeline.__new__(ErnieImagePipeline)
     pipe.pe_model = None
     pipe.pe_tokenizer = None
-    pipe.has_external_prompt_upscaler = True
 
     fake_model = _FakePEModel()
     fake_tokenizer = _FakeTokenizer()
@@ -119,9 +117,21 @@ def test_enhance_prompt_triggers_lazy_load(monkeypatch):
 
     assert pipe.pe_model is fake_model
     assert fake_model.calls == 1
-    # Should get the enanced result back after getting our input
+    # Should get the enhanced result back after getting our input
     assert result == "enhanced-prompt"
     assert "a cat sitting on a mat" in fake_tokenizer.last_chat_input
+
+
+def test_ensure_pe_loaded_skips_when_disabled():
+    """Ensure has pe loaded is False when external upscaler loading is not enabled."""
+    pipe = ErnieImagePipeline.__new__(ErnieImagePipeline)
+    pipe.pe_model = None
+    pipe.pe_tokenizer = None
+    pipe.has_external_prompt_upscaler = True
+    pipe._load_pe = None
+
+    assert pipe._ensure_pe_loaded() is False
+    assert pipe.pe_model is None
 
 
 def test_hybrid_ring_slices_full_attention_mask(monkeypatch):

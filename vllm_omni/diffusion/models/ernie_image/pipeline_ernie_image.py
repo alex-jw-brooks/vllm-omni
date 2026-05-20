@@ -161,14 +161,16 @@ class ErnieImagePipeline(
             model,
             getattr(od_config, "revision", None),
         )
+
         self.has_external_prompt_upscaler = os.path.exists(
             os.path.join(pe_base_path, "pe"),
         )
-        # Defer loading the prompt upscaler unless we actually need it
-        self._load_pe = _make_pe_loader(
-            pe_base_path,
-            od_config.dtype,
-            self._execution_device,
+        # Only create the loader if the server config allows external
+        # upscaler loading. This prevents a user request from OOMing
+        # the server by lazy-loading a large model.
+        pe_loader = _make_pe_loader(pe_base_path, od_config.dtype, self._execution_device)
+        self._load_pe = (
+            pe_loader if self.has_external_prompt_upscaler and od_config.enable_external_prompt_upscaler else None
         )
         self.pe_model = None
         self.pe_tokenizer = None
@@ -193,6 +195,13 @@ class ErnieImagePipeline(
         )
 
     def _ensure_pe_loaded(self) -> bool:
+        if self._load_pe is None:
+            logger.warning(
+                "Prompt upscaling for a model with an external prompt upscaler, but "
+                "enable_external_prompt_upscaler is not set in the server config; "
+                "skipping prompt upscaling"
+            )
+            return False
         self.pe_model, self.pe_tokenizer = self._load_pe()
         return True
 
