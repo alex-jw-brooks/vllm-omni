@@ -1026,71 +1026,10 @@ def enable_cache_for_sensenova_u1(pipeline: Any, cache_config: Any) -> Callable[
 
     return refresh_cache_context
 
-def enable_cache_for_helios(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
-    """Enable cache-dit for Helios pipeline.
-
-    Helios extends Wan2.2 with multi-term memory patches and guidance cross-attention.
-    Its transformer blocks have the same single-output signature as Wan2.2 blocks
-    (returns hidden_states only), so we use ForwardPattern.Pattern_2.
-
-    Args:
-        pipeline: The HeliosPipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-
-    Returns:
-        A refresh function that can be called to update cache context with new num_inference_steps.
-    """
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    cache_dit.enable_cache(
-        BlockAdapter(
-            transformer=pipeline.transformer,
-            blocks=[pipeline.transformer.blocks],
-            forward_pattern=[ForwardPattern.Pattern_2],
-            params_modifiers=[
-                ParamsModifier(cache_config=db_cache_config, calibrator_config=calibrator_config),
-            ],
-            has_separate_cfg=True,
-        ),
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
-    )
-
-    logger.info(
-        f"Enabling cache-dit on Helios transformer: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
-    )
-
-    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
-        if cache_config.scm_steps_mask_policy is None:
-            cache_dit.refresh_context(pipeline.transformer, num_inference_steps=num_inference_steps, verbose=verbose)
-        else:
-            cache_dit.refresh_context(
-                pipeline.transformer,
-                cache_config=DBCacheConfig().reset(
-                    num_inference_steps=num_inference_steps,
-                    steps_computation_mask=cache_dit.steps_mask(
-                        mask_policy=cache_config.scm_steps_mask_policy, total_steps=num_inference_steps
-                    ),
-                    steps_computation_policy=cache_config.scm_steps_policy,
-                ),
-                verbose=verbose,
-            )
-
-    return refresh_cache_context
 
 
 
-
-def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
+def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
     """Enable cache-dit for Cosmos3.
 
     Cosmos3 has a dual-pathway architecture (UND + GEN) but only the GEN
@@ -1178,7 +1117,6 @@ CUSTOM_DIT_ENABLERS.update(
         "SenseNovaU1Pipeline": enable_cache_for_sensenova_u1,
         "Wan22TI2VPipeline": enable_cache_for_wan22,
         "BagelPipeline": enable_cache_for_bagel,
-        "HeliosPipeline": enable_cache_for_helios,
         "Cosmos3OmniDiffusersPipeline": enable_cache_for_cosmos3,
     }
 )
