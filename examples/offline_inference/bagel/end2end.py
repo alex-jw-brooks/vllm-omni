@@ -151,6 +151,7 @@ def main():
     from vllm_omni.entrypoints.omni import Omni
 
     omni_kwargs = vars(args).copy()
+    omni_kwargs.pop("model", None)
     deploy_config = args.deploy_config
     if args.think and deploy_config is None:
         deploy_config = "vllm_omni/deploy/bagel_think.yaml"
