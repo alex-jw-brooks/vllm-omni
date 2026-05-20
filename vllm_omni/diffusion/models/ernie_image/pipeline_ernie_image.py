@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Adapted from: https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/ernie_image/pipeline_ernie_image.py
 
+import functools
 import json
 import os
 from collections.abc import Callable, Iterable
@@ -26,11 +27,43 @@ from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.models.progress_bar import ProgressBarMixin
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.utils.prompt_utils import do_prompt_upscaling
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
 from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
 
 logger = init_logger(__name__)
+
+
+def _make_pe_loader(
+    pe_base_path: str,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> Callable[[], tuple[AutoModelForCausalLM, AutoTokenizer]]:
+    """Build a cached factory that lazily loads the PE model + tokenizer."""
+    pe_model_path = os.path.join(pe_base_path, "pe")
+
+    @functools.cache
+    def _load():
+        # NOTE: Prior to this point, PE files are already downloaded, which
+        # is why we use local files here.
+        pe_model = AutoModelForCausalLM.from_pretrained(
+            pe_model_path,
+            torch_dtype=dtype,
+            local_files_only=True,
+            trust_remote_code=True,
+        ).to(device)
+        pe_tokenizer = AutoTokenizer.from_pretrained(
+            pe_base_path,
+            subfolder="pe_tokenizer",
+            local_files_only=True,
+            trust_remote_code=True,
+            use_fast=False,
+        )
+        logger.info("Lazy-loaded PE model from %s", pe_model_path)
+        return pe_model, pe_tokenizer
+
+    return _load
 
 
 def _resolve_model_path_for_optional_pe(model: str, revision: str | None) -> str:
@@ -122,36 +155,23 @@ class ErnieImagePipeline(
             local_files_only=local_files_only,
         ).to(self._execution_device)
 
-        # Load PE (Prompt Enhancement) model if available. For repo IDs,
-        # resolve/download only PE files first so the existence check works.
-        pe_base_path = _resolve_model_path_for_optional_pe(model, getattr(od_config, "revision", None))
-        pe_model_path = os.path.join(pe_base_path, "pe")
-        if os.path.exists(pe_model_path):
-            try:
-                self.pe_model = AutoModelForCausalLM.from_pretrained(
-                    pe_model_path,
-                    torch_dtype=od_config.dtype,
-                    local_files_only=True,
-                    trust_remote_code=True,
-                ).to(self._execution_device)
-                self.pe_tokenizer = AutoTokenizer.from_pretrained(
-                    pe_base_path,
-                    subfolder="pe_tokenizer",
-                    local_files_only=True,
-                    trust_remote_code=True,
-                    use_fast=False,
-                )
-                self.use_pe = True
-                logger.info("Loaded PE model from %s", pe_model_path)
-            except Exception as e:
-                logger.warning("Failed to load PE model: %s", e)
-                self.pe_model = None
-                self.pe_tokenizer = None
-                self.use_pe = False
-        else:
-            self.pe_model = None
-            self.pe_tokenizer = None
-            self.use_pe = False
+        # Resolve/download PE files at init (not inference time) so the
+        # HF download doesn't block the first upscaling request.
+        pe_base_path = _resolve_model_path_for_optional_pe(
+            model,
+            getattr(od_config, "revision", None),
+        )
+        self.has_external_prompt_upscaler = os.path.exists(
+            os.path.join(pe_base_path, "pe"),
+        )
+        # Defer loading the prompt upscaler unless we actually need it
+        self._load_pe = _make_pe_loader(
+            pe_base_path,
+            od_config.dtype,
+            self._execution_device,
+        )
+        self.pe_model = None
+        self.pe_tokenizer = None
 
         transformer_kwargs = get_transformer_config_kwargs(od_config.tf_model_config, ErnieImageTransformer2DModel)
         self.transformer = ErnieImageTransformer2DModel(
@@ -171,6 +191,10 @@ class ErnieImagePipeline(
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
         )
+
+    def _ensure_pe_loaded(self) -> bool:
+        self.pe_model, self.pe_tokenizer = self._load_pe()
+        return True
 
     @staticmethod
     def _distributed_prompt_sync_state() -> tuple[bool, int]:
@@ -198,7 +222,7 @@ class ErnieImagePipeline(
         temperature: float = 0.6,
         top_p: float = 0.95,
     ) -> str:
-        if not self.use_pe or self.pe_model is None:
+        if not self._ensure_pe_loaded():
             return prompt
 
         sync_prompt, rank = self._distributed_prompt_sync_state()
@@ -257,8 +281,7 @@ class ErnieImagePipeline(
     def _should_apply_pe(req: OmniDiffusionRequest) -> bool:
         if ErnieImagePipeline._is_warmup_request(req):
             return False
-        extra_args = getattr(req.sampling_params, "extra_args", {}) or {}
-        return bool(extra_args.get("apply_pe", True))
+        return do_prompt_upscaling(req)
 
     def encode_prompt(
         self,
@@ -275,7 +298,7 @@ class ErnieImagePipeline(
         text_hiddens = []
 
         for p in prompt:
-            if apply_pe and self.use_pe and self.pe_model is not None:
+            if apply_pe and self.has_external_prompt_upscaler:
                 enhanced = self._enhance_prompt(p, device, width=width, height=height)
                 logger.info("PE: original='%s...' enhanced='%s...'", p[:50], enhanced[:50])
                 p = enhanced
