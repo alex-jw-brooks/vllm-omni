@@ -7,6 +7,8 @@ Stage 1: Talker  — text embeddings → RVQ codec codes
 Stage 2: Code2Wav — RVQ codes → audio waveform
 """
 
+from transformers import Qwen3OmniMoeConfig
+
 from vllm_omni.config.stage_config import (
     PipelineConfig,
     StageExecutionType,
@@ -65,8 +67,6 @@ QWEN3_OMNI_PIPELINE = PipelineConfig(
     ),
 )
 
-# Single-stage thinker-only variant for models with enable_audio_output=False
-# (e.g. Qwen3-Omni-30B-A3B-Captioner).
 QWEN3_OMNI_THINKER_ONLY_PIPELINE = PipelineConfig(
     model_type="qwen3_omni_moe_thinker_only",
     model_arch="Qwen3OmniMoeForConditionalGeneration",
@@ -86,3 +86,14 @@ QWEN3_OMNI_THINKER_ONLY_PIPELINE = PipelineConfig(
         ),
     ),
 )
+
+
+def resolve_qwen3_omni_pipeline(
+    hf_config: Qwen3OmniMoeConfig,
+) -> PipelineConfig:
+    """Select the right pipeline variant based on the HF config, since some variants,
+    e.g., Qwen3-Omni-30B-A3B-Captioner, are thinker only.
+    """
+    if not hf_config.enable_audio_output:
+        return QWEN3_OMNI_THINKER_ONLY_PIPELINE
+    return QWEN3_OMNI_PIPELINE

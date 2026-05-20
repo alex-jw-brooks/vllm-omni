@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from transformers import PretrainedConfig
 from vllm.logger import init_logger
 from vllm.v1.core.sched.scheduler import Scheduler as VLLMScheduler
 
@@ -315,8 +316,8 @@ class _LazyPipelineRegistry:
 
         try:
             module = importlib.import_module(module_path)
-            pipeline = getattr(module, var_name, None)
-            if pipeline is None:
+            obj = getattr(module, var_name, None)
+            if obj is None:
                 logger.error(
                     "Pipeline variable %r not found in module %r (registered for %r)",
                     var_name,
@@ -324,11 +325,15 @@ class _LazyPipelineRegistry:
                     model_type,
                 )
                 return None
-            errors = pipeline.validate()
-            if errors:
-                logger.warning("Pipeline %s has issues: %s", pipeline.model_type, errors)
-            self._loaded[model_type] = pipeline
-            return pipeline
+            if isinstance(obj, PipelineConfig):
+                errors = obj.validate()
+                if errors:
+                    logger.warning("Pipeline %s has issues: %s", obj.model_type, errors)
+            elif not callable(obj):
+                logger.error("pipelines must map to a PipelineConfig or resolver")
+            # NOTE: If it's a callable, we defer until we have the HF config to grab the class for now.
+            self._loaded[model_type] = obj
+            return obj
         except Exception:
             logger.exception("Failed to import pipeline module %r for %r", module_path, model_type)
             return None
@@ -345,6 +350,11 @@ class _LazyPipelineRegistry:
         if pipeline is None:
             raise KeyError(model_type)
         return pipeline
+
+    def resolve(self, model_type: str, hf_config: PretrainedConfig) -> PipelineConfig:
+        """Look up a pipeline, calling its resolver with *hf_config* if callable."""
+        obj = self[model_type]
+        return obj(hf_config) if callable(obj) else obj
 
     def get(self, model_type: str, default: PipelineConfig | None = None) -> PipelineConfig | None:
         if model_type in self._loaded:
@@ -1093,7 +1103,13 @@ class StageConfigFactory:
             if _looks_like_dreamzero(model):
                 model_type = "dreamzero"
         if model_type and model_type in _PIPELINE_REGISTRY:
-            return cls._create_from_registry(model_type, cli_overrides, deploy_config_path)
+            pipeline = _PIPELINE_REGISTRY.resolve(model_type, hf_config)
+            return cls._create_from_registry(
+                model_type,
+                pipeline,
+                cli_overrides,
+                deploy_config_path,
+            )
 
         # --- HF architecture fallback: some models report a generic
         # model_type that collides with another model. Match by the
@@ -1126,7 +1142,12 @@ class StageConfigFactory:
                                 registered.model_type,
                             )
                             continue
-                    return cls._create_from_registry(registered.model_type, cli_overrides, deploy_config_path)
+                    return cls._create_from_registry(
+                        registered.model_type,
+                        registered,
+                        cli_overrides,
+                        deploy_config_path,
+                    )
 
         # An explicit deploy config can select a pipeline when the model's HF
         # metadata is too generic for registry auto-detection.
@@ -1149,6 +1170,7 @@ class StageConfigFactory:
     def _create_from_registry(
         cls,
         model_type: str,
+        pipeline_cfg: PipelineConfig,
         cli_overrides: dict[str, Any],
         deploy_config_path: str | None = None,
     ) -> list[StageConfig]:
@@ -1186,15 +1208,6 @@ class StageConfigFactory:
         cli_async_chunk = cli_overrides.get("async_chunk")
         if cli_async_chunk is not None:
             deploy_cfg.async_chunk = bool(cli_async_chunk)
-
-        pipeline_key = deploy_cfg.pipeline or model_type
-        if pipeline_key not in _PIPELINE_REGISTRY:
-            raise KeyError(
-                f"Pipeline {pipeline_key!r} not in registry "
-                f"(resolved from {deploy_path.name!r}). Available: "
-                f"{sorted(_PIPELINE_REGISTRY.keys())}"
-            )
-        pipeline_cfg = _PIPELINE_REGISTRY[pipeline_key]
 
         stages = merge_pipeline_deploy(pipeline_cfg, deploy_cfg, cli_overrides)
 
