@@ -1921,6 +1921,8 @@ async def generate_images(
                 extra_body["flow_shift"] = request.flow_shift
             if request.extra_params is not None:
                 extra_body["extra_params"] = request.extra_params
+            if request.use_prompt_upscaling is not None:
+                extra_body["use_prompt_upscaling"] = request.use_prompt_upscaling
             if request.generator_device is not None:
                 extra_body["generator_device"] = request.generator_device
             if request.lora is not None:
