@@ -1,5 +1,21 @@
 import torch
 
+from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.request import OmniDiffusionRequest
+
+
+def do_prompt_upscaling(
+    req: OmniDiffusionRequest,
+    od_config: OmniDiffusionConfig,
+) -> bool:
+    """Check whether prompt upscaling should run for this request."""
+    if not od_config.enable_prompt_upscaling:
+        return False
+    do_upscale = req.sampling_params.extra_args.get("prompt_upscaling", False)
+    if not isinstance(do_upscale, bool):
+        raise TypeError(f"prompt_upscaling must be a bool, got {type(do_upscale).__name__}")
+    return do_upscale
+
 
 def validate_prompt_sequence_lengths(
     attention_mask: torch.Tensor,
