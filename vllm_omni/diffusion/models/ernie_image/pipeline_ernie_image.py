@@ -155,23 +155,21 @@ class ErnieImagePipeline(
             local_files_only=local_files_only,
         ).to(self._execution_device)
 
-        # Resolve/download PE files at init (not inference time) so the
-        # HF download doesn't block the first upscaling request.
-        pe_base_path = _resolve_model_path_for_optional_pe(
-            model,
-            getattr(od_config, "revision", None),
-        )
-
-        self.has_external_prompt_upscaler = os.path.exists(
-            os.path.join(pe_base_path, "pe"),
-        )
-        # Only create the loader if the server config allows external
-        # upscaler loading. This prevents a user request from OOMing
-        # the server by lazy-loading a large model.
-        pe_loader = _make_pe_loader(pe_base_path, od_config.dtype, self._execution_device)
-        self._load_pe = (
-            pe_loader if self.has_external_prompt_upscaler and od_config.enable_external_prompt_upscaler else None
-        )
+        # Only resolve/download PE files if the server config allows
+        # external upscaler loading to avoid downloading files we'll never use.
+        self.has_external_prompt_upscaler = od_config.enable_external_prompt_upscaler
+        if self.has_external_prompt_upscaler:
+            pe_base_path = _resolve_model_path_for_optional_pe(
+                model,
+                getattr(od_config, "revision", None),
+            )
+            self._load_pe = _make_pe_loader(
+                pe_base_path,
+                od_config.dtype,
+                self._execution_device,
+            )
+        else:
+            self._load_pe = None
         self.pe_model = None
         self.pe_tokenizer = None
 
