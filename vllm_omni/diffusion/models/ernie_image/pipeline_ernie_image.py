@@ -197,9 +197,9 @@ class ErnieImagePipeline(
     def _ensure_pe_loaded(self) -> bool:
         if self._load_pe is None:
             logger.warning(
-                "Prompt upscaling for a model with an external prompt upscaler, but "
+                "Requested prompt upscaling on a model with an external prompt upscaler, but "
                 "enable_external_prompt_upscaler is not set in the server config; "
-                "skipping prompt upscaling"
+                "prompt upscaling will be skipped"
             )
             return False
         self.pe_model, self.pe_tokenizer = self._load_pe()
