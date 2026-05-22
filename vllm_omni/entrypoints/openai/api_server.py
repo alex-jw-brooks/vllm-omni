@@ -3829,8 +3829,10 @@ async def omni_wakeup(request: OmniWakeupRequest, raw_request: Request):
 if __name__ == "__main__":
     parser = TrackingArgumentParser(description="vLLM-Omni OpenAI-Compatible REST API server")
     parser = make_arg_parser(parser)
-    # Ensure that passing --omni won't crash the server
-    parser.add_argument("--omni", action="store_true", default=True)
+    # Ensure that passing --omni won't crash the server.
+    # NOTE: the value here does not matter since we are always running the Omni server
+    # when __main__ is called, i.e., --omni is only used when called through the entrypoints.
+    parser.add_argument("--omni", action="store_true", default=False)
     args = parser.parse_args()
     # sync args.model to model_tag, because if we pass the model positionally,
     # args.model will be the default from vLLM's ModelConfig (currently
