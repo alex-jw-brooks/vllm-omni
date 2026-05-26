@@ -109,8 +109,8 @@ class ImageGenerationRequest(BaseModel):
         description="System prompt type. Options: None, dynamic, en_vanilla, "
         "en_recaption, en_think_recaption, en_unified, custom",
     )
-    use_prompt_upscaling: bool = Field(
-        default=False,
+    use_prompt_upscaling: bool | None = Field(
+        default=None,
         description="Enable prompt upscaling/enhancement for this request. "
         "Only effective for models that support prompt upscaling.",
     )
