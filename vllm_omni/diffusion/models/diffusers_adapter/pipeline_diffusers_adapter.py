@@ -54,6 +54,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         self.is_initialized = False
         self._pipeline: DiffusionPipeline
         self._transformer: ModelMixin | None
+        self._transformer_2: ModelMixin | None
         self._accept_call_kwargs: set[str] | None = None  # None to accept all kwargs
         self.od_config = od_config
         self.device = device
@@ -85,6 +86,12 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             raise RuntimeError("transformer can't be accessed before .load_weights()")
         return self._transformer
 
+    @property
+    def transformer_2(self) -> ModelMixin | None:
+        if not self.is_initialized:
+            raise RuntimeError("transformer_2 can't be accessed before .load_weights()")
+        return self._transformer_2
+
     @staticmethod
     def _build_hsdp_condition(modulelist_names: set[str]):
         """Best effort check for determining HSDP shardable modules;
@@ -99,14 +106,25 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         return should_shard
 
-    def _set_dit_hsdp_conditions(self):
+    @staticmethod
+    def _maybe_set_module_hsdp_conditions(maybe_module: nn.Module | None):
         """Best effort check for determining HSDP shardable modules."""
-        if self.transformer is None:
-            raise RuntimeError("HSDP requires an encapsulated DiT, but one was not found")
-
-        modulelist_names = {name for name, m in self.transformer.named_children() if isinstance(m, nn.ModuleList)}
+        if maybe_module is None:
+            return
+        modulelist_names = {name for name, m in maybe_module.named_children() if isinstance(m, nn.ModuleList)}
         condition = DiffusersAdapterPipeline._build_hsdp_condition(modulelist_names)
-        setattr(self.transformer, "_hsdp_shard_conditions", [condition])
+        setattr(maybe_module, "_hsdp_shard_conditions", [condition])
+
+    def _set_dit_hsdp_conditions(self):
+        """Set the HSDP conditions for all encapsulated components currently supported for HSDP.
+
+        NOTE: Currently this only checks DiT related components. We should also support components
+        like U-net as we add HSDP support outside the Diffusers backend.
+        """
+        if self.transformer is None and self.transformer_2 is None:
+            raise RuntimeError("HSDP requires an encapsulated DiT, but one was not found")
+        self._maybe_set_module_hsdp_conditions(self.transformer)
+        self._maybe_set_module_hsdp_conditions(self.transformer_2)
 
     # ------------------------------------------------------------------
     # Weight loading
@@ -162,11 +180,13 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         # Mark as initialized so that we can access component properties
         self._transformer = getattr(pipe, "transformer", None)
+        self._transformer_2 = getattr(pipe, "transformer_2", None)
         self._pipeline = pipe
         self.is_initialized = True
 
         # Handle attention backend after we've set the .transformer if we have one
-        self._set_attention_backend()
+        self._set_attention_backend(self.transformer)
+        self._set_attention_backend(self.transformer_2)
         if self.od_config.parallel_config.use_hsdp:
             self._set_dit_hsdp_conditions()
 
@@ -244,15 +264,14 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
     # Wrap settings, inputs, and outputs
     # ------------------------------------------------------------------
 
-    def _set_attention_backend(self) -> None:
+    def _set_attention_backend(self, maybe_transformer: ModelMixin | None) -> None:
         """Set the attention backend.
 
         Roughly follow the logic in vllm_omni/diffusion/attention/backends/utils/fa.py,
         But also consider the available attention backends in diffusers.
         (See: https://huggingface.co/docs/diffusers/optimization/attention_backends)
         """
-        if self.transformer is None:
-            logging.info("No transformer found in diffusers pipeline. Skipping attention backend setting.")
+        if maybe_transformer is None:
             return
 
         default_spec = self.od_config.diffusion_attention_config.default
@@ -297,7 +316,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         set_backend: str | None = None
         for backend in attention_backend_attempts:
             try:
-                self.transformer.set_attention_backend(backend)
+                maybe_transformer.set_attention_backend(backend)
                 set_backend = backend
                 break
             except Exception as e:
@@ -305,7 +324,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         # If all attempts fail, fallback to SDPA and warn the user about the failures
         if len(attempt_errors) == len(attention_backend_attempts):
-            self.transformer.set_attention_backend("native")
+            maybe_transformer.set_attention_backend("native")
             logger.warning(
                 f"Failed to set attention backend '{attention_backend_config}' for "
                 f"diffusers pipeline {self._pipeline.__class__.__name__}. "
