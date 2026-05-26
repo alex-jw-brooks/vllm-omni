@@ -19,7 +19,7 @@ import re
 from typing import Any, cast
 
 import torch
-from diffusers.configuration_utils import ConfigMixin
+from diffusers.models.modeling_utils import ModelMixin
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from torch import nn
 
@@ -53,7 +53,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         super().__init__()
         self.is_initialized = False
         self._pipeline: DiffusionPipeline
-        self._transformer: ConfigMixin | None
+        self._transformer: ModelMixin | None
         self._accept_call_kwargs: set[str] | None = None  # None to accept all kwargs
         self.od_config = od_config
         self.device = device
@@ -80,7 +80,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         return self._pipeline
 
     @property
-    def transformer(self) -> ConfigMixin | None:
+    def transformer(self) -> ModelMixin | None:
         if not self.is_initialized:
             raise RuntimeError("transformer can't be accessed before .load_weights()")
         return self._transformer
@@ -137,6 +137,10 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         self._accept_call_kwargs = set(inspect.signature(pipe.__call__).parameters.keys())
 
         # CPU offloading
+        # NOTE: Currently group offload in Diffusers isn't supported because vLLM Omni
+        # does not have an analogous setting, and it can't be enabled through kwargs in
+        # from_pretrained and .__call__(); when/if we add a similar mechanism in vLLM
+        # Omni, we should also expose it here.
         if self.od_config.enable_layerwise_offload:
             pipe.enable_sequential_cpu_offload()
         elif self.od_config.enable_cpu_offload:
@@ -202,8 +206,7 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         kwargs = self._build_call_kwargs(req)
         logger.debug(f"Calling diffusers pipeline with kwargs: {kwargs}")
 
-        with torch.inference_mode():
-            output = self.pipeline(**kwargs)  # pyright: ignore[reportCallIssue]
+        output = self.pipeline(**kwargs)  # pyright: ignore[reportCallIssue]
 
         return self._wrap_output(output)
 
