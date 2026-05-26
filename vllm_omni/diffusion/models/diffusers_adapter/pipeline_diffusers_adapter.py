@@ -131,7 +131,6 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
 
         pipe = DiffusionPipeline.from_pretrained(model_id, **load_kwargs)
         self._pipeline_utils.apply_post_load_updates(pipe, self.od_config)
-        pipe.to(self.device)
 
         # Cache __call__kwargs signature introspection for later input validation
         self._accept_call_kwargs = set(inspect.signature(pipe.__call__).parameters.keys())
@@ -145,6 +144,9 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             pipe.enable_sequential_cpu_offload()
         elif self.od_config.enable_cpu_offload:
             pipe.enable_model_cpu_offload()
+        else:
+            # Only move to device if we don't enable offloading
+            pipe.to(self.device)
 
         # VAE slicing and tiling: try-catch because not all models have VAE
         if self.od_config.vae_use_slicing:
