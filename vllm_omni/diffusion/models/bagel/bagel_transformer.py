@@ -533,7 +533,7 @@ class PackedAttentionMoT(nn.Module):
            (NaiveCache) independently since it is a diffusion model
         5. Apply attention based on causality kwarg
         6. Apply output projection
-        8. Update the NaiveCache.
+        7. Update the NaiveCache.
         """
 
         qkv, _ = self.qkv_proj(packed_query_sequence)
