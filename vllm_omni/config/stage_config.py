@@ -13,8 +13,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from transformers import PretrainedConfig
 from vllm.logger import init_logger
+from vllm.transformers_utils.config import get_config
+from vllm.transformers_utils.repo_utils import get_hf_file_to_dict
 from vllm.v1.core.sched.scheduler import Scheduler as VLLMScheduler
 
 from vllm_omni.config.yaml_util import create_config, load_yaml_config, to_dict
@@ -25,6 +26,16 @@ logger = init_logger(__name__)
 
 
 _STAGE_OVERRIDE_PATTERN = re.compile(r"^stage_(\d+)_(.+)$")
+
+
+def resolve_pipeline_config(model_type, hf_config=None):
+    from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
+
+    if model_type not in OMNI_PIPELINES:
+        return None
+    obj = OMNI_PIPELINES[model_type]
+    pipeline_cfg = obj(hf_config) if callable(obj) else obj
+    return pipeline_cfg
 
 
 def build_stage_runtime_overrides(
@@ -272,162 +283,6 @@ class PipelineConfig:
         if not any(not s.input_sources for s in self.stages):
             errors.append("No entry point (stage with empty input_sources)")
         return errors
-
-
-class _LazyPipelineRegistry:
-    """Dict-like registry that lazy-loads pipelines from the central declaration.
-
-    In-tree pipelines are declared once in
-    ``vllm_omni/config/pipeline_registry.py`` as
-    ``model_type -> (module_path, variable_name)`` entries; the module is
-    imported only when the pipeline is first looked up. This mirrors the
-    pattern in ``vllm/model_executor/models/registry.py`` and addresses
-    https://github.com/vllm-project/vllm-omni/issues/2887 (item 4): having
-    every registration in one file makes a missing entry easy to spot.
-
-    Out-of-tree / dynamic registrations via ``register_pipeline()`` are stored
-    directly in ``_loaded`` and take precedence over the lazy-map entry with
-    the same ``model_type``.
-
-    The class exposes the subset of ``dict`` operations the rest of this
-    module relies on (``__contains__``, ``__getitem__``, ``__setitem__``,
-    ``get``, ``keys``, ``values``, ``items``, ``__iter__``), so existing call
-    sites don't need to change.
-    """
-
-    def __init__(self) -> None:
-        self._loaded: dict[str, PipelineConfig] = {}
-        # Populated lazily to avoid a circular import at module init time.
-        self._lazy_map: dict[str, tuple[str, str]] | None = None
-
-    def _get_lazy_map(self) -> dict[str, tuple[str, str]]:
-        if self._lazy_map is None:
-            from vllm_omni.config.pipeline_registry import _OMNI_PIPELINES
-
-            self._lazy_map = _OMNI_PIPELINES
-        return self._lazy_map
-
-    def _load_lazy(self, model_type: str) -> PipelineConfig | None:
-        entry = self._get_lazy_map().get(model_type)
-        if entry is None:
-            return None
-        module_path, var_name = entry
-        import importlib
-
-        try:
-            module = importlib.import_module(module_path)
-            obj = getattr(module, var_name, None)
-            if obj is None:
-                logger.error(
-                    "Pipeline variable %r not found in module %r (registered for %r)",
-                    var_name,
-                    module_path,
-                    model_type,
-                )
-                return None
-            if isinstance(obj, PipelineConfig):
-                errors = obj.validate()
-                if errors:
-                    logger.warning("Pipeline %s has issues: %s", obj.model_type, errors)
-            elif not callable(obj):
-                logger.error("pipelines must map to a PipelineConfig or resolver")
-            # NOTE: If it's a callable, we defer until we have the HF config to grab the class for now.
-            self._loaded[model_type] = obj
-            return obj
-        except Exception:
-            logger.exception("Failed to import pipeline module %r for %r", module_path, model_type)
-            return None
-
-    def __contains__(self, model_type: str) -> bool:
-        if model_type in self._loaded:
-            return True
-        return model_type in self._get_lazy_map()
-
-    def __getitem__(self, model_type: str) -> PipelineConfig:
-        if model_type in self._loaded:
-            return self._loaded[model_type]
-        pipeline = self._load_lazy(model_type)
-        if pipeline is None:
-            raise KeyError(model_type)
-        return pipeline
-
-    def resolve(self, model_type: str, hf_config: PretrainedConfig) -> PipelineConfig:
-        """Look up a pipeline, calling its resolver with *hf_config* if callable."""
-        obj = self[model_type]
-        return obj(hf_config) if callable(obj) else obj
-
-    def get(self, model_type: str, default: PipelineConfig | None = None) -> PipelineConfig | None:
-        if model_type in self._loaded:
-            return self._loaded[model_type]
-        pipeline = self._load_lazy(model_type)
-        return pipeline if pipeline is not None else default
-
-    def __setitem__(self, model_type: str, pipeline: PipelineConfig) -> None:
-        self._loaded[model_type] = pipeline
-
-    def __delitem__(self, model_type: str) -> None:
-        """Remove a dynamically-registered pipeline.
-
-        Only the dynamic-cache side of the registry can be mutated; the
-        central declarative registry is immutable at runtime. Calling ``del``
-        on a model_type that only exists in the central registry raises
-        ``KeyError``.
-        """
-        if model_type in self._loaded:
-            del self._loaded[model_type]
-            return
-        if model_type in self._get_lazy_map():
-            raise KeyError(
-                f"{model_type!r} is declared in the central pipeline_registry and "
-                "cannot be removed at runtime. Edit "
-                "vllm_omni/config/pipeline_registry.py to delete a built-in entry."
-            )
-        raise KeyError(model_type)
-
-    def keys(self) -> set[str]:
-        return set(self._get_lazy_map().keys()) | set(self._loaded.keys())
-
-    def _safe_get(self, key: str) -> PipelineConfig | None:
-        try:
-            return self[key]
-        except Exception:
-            logger.warning("Skipping pipeline %r because it failed to load.", key)
-        return None
-
-    def values(self):
-        # Iterating forces a lazy import for each pipeline; failures are logged and skipped.
-        for key in self.keys():
-            if (p := self._safe_get(key)) is not None:
-                yield p
-
-    def items(self):
-        for key in self.keys():
-            if (p := self._safe_get(key)) is not None:
-                yield key, p
-
-    def __iter__(self):
-        return iter(self.keys())
-
-
-_PIPELINE_REGISTRY = _LazyPipelineRegistry()
-
-
-def register_pipeline(pipeline: PipelineConfig) -> None:
-    """Register a pipeline config dynamically.
-
-    In-tree pipelines are declared in ``pipeline_registry._OMNI_PIPELINES``
-    and loaded lazily; calling ``register_pipeline`` is only needed for
-    out-of-tree plugins or tests that build a ``PipelineConfig`` at runtime.
-    A dynamic registration overrides the central-registry entry with the same
-    ``model_type``.
-    """
-    errors = pipeline.validate()
-    if errors:
-        logger.warning("Pipeline %s has issues: %s", pipeline.model_type, errors)
-    _PIPELINE_REGISTRY[pipeline.model_type] = pipeline
-
-
-_DEPLOY_DIR = Path(__file__).resolve().parent.parent / "deploy"
 
 
 @dataclass
@@ -1074,11 +929,12 @@ class StageConfigFactory:
     Handles both single-stage and multi-stage models.
 
     Pipelines are declared in ``vllm_omni/config/pipeline_registry.py`` and
-    loaded lazily via ``_PIPELINE_REGISTRY``; no hardcoded model-type →
-    directory mapping is maintained here. Models with generic HF
-    ``model_type`` collisions (e.g. MiMo Audio reports ``qwen2``) should
-    declare ``hf_architectures=(...)`` on their ``PipelineConfig`` so the
-    factory can disambiguate via ``hf_config.architectures``.
+    where keys in OMNI_PIPELINES map to either a PipelineConfig, or a callable
+    which accepts a Transformers config as an arg & resolves to a PipelineConfig.
+
+    NOTE: Models with generic HF ``model_type`` collisions (e.g. MiMo Audio
+    reports ``qwen2``) should declare ``hf_architectures=(...)`` on their
+    ``PipelineConfig`` so the factory can disambiguate via ``hf_config.architectures``.
     """
 
     @classmethod
@@ -1090,8 +946,15 @@ class StageConfigFactory:
     ) -> list[StageConfig] | None:
         """Load pipeline + deploy config, merge with CLI overrides.
 
-        Checks _PIPELINE_REGISTRY first (new path), falls back to legacy YAML.
+        Checks OMNI_PIPELINES first, since supported models should be explicitly
+        registered. If a model is not registered in OMNI_PIPELINES, tries to fall
+        back to using the Transformers config & finding pipelines that have overlapping
+        supported architectures.
         """
+        # FIXME (Alex): For now we this is to prevent a circular import;
+        # Move some of the dataclasses etc to a separate file.
+        from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
+
         if cli_overrides is None:
             cli_overrides = {}
 
@@ -1106,11 +969,11 @@ class StageConfigFactory:
 
             if _looks_like_dreamzero(model):
                 model_type = "dreamzero"
-        if model_type and model_type in _PIPELINE_REGISTRY:
-            pipeline = _PIPELINE_REGISTRY.resolve(model_type, hf_config)
+        if model_type and model_type in OMNI_PIPELINES:
+            pipeline_cfg = resolve_pipeline_config(model_type, hf_config)
             return cls._create_from_registry(
                 model_type,
-                pipeline,
+                pipeline_cfg,
                 cli_overrides,
                 deploy_config_path,
             )
@@ -1123,10 +986,13 @@ class StageConfigFactory:
         # 4.5 which share ``architectures=["MiniCPMO"]``), the predicate
         # must also accept the loaded ``hf_config``.
         if hf_config is not None:
+            logger.warning("Inferred model type %s is not registered to an Omni pipeline", model_type)
             hf_archs = set(getattr(hf_config, "architectures", []) or [])
             if hf_archs:
-                for registered in _PIPELINE_REGISTRY.values():
-                    if not hf_archs.intersection(registered.hf_architectures):
+                for registered in OMNI_PIPELINES.values():
+                    if not isinstance(registered, PipelineConfig) or not hf_archs.intersection(
+                        registered.hf_architectures
+                    ):
                         continue
                     predicate = registered.hf_config_predicate
                     if predicate is not None:
@@ -1153,22 +1019,10 @@ class StageConfigFactory:
                         deploy_config_path,
                     )
 
-        # An explicit deploy config can select a pipeline when the model's HF
-        # metadata is too generic for registry auto-detection.
-        if deploy_config_path is not None:
-            deploy_path = Path(deploy_config_path)
-            if deploy_path.exists():
-                deploy_config = load_deploy_config(deploy_path)
-                if deploy_config.pipeline in _PIPELINE_REGISTRY:
-                    return cls._create_from_registry(
-                        deploy_config.pipeline,
-                        cli_overrides,
-                        deploy_config_path,
-                    )
-
-        # Not in the pipeline registry — let the caller fall back to the
-        # legacy ``stage_configs/*.yaml`` path (resolve_model_config_path).
-        return None
+        raise ValueError(
+            f"Unable to create model; Model type {model_type} in not registered in OMNI_PIPELINES,"
+            f" and hf_config of type {type(hf_config)}"
+        )
 
     @classmethod
     def _create_from_registry(
@@ -1294,9 +1148,12 @@ class StageConfigFactory:
         Returns:
             Tuple of (model_type, hf_config). Both may be None on failure.
         """
-        try:
-            from vllm.transformers_utils.config import get_config
+        # FIXME (Alex): Refactor to fix circular import here
+        from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
 
+        hf_config = None
+
+        try:
             hf_config = get_config(model, trust_remote_code=trust_remote_code)
             return hf_config.model_type, hf_config
         except Exception as e:
@@ -1305,8 +1162,6 @@ class StageConfigFactory:
         # Fallback: read config.json directly for custom model types that
         # are not registered with transformers (e.g. qwen3_tts).
         try:
-            from vllm.transformers_utils.config import get_hf_file_to_dict
-
             config_dict = get_hf_file_to_dict("config.json", model, revision=None)
             if config_dict:
                 if "model_type" in config_dict:
@@ -1324,12 +1179,13 @@ class StageConfigFactory:
         # model_index.json with _class_name that maps to a pipeline key via
         # PipelineConfig.diffusers_class_name.
         try:
-            from vllm.transformers_utils.config import get_hf_file_to_dict
-
             model_index = get_hf_file_to_dict("model_index.json", model, revision=None)
             if model_index and "_class_name" in model_index:
                 class_name = model_index["_class_name"]
-                for pipeline_cfg in _PIPELINE_REGISTRY.values():
+                for obj in OMNI_PIPELINES.values():
+                    # If we have a resolver, call it with the optional hf_config
+                    # to get the default pipeline config for this key
+                    pipeline_cfg = obj(hf_config) if callable(obj) else obj
                     if pipeline_cfg.diffusers_class_name == class_name:
                         logger.info(
                             "Detected pipeline %r from model_index.json (_class_name=%r)",
@@ -1347,7 +1203,7 @@ class StageConfigFactory:
         model_lower = model.lower().replace("-", "").replace("_", "")
         best: str | None = None
         best_len = 0
-        for registered_key in _PIPELINE_REGISTRY.keys():
+        for registered_key in OMNI_PIPELINES.keys():
             candidate = registered_key.lower().replace("-", "").replace("_", "")
             if candidate and candidate in model_lower and len(candidate) > best_len:
                 best = registered_key
