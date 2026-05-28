@@ -190,7 +190,7 @@ async def test_diffusion_generate_preserves_request_id(req_id):
         engine.shutdown()
 
 
-@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.omni
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -225,7 +225,7 @@ async def test_diffusion_generate_empty_request_id():
         engine.shutdown()
 
 
-@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.omni
 @pytest.mark.asyncio
 async def test_omni_generate_empty_request_id():
@@ -237,6 +237,6 @@ async def test_omni_generate_empty_request_id():
             request_id="",
             output_modalities=["text"],
         ):
-            assert output.request_id != "", "empty request_id should be replaced"
+            assert output.request_id != ""
     finally:
         engine.shutdown()
