@@ -10,7 +10,7 @@ from collections.abc import Mapping
 import pytest
 import torch
 
-from vllm_omni.config.stage_config import StageConfigFactory
+from vllm_omni.config.pipeline_registry import StageConfigFactory
 from vllm_omni.diffusion.data import (
     DiffusionParallelConfig,
     OmniDiffusionConfig,

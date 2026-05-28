@@ -14,12 +14,15 @@ from unittest.mock import patch
 import pytest
 
 from tests.helpers.stage_config import get_deploy_config_path
-from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
+from vllm_omni.config.pipeline_registry import (
+    OMNI_PIPELINES,
+    StageConfigFactory,
+    resolve_pipeline_config,
+)
 from vllm_omni.config.stage_config import (
     DeployConfig,
     PipelineConfig,
     StageConfig,
-    StageConfigFactory,
     StageDeployConfig,
     StageExecutionType,
     StagePipelineConfig,
@@ -30,7 +33,6 @@ from vllm_omni.config.stage_config import (
     build_stage_runtime_overrides,
     load_deploy_config,
     merge_pipeline_deploy,
-    resolve_pipeline_config,
     strip_parent_engine_args,
 )
 from vllm_omni.engine.arg_utils import SHARED_FIELDS, EngineArgs, internal_blacklist_keys

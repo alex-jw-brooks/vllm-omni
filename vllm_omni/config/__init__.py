@@ -4,11 +4,11 @@ Configuration module for vLLM-Omni.
 
 from vllm_omni.config.lora import LoRAConfig
 from vllm_omni.config.model import OmniModelConfig
+from vllm_omni.config.pipeline_registry import StageConfigFactory
 from vllm_omni.config.stage_config import (
     DeployConfig,
     PipelineConfig,
     StageConfig,
-    StageConfigFactory,
     StageDeployConfig,
     StageExecutionType,
     StagePipelineConfig,
