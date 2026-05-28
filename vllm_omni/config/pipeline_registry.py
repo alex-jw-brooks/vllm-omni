@@ -15,7 +15,7 @@ they just no longer need to self-register via ``register_pipeline(...)``.
 Adding a new pipeline:
     1. Define the ``PipelineConfig`` instance as a module-level variable in
        ``vllm_omni/.../pipeline.py``.
-    2. Add one line to ``_OMNI_PIPELINES`` below.
+    2. Add one line to ``OMNI_PIPELINES`` below.
 
 Plain single-stage diffusion models continue to use the
 ``_create_default_diffusion_stage_cfg`` fallback in ``async_omni_engine.py``.
@@ -77,11 +77,10 @@ from vllm_omni.model_executor.models.qwen3_tts.pipeline import QWEN3_TTS_PIPELIN
 from vllm_omni.model_executor.models.voxcpm2.pipeline import VOXCPM2_PIPELINE
 from vllm_omni.model_executor.models.voxtral_tts.pipeline import VOXTRAL_TTS_PIPELINE
 
-PipelineResolverFunc: TypeAlias = Callable[[PreTrainedConfig], PipelineConfig]
-
+PipelineResolverFunc: TypeAlias = Callable[[PreTrainedConfig | None], PipelineConfig]
 
 # --- Multi-stage omni pipelines (LLM-centric; audio / video I/O) ---
-_OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
+OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "aura_omni": AURA_OMNI_PIPELINE,
     "qwen2_5_omni": QWEN2_5_OMNI_PIPELINE,
     "qwen2_5_omni_thinker_only": QWEN2_5_OMNI_THINKER_ONLY_PIPELINE,

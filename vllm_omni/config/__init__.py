@@ -15,7 +15,6 @@ from vllm_omni.config.stage_config import (
     StageType,
     load_deploy_config,
     merge_pipeline_deploy,
-    register_pipeline,
 )
 from vllm_omni.config.yaml_util import (
     create_config,
@@ -37,7 +36,6 @@ __all__ = [
     "DeployConfig",
     "load_deploy_config",
     "merge_pipeline_deploy",
-    "register_pipeline",
     "create_config",
     "load_yaml_config",
     "merge_configs",
