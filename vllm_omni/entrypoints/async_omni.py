@@ -23,6 +23,7 @@ from vllm.pooling_params import PoolingParams
 from vllm.renderers.inputs.preprocess import extract_prompt_components
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.tasks import SupportedTask
+from vllm.utils import random_uuid
 from vllm.v1.engine.exceptions import EngineDeadError
 
 from vllm_omni.diffusion.data import OmniACK, OmniSleepTask, OmniWakeTask
@@ -215,6 +216,19 @@ class AsyncOmni(EngineClient, OmniBase):
             return None
         return vllm_config.model_config
 
+    @staticmethod
+    def _get_unique_request_id(external_request_id: str):
+        """Get a random new request ID for this request; at the server level,
+        this is usually set by the calling entrypoint, but in direct calls, we
+        need to set it explicitly since we do not allow empty IDs.
+
+        NOTE: in the upstream vLLM, this is done in the InputProcessor's
+        `assign_request_id`.
+        """
+        uuid = random_uuid()
+        prefix = "" if not external_request_id else f"{external_request_id}-"
+        return f"{prefix}{uuid:.8}"
+
     # ==================== Generate Method ====================
 
     async def generate(
@@ -249,7 +263,8 @@ class AsyncOmni(EngineClient, OmniBase):
         Args:
             prompt: A single prompt **or** a list of prompts.  A list
                 triggers batch mode when the diffusion stage is reached.
-            request_id: Unique identifier for this request.
+            request_id: Unique identifier for this request. If one is not provided,
+                a random one will be generated.
             sampling_params_list: List of SamplingParams, one per stage.
                 Must have the same length as the number of stages.
                 If *None*, uses default sampling params for each stage.
@@ -263,11 +278,17 @@ class AsyncOmni(EngineClient, OmniBase):
         Raises:
             ValueError: If sampling_params_list has incorrect length.
         """
+        # Append a random UUID suffix to the request_id to ensure it is unique
+        # and non-empty, similar to vLLM's input processor. The suffix is used
+        # only for internal tracking throughout the request's life.
+        external_request_id = request_id
+        request_id = self._get_unique_request_id(external_request_id)
+
         # Wait until generation is resumed if the engine is paused
         async with self._pause_cond:
             await self._pause_cond.wait_for(lambda: not self._paused)
 
-        logger.debug(f"[AsyncOmni] generate() called for request {request_id}")
+        logger.debug(f"[AsyncOmni] generate() called for request {external_request_id}")
 
         input_stream_task: asyncio.Task | None = None
         try:
@@ -302,7 +323,11 @@ class AsyncOmni(EngineClient, OmniBase):
                 wall_start_ts,
                 final_stage_id_for_e2e,
             )
-            req_state = ClientRequestState(request_id)
+
+            req_state = ClientRequestState(
+                request_id=request_id,
+                external_request_id=external_request_id,
+            )
             req_state.metrics = metrics
             self.request_states[request_id] = req_state
 
@@ -541,6 +566,8 @@ class AsyncOmni(EngineClient, OmniBase):
             )
 
             if output_to_yield:
+                # Set the external request ID back to the user yielded input
+                output_to_yield.request_id = req_state.external_request_id or output_to_yield.request_id
                 logger.debug(
                     "[AsyncOmni] req=%s stage-%s yielding final_output_type=%s",
                     request_id,
