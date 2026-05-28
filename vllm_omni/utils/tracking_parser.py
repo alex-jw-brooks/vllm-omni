@@ -95,7 +95,7 @@ class TrackingSubparsers:
 
 class TrackingArgumentParser(FlexibleArgumentParser):
     """Drop-in replacement for FlexibleArgumentParser, which tracks keys that
-    were explicitly passed as args.
+    were explicitly passed as args on the parser namespace.
 
     Unfortunately, Argparse does not provide an easy way of doing this without
     depending on a lot of internal attributes, so we implement it by instead
@@ -110,13 +110,7 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         # and delegate to the override on this class and cause problems.
         shadow_kwargs = {**kwargs, "add_help": False}
         self._shadow = FlexibleArgumentParser(*args, **shadow_kwargs)
-        self._explicit_keys: frozenset[str] = frozenset()
         super().__init__(*args, **kwargs)
-
-    @property
-    def explicit_keys(self) -> frozenset[str]:
-        """The set of keys that were passed explicitly."""
-        return self._explicit_keys
 
     def add_argument(self, *args: Any, **kwargs: Any) -> argparse.Action:
         """Add an arg to the parser & the shadow, where the latter has UNSET for the default."""
@@ -141,17 +135,16 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         return TrackingSubparsers(real_sub, shadow_sub)
 
     def build_tracking_namespace(self, real_ns: argparse.Namespace, shadow_ns: argparse.Namespace) -> TrackingNamespace:
-        """Build a tracking namespace for the real / shadow namespaces
-        and update this instance's explicit_keys."""
-        self._explicit_keys = frozenset(k for k, v in vars(shadow_ns).items() if v is not UNSET)
-        return TrackingNamespace(real_ns, self._explicit_keys)
+        """Build a tracking namespace for the real / shadow namespaces."""
+        explicit_keys = frozenset(k for k, v in vars(shadow_ns).items() if v is not UNSET)
+        return TrackingNamespace(real_ns, explicit_keys)
 
     def parse_args(
         self,
         args: list[str] | None = None,
         namespace: argparse.Namespace | None = None,
     ) -> TrackingNamespace:
-        """Parse the args on the real/shadow parser & set the frozen explicit keys."""
+        """Parse the args on the real/shadow parser."""
         # Only the real parser should use the namespace if one is,
         # given since shadow parser will set its own defaults to None.
         real_ns = super().parse_args(args, namespace)
@@ -172,7 +165,7 @@ class TrackingArgumentParser(FlexibleArgumentParser):
         args: list[str] | None = None,
         namespace: argparse.Namespace | None = None,
     ) -> tuple[TrackingNamespace, list[str]]:
-        """Parse the known args on the real/shadow parser & set the frozen explicit keys."""
+        """Parse the known args on the real/shadow parser."""
         real_ns, remaining = super().parse_known_args(args, namespace)
         shadow_ns, _ = self._shadow.parse_known_args(args)
         tracked_ns = self.build_tracking_namespace(real_ns, shadow_ns)
