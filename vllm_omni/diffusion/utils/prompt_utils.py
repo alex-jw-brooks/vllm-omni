@@ -10,7 +10,7 @@ def do_prompt_upscaling(req: OmniDiffusionRequest) -> bool:
     # loaded component. Since only Ernie Image does this for now
     # though, we currently don't distinguish at load time to avoid having
     # too many obscure flags.
-    value = req.sampling_params.extra_args.get("use_prompt_upscaling")
+    value = req.sampling_params.extra_args.get("use_prompt_upscaling", False)
     if not isinstance(value, bool):
         raise TypeError(f"use_prompt_upscaling must be a bool, got {type(value).__name__}")
     return bool(value)
