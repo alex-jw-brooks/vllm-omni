@@ -602,7 +602,7 @@ class DiffusersPipelineLoader:
             model_cls = _resolve_custom_pipeline_cls(custom_pipeline_name)
             with set_current_diffusion_config(self.od_config):
                 model = model_cls(od_config=self.od_config)
-            if target_device.type != "cpu" and not is_hsdp:
+            if not is_hsdp and target_device.type != "cpu":
                 model.to(target_device)
         else:
             device_ctx = target_device if not is_hsdp else contextlib.nullcontext()
