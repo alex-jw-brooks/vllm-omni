@@ -1,4 +1,5 @@
 import asyncio
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -85,6 +86,64 @@ def test_generate_submits_randomized_id_to_engine():
         assert len(submitted_ids) == 1
         assert submitted_ids[0] != req_id
         assert submitted_ids[0].startswith(f"{req_id}-")
+
+    asyncio.run(run())
+
+
+@pytest.mark.cpu
+@pytest.mark.parametrize(
+    "req_ids,cancel_prefix,expected_cancel_count",
+    [
+        (["cancel-me"], "cancel-me", 1),
+        (["cancel-me", "cancel-me"], "cancel-me", 2),
+        (["cancel-hello", "cancel-hello-world"], "cancel-hello", 1),
+    ],
+)
+def test_abort_handles_internal_request_mapping(req_ids: list[str], cancel_prefix: str, expected_cancel_count: int):
+    """Ensure that abort() with the user-visible ID resolves correctly.
+
+    NOTE: In the case of concurrent / colliding request(s), all requests matching the
+    user provided request ID will be aborted."""
+
+    async def run():
+        aborted_batches = []
+        omni = get_async_omni_instance(
+            fake_abort_request=get_fake_abort(aborted_batches),
+        )
+
+        async def exhaust(agen):
+            async for _ in agen:
+                pass
+
+        tasks = []
+        for user_request_id in req_ids:
+            t = asyncio.create_task(
+                exhaust(
+                    omni.generate(
+                        prompt={"prompt": "test"},
+                        request_id=user_request_id,
+                        sampling_params_list=[SimpleNamespace()],
+                    )
+                )
+            )
+            await asyncio.sleep(0)
+            tasks.append(t)
+
+        assert len(omni.request_states) == len(req_ids)
+        await omni.abort(cancel_prefix)
+
+        assert len(aborted_batches) == 1
+        aborted_ids = aborted_batches[0]
+        # Aborted requests will have fmt {ext_id}-{UUID} to avoid collisions
+        for rid in aborted_ids:
+            assert re.fullmatch(rf"{re.escape(cancel_prefix)}-[0-9a-f]+", rid)
+        assert len(aborted_ids) == expected_cancel_count
+        assert len(set(aborted_ids)) == expected_cancel_count
+        assert len(omni.request_states) == len(req_ids) - expected_cancel_count
+
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     asyncio.run(run())
 
