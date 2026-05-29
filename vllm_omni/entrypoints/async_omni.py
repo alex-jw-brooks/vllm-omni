@@ -378,11 +378,11 @@ class AsyncOmni(EngineClient, OmniBase):
         except (asyncio.CancelledError, GeneratorExit):
             if input_stream_task is not None and not input_stream_task.done():
                 input_stream_task.cancel()
-            await self.abort(request_id)
+            await self._abort_internal_requests(request_id)
             logger.info(f"[AsyncOmni] Request {request_id} aborted.")
             raise
         except Exception as e:
-            await self.abort(request_id)
+            await self._abort_internal_requests(request_id)
             logger.info(f"[AsyncOmni] Request {request_id} failed (input error): {e}")
             raise
 
@@ -714,9 +714,26 @@ class AsyncOmni(EngineClient, OmniBase):
     async def abort(self, request_id: str | Iterable[str]) -> None:
         """Abort request(s) via the Orchestrator."""
         request_ids = [request_id] if isinstance(request_id, str) else list(request_id)
+        # Map the external user request IDs to internal IDs used by the Orchestrator.
+        # NOTE: If the user request_id matches multiple requests, all of them will be
+        # aborted. This is also what happens in this case in vLLM's output processor.
+        internal_ids = [s.request_id for s in self.request_states.values() if s.external_request_id in request_ids]
+        await self._abort(internal_ids)
+
+    async def _abort_internal_requests(self, request_id: str | Iterable[str]):
+        """Abort request(s) via the Orchestrator given internal request IDs,
+        which take the format <external_request_id>-<UUID>.
+        """
+        request_ids = [request_id] if isinstance(request_id, str) else list(request_id)
+        # Request IDs are already internal, so we just need to get the matching states.
+        internal_req_ids = [rid for rid in request_ids if rid in self.request_states]
+        await self._abort(internal_req_ids)
+
+    async def _abort(self, request_ids: list[str]) -> None:
+        """Submit request IDs to be aborted to the engine."""
         await self.engine.abort_async(request_ids)
-        for req_id in request_ids:
-            self.request_states.pop(req_id, None)
+        for rid in request_ids:
+            self.request_states.pop(rid, None)
         if self.log_stats:
             logger.info("[AsyncOmni] Aborted request(s) %s", ",".join(request_ids))
 
