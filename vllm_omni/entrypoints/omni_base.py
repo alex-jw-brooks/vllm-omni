@@ -132,6 +132,12 @@ class OmniBase(PDDisaggregationMixin):
         model: str,
         **kwargs: Any,
     ) -> None:
+        if "engine_args" in kwargs:
+            logger.warning(
+                "engine_args were passed as a kwarg to an Omni instance; this is not supported. "
+                "You should instead, pass the keyword arguments used to initialize the engine args "
+                "directly to this object's initializer."
+            )
         stage_init_timeout = kwargs.pop("stage_init_timeout", 300)
         init_timeout = kwargs.pop("init_timeout", 600)
         log_stats = kwargs.pop("log_stats", False)
