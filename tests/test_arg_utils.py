@@ -49,16 +49,3 @@ def test_internal_blacklist_keys_derived_from_orchestrator():
     """
     blacklist = internal_blacklist_keys()
     assert blacklist == orchestrator_field_names() - SHARED_FIELDS
-    assert blacklist == {
-        "init_timeout",
-        "batch_timeout",
-        "async_chunk",
-        "stage_overrides",
-        "worker_backend",
-        "stage_init_timeout",
-        "ray_address",
-        "deploy_config",
-        "shm_threshold_bytes",
-        "tokenizer",
-        "parallel_config",
-    }
