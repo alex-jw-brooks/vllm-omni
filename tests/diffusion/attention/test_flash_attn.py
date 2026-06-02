@@ -297,6 +297,84 @@ def test_flash_attn_func_preferred_over_varlen():
     print("✓ flash_attn_func forward works correctly!")
 
 
+@pytest.mark.skipif(not is_gpu, reason="FlashAttention requires CUDA or XPU")
+@pytest.mark.parametrize("causal", [False, True])
+def test_varlen_masked_cross_attention(causal):
+    """Test that _forward_varlen_masked handles Q_len != K_len with left-padded K.
+
+    Mimics BAGEL batched CFG: 3 sequences with equal Q_lens but different K_lens.
+    Uses GQA (28 Q heads, 4 KV heads). Verifies that left-padded 4D + mask
+    produces the same output as direct flash_attn_varlen_func.
+    """
+    if not HAS_FLASH_ATTN:
+        pytest.skip("No Flash Attention available")
+
+    from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
+
+    if flash_attn_varlen_func is None:
+        pytest.skip("flash_attn_varlen_func not available")
+
+    device = torch.device(current_omni_platform.device_type)
+    dtype = torch.bfloat16
+
+    num_heads = 28
+    num_kv_heads = 4
+    head_dim = 128
+    q_lens = [256, 256, 256]
+    k_lens = [261, 256, 261]
+    batch = len(q_lens)
+    max_q = max(q_lens)
+    max_k = max(k_lens)
+
+    torch.manual_seed(42)
+
+    # Build per-sequence Q/K/V
+    q_parts = [torch.randn(ql, num_heads, head_dim, device=device, dtype=dtype) for ql in q_lens]
+    k_parts = [torch.randn(kl, num_kv_heads, head_dim, device=device, dtype=dtype) for kl in k_lens]
+    v_parts = [torch.randn(kl, num_kv_heads, head_dim, device=device, dtype=dtype) for kl in k_lens]
+
+    # Reference: direct varlen
+    ref_out = flash_attn_varlen_func(
+        q=torch.cat(q_parts),
+        k=torch.cat(k_parts),
+        v=torch.cat(v_parts),
+        cu_seqlens_q=torch.tensor([0] + [sum(q_lens[: i + 1]) for i in range(batch)], dtype=torch.int32, device=device),
+        cu_seqlens_k=torch.tensor([0] + [sum(k_lens[: i + 1]) for i in range(batch)], dtype=torch.int32, device=device),
+        max_seqlen_q=max_q,
+        max_seqlen_k=max_k,
+        causal=causal,
+    )
+    if isinstance(ref_out, tuple):
+        ref_out = ref_out[0]
+
+    # Test: 4D left-padded + mask through FlashAttentionImpl
+    q_4d = torch.zeros(batch, max_q, num_heads, head_dim, device=device, dtype=dtype)
+    k_4d = torch.zeros(batch, max_k, num_kv_heads, head_dim, device=device, dtype=dtype)
+    v_4d = torch.zeros(batch, max_k, num_kv_heads, head_dim, device=device, dtype=dtype)
+    mask = torch.zeros(batch, max_k, dtype=torch.bool, device=device)
+
+    for i in range(batch):
+        q_4d[i, : q_lens[i]] = q_parts[i]
+        pad = max_k - k_lens[i]
+        k_4d[i, pad:] = k_parts[i]  # left-pad
+        v_4d[i, pad:] = v_parts[i]
+        mask[i, pad:] = True
+
+    fa_impl = FlashAttentionImpl(
+        num_heads=num_heads,
+        head_size=head_dim,
+        softmax_scale=1.0 / (head_dim**0.5),
+        causal=causal,
+        num_kv_heads=num_kv_heads,
+    )
+    test_out = fa_impl.forward(q_4d, k_4d, v_4d, AttentionMetadata(attn_mask=mask))
+
+    # Extract valid Q positions and compare
+    test_packed = torch.cat([test_out[i, : q_lens[i]] for i in range(batch)])
+    max_diff = torch.max(torch.abs(ref_out - test_packed)).item()
+    assert max_diff < 0.01, f"Outputs differ: max_diff={max_diff}"
+
+
 if __name__ == "__main__":
     print("Running FlashAttention Padding Tests...")
     print("=" * 60)

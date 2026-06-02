@@ -732,10 +732,10 @@ class OmniBagelForConditionalGeneration(BagelForConditionalGeneration):
 
     def forward(
         self,
-        input_ids: torch.Tensor | None,
+        input_ids: torch.Tensor | None,  # [151644, 32, ..., 151645]
         positions: torch.Tensor,
         intermediate_tensors=None,
-        inputs_embeds: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,  # [10, 3584]
         **kwargs: object,
     ) -> torch.Tensor:
         use_mot = False

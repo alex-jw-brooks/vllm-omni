@@ -306,6 +306,10 @@ class NaiveCache:
     def __init__(self, num_layers):
         self.key_cache = {k: None for k in range(num_layers)}
         self.value_cache = {k: None for k in range(num_layers)}
+        # Track kv_lens; we need this because we pack the forward passes
+        # for CFG into a single forward call and the kv length may be different,
+        # e.g., due to 0 kvs for text_cfg path and nonzero for others
+        self.key_values_lens: list[int] | None = None
 
     @property
     def num_layers(self):
@@ -431,6 +435,7 @@ class PackedAttentionMoT(nn.Module):
     def _forward_gen(
         self,
         packed_query_sequence: torch.Tensor,
+        query_lens: torch.Tensor,
         packed_query_position_embeddings: torch.Tensor,
         past_key_values: NaiveCache | None,
         packed_vae_token_indexes: torch.Tensor,
@@ -465,7 +470,9 @@ class PackedAttentionMoT(nn.Module):
 
         # Project vae tokens through moe_gen qkv
         vae_qkv, _ = self.qkv_proj_moe_gen(packed_vae_query_sequence)
-        vae_q, vae_k, vae_v = vae_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        vae_q, vae_k, vae_v = vae_qkv.split(
+            [self.q_size, self.kv_size, self.kv_size], dim=-1
+        )  # [12288, 4608] -> [12288, 3584] | [12288, 512], [12288, 512]
 
         # Reshape to (tokens, heads, head_dim)
         text_q = text_q.view(-1, self.num_heads, self.head_dim)
@@ -505,7 +512,9 @@ class PackedAttentionMoT(nn.Module):
         if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
             cache_k = past_key_values.key_cache[self.layer_idx]
             cache_v = past_key_values.value_cache[self.layer_idx]
-            ctx_k = torch.cat([cache_k, text_k], dim=0)
+            ctx_k = torch.cat(
+                [cache_k, text_k], dim=0
+            )  # we are catting a [20,4,128] to [6, 4, 128] -> [26, 4, 128] but not sure why we have 20
             ctx_v = torch.cat([cache_v, text_v], dim=0)
         else:
             ctx_k = text_k
@@ -527,15 +536,63 @@ class PackedAttentionMoT(nn.Module):
                 ),
             )
         else:
-            q = torch.cat([text_q, vae_q], dim=0).unsqueeze(0)
-            k = torch.cat([ctx_k, vae_k], dim=0).unsqueeze(0)
-            v = torch.cat([ctx_v, vae_v], dim=0).unsqueeze(0)
-            attn_out = self.attn_noncausal(q, k, v)
+            num_branches = len(query_lens)
+            text_per_branch = text_q.shape[0] // num_branches
+            vae_per_branch = vae_q.shape[0] // num_branches
 
-        text_len = text_q.shape[0]
-        attn_out = attn_out.squeeze(0)
-        text_attn = attn_out[:text_len].reshape(text_len, self.q_size)
-        vae_attn = attn_out[text_len:].reshape(-1, self.q_size)
+            text_q_parts = text_q.split([text_per_branch] * num_branches)
+            vae_q_parts = vae_q.split([vae_per_branch] * num_branches)
+            text_k_parts = text_k.split([text_per_branch] * num_branches)
+            vae_k_parts = vae_k.split([vae_per_branch] * num_branches)
+            text_v_parts = text_v.split([text_per_branch] * num_branches)
+            vae_v_parts = vae_v.split([vae_per_branch] * num_branches)
+
+            q_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_q_parts, vae_q_parts)])  # [3, 4098, 28, 128]
+
+            if cache_k is not None:
+                kv_lens = getattr(past_key_values, "key_values_lens", None)
+                if kv_lens is None:
+                    per_branch = cache_k.shape[0] // num_branches
+                    kv_lens = [per_branch] * num_branches
+                nonzero = [kv_len for kv_len in kv_lens if kv_len > 0]
+                ck_parts = list(cache_k.split(nonzero)) if nonzero else []
+                cv_parts = list(cache_v.split(nonzero)) if nonzero else []
+                ci = 0
+                k_branches, v_branches = [], []
+                for i in range(num_branches):
+                    kp, vp = [], []
+                    if kv_lens[i] > 0:
+                        kp.append(
+                            ck_parts[ci]
+                        )  # This is causing issues because it's [10, 0, 10], but why do we have uneven kv cache?
+                        vp.append(cv_parts[ci])
+                        ci += 1
+                    kp += [text_k_parts[i], vae_k_parts[i]]
+                    vp += [text_v_parts[i], vae_v_parts[i]]
+                    k_branches.append(torch.cat(kp))
+                    v_branches.append(torch.cat(vp))
+
+                max_k = max(b.shape[0] for b in k_branches)
+                k_4d = cache_k.new_zeros(num_branches, max_k, self.num_kv_heads, self.head_dim)
+                v_4d = cache_v.new_zeros(num_branches, max_k, self.num_kv_heads, self.head_dim)
+                mask = torch.zeros(num_branches, max_k, dtype=torch.bool, device=cache_k.device)
+                for i in range(num_branches):
+                    klen = k_branches[i].shape[0]
+                    pad = max_k - klen
+                    k_4d[i, pad:] = k_branches[i]
+                    v_4d[i, pad:] = v_branches[i]
+                    mask[i, pad:] = True
+                metadata = DiffusionAttentionMetadata(attn_mask=mask) if torch.any(~mask) else None
+            else:
+                k_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_k_parts, vae_k_parts)])
+                v_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_v_parts, vae_v_parts)])
+                metadata = None
+
+            attn_out = self.attn_noncausal(q_4d, k_4d, v_4d, metadata)
+            q_per_branch = int(query_lens[0])
+            attn_out = attn_out.reshape(num_branches, q_per_branch, self.q_size)
+            text_attn = attn_out[:, :text_per_branch].reshape(-1, self.q_size)
+            vae_attn = attn_out[:, text_per_branch:].reshape(-1, self.q_size)
 
         # Apply output projections
         text_out, _ = self.o_proj(text_attn)
@@ -675,6 +732,7 @@ class PackedAttentionMoT(nn.Module):
                 raise ValueError("Generation model for Bagel requires non-causal attention")
             return self._forward_gen(
                 packed_query_sequence=packed_query_sequence,
+                query_lens=query_lens,
                 packed_query_position_embeddings=packed_query_position_embeddings,
                 past_key_values=past_key_values,
                 packed_vae_token_indexes=packed_vae_token_indexes,
@@ -874,7 +932,7 @@ class Qwen2MoTModel(Qwen2PreTrainedModel):
             if mode == "gen":
                 assert packed_vae_token_indexes is not None
                 assert packed_text_indexes is not None
-                extra_inputs.update(
+                extra_inputs.update(  # we have 3 <START> <4096> <END> tokens
                     packed_vae_token_indexes=packed_vae_token_indexes,
                     packed_text_indexes=packed_text_indexes,
                 )
@@ -1583,6 +1641,24 @@ class Bagel(nn.Module):
         }
 
         return generation_input
+
+    @staticmethod
+    def _merge_naive_caches(caches: list) -> NaiveCache:
+        """Merge multiple NaiveCache objects by concatenating KV tensors per layer."""
+        if not caches:
+            return NaiveCache(0)
+
+        num_layers = len(caches[0].key_cache)
+        merged = NaiveCache(num_layers)
+        for layer_idx in range(num_layers):
+            key_parts = [c.key_cache[layer_idx] for c in caches if c.key_cache[layer_idx] is not None]
+            val_parts = [c.value_cache[layer_idx] for c in caches if c.value_cache[layer_idx] is not None]
+            merged.key_cache[layer_idx] = torch.cat(key_parts, dim=0) if key_parts else None
+            merged.value_cache[layer_idx] = torch.cat(val_parts, dim=0) if val_parts else None
+        merged.key_values_lens = [
+            c.key_cache[0].shape[0] if c.key_cache[0] is not None else 0 for c in caches
+        ]
+        return merged
 
     def prepare_start_tokens(self, curr_kvlens, curr_rope, new_token_ids):
         """Prepare start tokens for autoregressive text generation.
