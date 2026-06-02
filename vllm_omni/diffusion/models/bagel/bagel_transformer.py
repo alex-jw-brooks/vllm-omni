@@ -7,7 +7,7 @@
 # Original file was released under Apache-2.0, with the full license text
 # available at https://github.com/huggingface/transformers/blob/main/LICENSE.
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -49,6 +49,7 @@ from vllm_omni.diffusion.layers.mot.mot_layernorm import MoTRMSNorm
 from vllm_omni.diffusion.layers.mot.mot_qkv_parallel_linear import MoTQKVParallelLinear
 from vllm_omni.diffusion.layers.mot.mot_row_parallel_linear import MoTRowParallelLinear
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
+from vllm_omni.diffusion.utils.kv_utils import left_pad_stack
 from vllm_omni.model_executor.layers.timestep_embedding import timestep_embedding
 
 logger = init_logger(__name__)
@@ -340,6 +341,57 @@ class NaiveCache:
         else:
             return 0
 
+    @staticmethod
+    def merge(caches: Sequence["NaiveCache"]) -> "NaiveCache":
+        """Merge per-branch NaiveCaches into one for batched attention;
+        this lets us do the forward passes for CFG in one batched pass,
+        although it's worth noting that this is currently only used
+        for single request. We need this so that gen mode knows the
+        respective kv lengths, and can split things back out as needed.
+        """
+        num_layers = caches[0].num_layers
+        merged = NaiveCache(num_layers)
+        lens = [c.seq_lens for c in caches]
+        merged.key_values_lens = lens
+
+        nonempty = [c for c in caches if c.key_cache[0] is not None]
+        if not nonempty:
+            return merged
+
+        for layer in range(num_layers):
+            merged.key_cache[layer] = torch.cat([c.key_cache[layer] for c in nonempty], dim=0)
+            merged.value_cache[layer] = torch.cat([c.value_cache[layer] for c in nonempty], dim=0)
+
+        return merged
+
+    @staticmethod
+    def split_with_zeros(
+        tensor: torch.Tensor,
+        lengths: Sequence[int],
+    ) -> list[torch.Tensor | None]:
+        """Split tensor by lengths, which may include 0 entries, e.g., for splitting cfg
+        branches out, since text_cfg may have 0 kv length.
+
+        0 lengths will be replaced with None in the returned list.
+        """
+        # Ensure that the lengths are all nonzero and sum to the first dim of our tensor
+        if not all(isinstance(ln, int) and ln >= 0 for ln in lengths):
+            raise ValueError("split lengths must be greater than or equal to zero")
+
+        expected = sum(ln for ln in lengths if ln > 0)
+        if tensor.shape[0] != expected:
+            raise ValueError(f"tensor dim 0 ({tensor.shape[0]}) != sum of nonzero lengths ({expected})")
+
+        result: list[torch.Tensor | None] = []
+        offset = 0
+        for ln in lengths:
+            if ln > 0:
+                result.append(tensor[offset : offset + ln])
+                offset += ln
+            else:
+                result.append(None)
+        return result
+
 
 @dataclass
 class BaseNavitOutputWithPast(ModelOutput):
@@ -527,42 +579,29 @@ class PackedAttentionMoT(nn.Module):
             text_v_parts = text_v.split([text_per_branch] * num_branches)
             vae_v_parts = vae_v.split([vae_per_branch] * num_branches)
 
-            q_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_q_parts, vae_q_parts)])  # [3, 4098, 28, 128]
+            # Query lengths should not be variable since we
+            # just split above, so we just concat + stack to 4D
+            q_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_q_parts, vae_q_parts)])
 
-            if cache_k is not None:
+            if cache_k is not None and cache_v is not None:
                 kv_lens = getattr(past_key_values, "key_values_lens", None)
                 if kv_lens is None:
                     per_branch = cache_k.shape[0] // num_branches
                     kv_lens = [per_branch] * num_branches
-                nonzero = [kv_len for kv_len in kv_lens if kv_len > 0]
-                ck_parts = list(cache_k.split(nonzero)) if nonzero else []
-                cv_parts = list(cache_v.split(nonzero)) if nonzero else []
-                ci = 0
-                k_branches, v_branches = [], []
-                for i in range(num_branches):
-                    kp, vp = [], []
-                    if kv_lens[i] > 0:
-                        kp.append(
-                            ck_parts[ci]
-                        )  # This is causing issues because it's [10, 0, 10], but why do we have uneven kv cache?
-                        vp.append(cv_parts[ci])
-                        ci += 1
-                    kp += [text_k_parts[i], vae_k_parts[i]]
-                    vp += [text_v_parts[i], vae_v_parts[i]]
-                    k_branches.append(torch.cat(kp))
-                    v_branches.append(torch.cat(vp))
 
-                max_k = max(b.shape[0] for b in k_branches)
-                k_4d = cache_k.new_zeros(num_branches, max_k, self.num_kv_heads, self.head_dim)
-                v_4d = cache_v.new_zeros(num_branches, max_k, self.num_kv_heads, self.head_dim)
-                mask = torch.zeros(num_branches, max_k, dtype=torch.bool, device=cache_k.device)
-                for i in range(num_branches):
-                    klen = k_branches[i].shape[0]
-                    pad = max_k - klen
-                    k_4d[i, pad:] = k_branches[i]
-                    v_4d[i, pad:] = v_branches[i]
-                    mask[i, pad:] = True
-                metadata = DiffusionAttentionMetadata(attn_mask=mask) if torch.any(~mask) else None
+                ck_per_branch = NaiveCache.split_with_zeros(cache_k, kv_lens)
+                cv_per_branch = NaiveCache.split_with_zeros(cache_v, kv_lens)
+                k_branches = [
+                    torch.cat([t for t in (ck_per_branch[i], text_k_parts[i], vae_k_parts[i]) if t is not None])
+                    for i in range(num_branches)
+                ]
+                v_branches = [
+                    torch.cat([t for t in (cv_per_branch[i], text_v_parts[i], vae_v_parts[i]) if t is not None])
+                    for i in range(num_branches)
+                ]
+                k_4d, mask = left_pad_stack(k_branches)
+                v_4d, _ = left_pad_stack(v_branches)
+                metadata = DiffusionAttentionMetadata(attn_mask=mask) if mask is not None else None
             else:
                 k_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_k_parts, vae_k_parts)])
                 v_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_v_parts, vae_v_parts)])
@@ -1916,15 +1955,15 @@ class Bagel(nn.Module):
         # Each CFG branch runs its own LLM forward; we just need the
         # per-branch packed_position_ids and past_key_values for
         # ``Bagel.forward`` to dispatch through.
-        cfg_branches: dict | None = None
+        cfg_branch_pids: list[torch.Tensor] | None = None
+        cfg_branch_caches: list[NaiveCache] | None = None
 
         if use_cfg_text:
-            branches_pid = [packed_position_ids, cfg_text_packed_position_ids]
-            branches_cache = [past_key_values, cfg_text_past_key_values]
+            cfg_branch_pids = [packed_position_ids, cfg_text_packed_position_ids]
+            cfg_branch_caches = [past_key_values, cfg_text_past_key_values]
             if use_cfg_img:
-                branches_pid.append(cfg_img_packed_position_ids)
-                branches_cache.append(cfg_img_past_key_values)
-            cfg_branches = {"pids": branches_pid, "caches": branches_cache}
+                cfg_branch_pids.append(cfg_img_packed_position_ids)
+                cfg_branch_caches.append(cfg_img_past_key_values)
 
         if return_trajectory_latents and len(timesteps) > 0:
             trajectory_latents.append(x_t.clone())
@@ -1957,7 +1996,8 @@ class Bagel(nn.Module):
                 cfg_renorm_type=cfg_renorm_type,
                 cfg_text_scale=cfg_text_scale_,
                 cfg_img_scale=cfg_img_scale_,
-                cfg_branches=cfg_branches,
+                cfg_branch_pids=cfg_branch_pids,
+                cfg_branch_caches=cfg_branch_caches,
             )
 
             if scheduler is not None:
@@ -2301,7 +2341,8 @@ class Bagel(nn.Module):
         cfg_renorm_type: str = "global",
         cfg_text_scale: float = 1.0,
         cfg_img_scale: float = 1.0,
-        cfg_branches: dict | None = None,
+        cfg_branch_pids: list[torch.Tensor] | None = None,
+        cfg_branch_caches: list[NaiveCache] | None = None,
     ):
         # Build query sequence (identical for all CFG branches)
         packed_text_embedding = self.language_model.forward(
@@ -2329,7 +2370,7 @@ class Bagel(nn.Module):
         cfg_text_v_t = None
         cfg_img_v_t = None
 
-        if use_cfg and cfg_branches is not None:
+        if use_cfg and cfg_branch_pids is not None and cfg_branch_caches is not None:
             # Sequential per-branch CFG forwards (matches upstream lance.py).
             # The previous batched path concatenated cond + cfg into one LLM
             # forward, but the block-diagonal attention mask was lost when
@@ -2348,12 +2389,10 @@ class Bagel(nn.Module):
                 )
                 return self.llm2vae(out.packed_query_sequence)[packed_vae_token_indexes]
 
-            branches_pids = cfg_branches["pids"]
-            branches_caches = cfg_branches["caches"]
-            v_t = _run_branch(branches_caches[0], branches_pids[0])
-            cfg_text_v_t = _run_branch(branches_caches[1], branches_pids[1])
-            if cfg_img_scale > 1.0 and len(branches_caches) > 2:
-                cfg_img_v_t = _run_branch(branches_caches[2], branches_pids[2])
+            v_t = _run_branch(cfg_branch_caches[0], cfg_branch_pids[0])
+            cfg_text_v_t = _run_branch(cfg_branch_caches[1], cfg_branch_pids[1])
+            if cfg_img_scale > 1.0 and len(cfg_branch_caches) > 2:
+                cfg_img_v_t = _run_branch(cfg_branch_caches[2], cfg_branch_pids[2])
         else:
             # Single forward (no CFG or outside cfg_interval).
             output = self.language_model.forward(
