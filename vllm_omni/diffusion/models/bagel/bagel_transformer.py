@@ -509,6 +509,7 @@ class PackedAttentionMoT(nn.Module):
         vae_v = vae_v.to(torch.bfloat16)
 
         # Build joint K/V: [kv_cache, text_markers] (replicated across SP ranks)
+        cache_k = cache_v = None
         if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
             cache_k = past_key_values.key_cache[self.layer_idx]
             cache_v = past_key_values.value_cache[self.layer_idx]
@@ -1655,9 +1656,7 @@ class Bagel(nn.Module):
             val_parts = [c.value_cache[layer_idx] for c in caches if c.value_cache[layer_idx] is not None]
             merged.key_cache[layer_idx] = torch.cat(key_parts, dim=0) if key_parts else None
             merged.value_cache[layer_idx] = torch.cat(val_parts, dim=0) if val_parts else None
-        merged.key_values_lens = [
-            c.key_cache[0].shape[0] if c.key_cache[0] is not None else 0 for c in caches
-        ]
+        merged.key_values_lens = [c.key_cache[0].shape[0] if c.key_cache[0] is not None else 0 for c in caches]
         return merged
 
     def prepare_start_tokens(self, curr_kvlens, curr_rope, new_token_ids):
