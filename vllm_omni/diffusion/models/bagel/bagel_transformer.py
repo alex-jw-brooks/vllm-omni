@@ -1520,6 +1520,7 @@ class Bagel(nn.Module):
             newlens.append(curr_kvlen + num_img_tokens + 2)
             new_rope.append(curr_position_id + 1)
 
+        # TODO - 棄用 (deprecated) kwargs should just be removed here so we do not need to pop them later
         generation_input = {
             "packed_text_ids": torch.tensor(packed_text_ids, dtype=torch.long),
             "packed_text_indexes": torch.tensor(packed_text_indexes, dtype=torch.long),
@@ -1644,22 +1645,6 @@ class Bagel(nn.Module):
         }
 
         return generation_input
-
-    @staticmethod
-    def _merge_naive_caches(caches: list) -> NaiveCache:
-        """Merge multiple NaiveCache objects by concatenating KV tensors per layer."""
-        if not caches:
-            return NaiveCache(0)
-
-        num_layers = len(caches[0].key_cache)
-        merged = NaiveCache(num_layers)
-        for layer_idx in range(num_layers):
-            key_parts = [c.key_cache[layer_idx] for c in caches if c.key_cache[layer_idx] is not None]
-            val_parts = [c.value_cache[layer_idx] for c in caches if c.value_cache[layer_idx] is not None]
-            merged.key_cache[layer_idx] = torch.cat(key_parts, dim=0) if key_parts else None
-            merged.value_cache[layer_idx] = torch.cat(val_parts, dim=0) if val_parts else None
-        merged.key_values_lens = [c.key_cache[0].shape[0] if c.key_cache[0] is not None else 0 for c in caches]
-        return merged
 
     def prepare_start_tokens(self, curr_kvlens, curr_rope, new_token_ids):
         """Prepare start tokens for autoregressive text generation.

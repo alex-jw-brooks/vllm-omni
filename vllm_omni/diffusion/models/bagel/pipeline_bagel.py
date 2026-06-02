@@ -606,7 +606,7 @@ class BagelPipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipelineProf
 
             # cfg_text_context: update with negative prompt (no text condition).
             # When empty, keep cfg_text_context as-is (kv_lens=0) to match
-            # original BAGEL; _merge_naive_caches handles None KV entries.
+            # original BAGEL.
             neg_prompt = extra_args.get("negative_prompt", "")
             if neg_prompt:
                 neg_input, neg_newlens, neg_rope = self.bagel.prepare_prompts(
