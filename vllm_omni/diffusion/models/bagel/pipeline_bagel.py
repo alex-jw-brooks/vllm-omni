@@ -553,6 +553,8 @@ class BagelPipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipelineProf
                     for k, v in gen_input_img.items():
                         if torch.is_tensor(v):
                             gen_input_img[k] = v.to(self.device)
+                    for k in ("packed_indexes", "packed_key_value_indexes", "key_values_lens"):
+                        gen_input_img.pop(k, None)
                     with torch.autocast(
                         device_type=self.device.type,
                         enabled=self.device.type != "cpu",
