@@ -395,6 +395,7 @@ class BagelPipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipelineProf
         injected_kv = req.sampling_params.past_key_values
         if injected_kv is not None:
             logger.info("Using injected KV Cache (direct)")
+            injected_kv = NaiveCache.from_object(injected_kv)
             gen_context["past_key_values"] = injected_kv
             seq_len = injected_kv.key_cache[0].shape[0]
             gen_context["kv_lens"] = [seq_len]
@@ -431,6 +432,7 @@ class BagelPipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipelineProf
                 )
 
             if cfg_text_kv is not None:
+                cfg_text_kv = NaiveCache.from_object(cfg_text_kv)
                 cfg_text_seq_len = cfg_text_kv.key_cache[0].shape[0]
                 cfg_text_context["past_key_values"] = cfg_text_kv
                 cfg_text_context["kv_lens"] = [cfg_text_seq_len]
@@ -458,6 +460,7 @@ class BagelPipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipelineProf
                 else:
                     cfg_img_context["ropes"] = [cfg_img_seq_len]
             else:
+                cfg_img_kv = NaiveCache.from_object(cfg_img_kv)
                 cfg_img_seq_len = cfg_img_kv.key_cache[0].shape[0]
                 cfg_img_context["past_key_values"] = cfg_img_kv
                 cfg_img_context["kv_lens"] = [cfg_img_seq_len]

@@ -341,6 +341,25 @@ class NaiveCache:
         else:
             return 0
 
+    @classmethod
+    def from_object(cls, obj) -> "NaiveCache":
+        """Convert a duck-typed cache (e.g., SimpleNamespace from KV transfer)
+        to NaiveCache; in the future, we should find a better way to handle this,
+        e.g., a model agnostic abstraction for key cache transfer instead of having
+        this cache live in bagel.
+
+        NOTE: If a NaiveCache is provided, the object is just returned. Otherwise,
+        we enumerate over the key/value cache values and map layer indices to the
+        corresponding tensors.
+        """
+        if isinstance(obj, cls):
+            return obj
+        cache = cls(len(obj.key_cache))
+        for i, (k, v) in enumerate(zip(obj.key_cache, obj.value_cache, strict=True)):
+            cache.key_cache[i] = k
+            cache.value_cache[i] = v
+        return cache
+
     @staticmethod
     def merge(caches: Sequence["NaiveCache"]) -> "NaiveCache":
         """Merge per-branch NaiveCaches into one for batched attention;
@@ -2371,28 +2390,36 @@ class Bagel(nn.Module):
         cfg_img_v_t = None
 
         if use_cfg and cfg_branch_pids is not None and cfg_branch_caches is not None:
-            # Sequential per-branch CFG forwards (matches upstream lance.py).
-            # The previous batched path concatenated cond + cfg into one LLM
-            # forward, but the block-diagonal attention mask was lost when
-            # PR #3728 dropped flash_attn_varlen, so branches leaked into
-            # each other.  Running each branch through its own forward is
-            # numerically identical to upstream.
-            def _run_branch(branch_pkv, branch_pids):
-                out = self.language_model.forward(
-                    packed_query_sequence=packed_sequence,
-                    query_lens=packed_seqlens,
-                    packed_query_position_ids=branch_pids,
-                    past_key_values=branch_pkv,
-                    update_past_key_values=False,
-                    is_causal=False,
-                    **extra_inputs,
-                )
-                return self.llm2vae(out.packed_query_sequence)[packed_vae_token_indexes]
+            num_branches = len(cfg_branch_pids)
+            seq_len = int(packed_seqlens.sum())
 
-            v_t = _run_branch(cfg_branch_caches[0], cfg_branch_pids[0])
-            cfg_text_v_t = _run_branch(cfg_branch_caches[1], cfg_branch_pids[1])
-            if cfg_img_scale > 1.0 and len(cfg_branch_caches) > 2:
-                cfg_img_v_t = _run_branch(cfg_branch_caches[2], cfg_branch_pids[2])
+            batched_sequence = packed_sequence.repeat(num_branches, 1)
+            batched_vae_indexes = torch.cat([packed_vae_token_indexes + i * seq_len for i in range(num_branches)])
+            batched_position_ids = torch.cat(cfg_branch_pids)
+            batched_seqlens = packed_seqlens.repeat(num_branches)
+            merged_cache = NaiveCache.merge(cfg_branch_caches)
+
+            if self.use_moe:
+                batched_text_indices = torch.cat([packed_text_indexes + i * seq_len for i in range(num_branches)])
+                extra_inputs["packed_vae_token_indexes"] = batched_vae_indexes
+                extra_inputs["packed_text_indexes"] = batched_text_indices
+
+            output = self.language_model.forward(
+                packed_query_sequence=batched_sequence,
+                query_lens=batched_seqlens,
+                packed_query_position_ids=batched_position_ids,
+                past_key_values=merged_cache,
+                update_past_key_values=False,
+                is_causal=False,
+                **extra_inputs,
+            )
+
+            all_vae_v_t = self.llm2vae(output.packed_query_sequence)[batched_vae_indexes]
+            vae_per_branch = packed_vae_token_indexes.shape[0]
+            branch_v_ts = all_vae_v_t.split(vae_per_branch)
+            v_t = branch_v_ts[0]
+            cfg_text_v_t = branch_v_ts[1]
+            cfg_img_v_t = branch_v_ts[2] if len(branch_v_ts) > 2 else None
         else:
             # Single forward (no CFG or outside cfg_interval).
             output = self.language_model.forward(
