@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Unit tests for NaiveCache merge/split logic used in batched CFG."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -26,9 +28,6 @@ def _make_cache(num_layers, seq_len, num_kv_heads=NUM_KV_HEADS, head_dim=HEAD_DI
     return cache
 
 
-# ── Basics ──
-
-
 def test_init_creates_none_entries():
     """Ensure the NaiveCache is initialized with None values per layer."""
     cache = NaiveCache(NUM_LAYERS)
@@ -46,9 +45,7 @@ def test_seq_lens_empty(seq_len):
     assert cache.num_layers == NUM_LAYERS
 
 
-# ── Merge ──
-
-
+### Merge tests
 def test_merge_two_equal_length():
     """Ensure that we can merge two NaiveCaches that are identically shaped."""
     c0 = _make_cache(NUM_LAYERS, seq_len=5, seed=0)
@@ -113,9 +110,7 @@ def test_merge_preserves_dtype():
     assert merged.value_cache[0].dtype == torch.bfloat16
 
 
-# ── split_with_zeros ──
-
-
+### Split tests
 def test_split_all_nonzero():
     """Ensure NaiveCache splits in the simple case (all lens nonzero)."""
     t = torch.randn(15, NUM_KV_HEADS, HEAD_DIM)
@@ -162,6 +157,39 @@ def test_split_preserves_dtype():
     assert parts[1].dtype == torch.bfloat16
 
 
+### from_object tests (for kv cache transfer)
+def test_from_object_passthrough():
+    """Ensure a NaiveCache input is returned as is."""
+    cache = _make_cache(NUM_LAYERS, seq_len=5)
+    assert NaiveCache.from_object(cache) is cache
+
+
+def test_from_object_converts_simple_namespace():
+    """Ensure SimpleNamespace with list-based caches converts to NaiveCache."""
+    keys = [torch.randn(5, NUM_KV_HEADS, HEAD_DIM) for _ in range(NUM_LAYERS)]
+    values = [torch.randn(5, NUM_KV_HEADS, HEAD_DIM) for _ in range(NUM_LAYERS)]
+    ns = SimpleNamespace(key_cache=keys, value_cache=values)
+
+    cache = NaiveCache.from_object(ns)
+
+    assert isinstance(cache, NaiveCache)
+    assert cache.num_layers == NUM_LAYERS
+    for i in range(NUM_LAYERS):
+        assert torch.equal(cache.key_cache[i], keys[i])
+        assert torch.equal(cache.value_cache[i], values[i])
+
+
+def test_from_object_mismatched_lengths_raises():
+    """Ensure mismatched key/value cache lengths raise due to strict=True in zip."""
+    keys = [torch.randn(5, NUM_KV_HEADS, HEAD_DIM) for _ in range(2)]
+    values = [torch.randn(5, NUM_KV_HEADS, HEAD_DIM) for _ in range(3)]
+    ns = SimpleNamespace(key_cache=keys, value_cache=values)
+
+    with pytest.raises(ValueError):
+        NaiveCache.from_object(ns)
+
+
+### End to end test for split / merge
 def test_round_trip_two_populated():
     """Roundtrip test for merging and resplitting two simple caches."""
     c0 = _make_cache(NUM_LAYERS, seq_len=5, seed=0)
