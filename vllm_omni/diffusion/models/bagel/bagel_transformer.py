@@ -1578,7 +1578,6 @@ class Bagel(nn.Module):
             newlens.append(curr_kvlen + num_img_tokens + 2)
             new_rope.append(curr_position_id + 1)
 
-        # TODO - 棄用 (deprecated) kwargs should just be removed here so we do not need to pop them later
         generation_input = {
             "packed_text_ids": torch.tensor(packed_text_ids, dtype=torch.long),
             "packed_text_indexes": torch.tensor(packed_text_indexes, dtype=torch.long),
