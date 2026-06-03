@@ -563,9 +563,7 @@ class PackedAttentionMoT(nn.Module):
         if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
             cache_k = past_key_values.key_cache[self.layer_idx]
             cache_v = past_key_values.value_cache[self.layer_idx]
-            ctx_k = torch.cat(
-                [cache_k, text_k], dim=0
-            )  # we are catting a [20,4,128] to [6, 4, 128] -> [26, 4, 128] but not sure why we have 20
+            ctx_k = torch.cat([cache_k, text_k], dim=0)
             ctx_v = torch.cat([cache_v, text_v], dim=0)
         else:
             ctx_k = text_k
@@ -965,7 +963,7 @@ class Qwen2MoTModel(Qwen2PreTrainedModel):
             if mode == "gen":
                 assert packed_vae_token_indexes is not None
                 assert packed_text_indexes is not None
-                extra_inputs.update(  # we have 3 <START> <4096> <END> tokens
+                extra_inputs.update(
                     packed_vae_token_indexes=packed_vae_token_indexes,
                     packed_text_indexes=packed_text_indexes,
                 )
