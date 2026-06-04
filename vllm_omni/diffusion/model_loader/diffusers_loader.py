@@ -244,7 +244,7 @@ class DiffusersPipelineLoader:
         return prefixed_weights_iterator
 
     def _get_source_quant_config(self, source: "ComponentSource") -> object | None:
-        quant_config = self.od_config.quantization_config
+        quant_config = self.quant_config
         if hasattr(quant_config, "resolve"):
             return quant_config.resolve(source.prefix.rstrip("."))
         return quant_config
@@ -320,8 +320,8 @@ class DiffusersPipelineLoader:
         # For online quantization, load on device so quantization can run on accelerator,
         # then move back to CPU afterward.
         offload_after_quant = False
-        if load_device == "cpu" and self.od_config.quantization_config is not None and device is not None:
-            quant_cfg = self.od_config.quantization_config
+        if load_device == "cpu" and self.quant_config is not None and device is not None:
+            quant_cfg = self.quant_config
             is_offline = getattr(quant_cfg, "data_type", None) == "mx_fp" or getattr(
                 quant_cfg, "is_checkpoint_quantized", False
             )
@@ -451,7 +451,7 @@ class DiffusersPipelineLoader:
         are logged as a warning.  Any *other* missing weight raises
         ``ValueError`` regardless of quantization.
         """
-        if self.od_config.quantization_config is None:
+        if self.quant_config is None:
             raise ValueError(
                 "The quantization config is None, and the following weights "
                 f"were not initialized from checkpoint: {weights_not_loaded}"
@@ -582,7 +582,7 @@ class DiffusersPipelineLoader:
         self,
         load_format: str,
         target_device: torch.device,
-        custom_pipeline_name: str | None,
+        custom_pipeline_name: str | type[nn.Module] | None = None,
         is_hsdp: bool = False,
     ) -> nn.Module:
         """Initialize the model from a specified load format."""
