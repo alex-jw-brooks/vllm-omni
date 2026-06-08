@@ -6,6 +6,8 @@ import pytest
 
 from vllm_omni.utils.dataclass_utils import trackable, trackable_to_kwargs
 
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 def test_trackable_args():
     """Ensure we can track classes generically [positional args]."""
