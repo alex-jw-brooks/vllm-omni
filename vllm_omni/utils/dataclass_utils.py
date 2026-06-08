@@ -29,3 +29,9 @@ def trackable(cls: type[_T]) -> type[_T]:
     # Replace __init__ - type: ignore needed due to limitations in typing dynamic method replacement
     cls.__init__ = new_init  # type: ignore[method-assign]
     return cls
+
+
+def trackable_to_kwargs(obj):
+    if not hasattr(obj, "_init_kwargs"):
+        raise TypeError(f"Provided object of type {type(obj)} is not registered as trackable")
+    return {kwarg: getattr(obj, kwarg) for kwarg in obj._init_kwargs}
