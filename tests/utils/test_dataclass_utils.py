@@ -10,46 +10,35 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 def test_trackable_args():
-    """Ensure we can track classes generically [positional args]."""
+    """Ensure we can track dataclasses created with positional args."""
 
     @trackable
-    class NotADataClass:
-        def __init__(self, foo, bar, baz=128, *args, **kwargs):
-            pass
+    @dataclass
+    class MyDataClass:
+        foo: int = 0
+        bar: int = 0
+        baz: int = 128
 
-    obj = NotADataClass(32, 64)
-    # Only foo / bar were initially passed
+    obj = MyDataClass(32, 64)
     assert obj._init_kwargs == {"foo", "bar"}
 
 
 def test_trackable_kwargs():
-    """Ensure we can track classes generically [kwargs]."""
+    """Ensure we can track dataclasses created with keyword args."""
 
     @trackable
-    class NotADataClass:
-        def __init__(self, foo, bar, baz=128, *args, **kwargs):
-            pass
+    @dataclass
+    class MyDataClass:
+        foo: int = 0
+        bar: int = 0
+        baz: int = 128
 
-    obj = NotADataClass(foo=32, bar=64)
-    # Only foo / bar were initially passed
+    obj = MyDataClass(foo=32, bar=64)
     assert obj._init_kwargs == {"foo", "bar"}
 
 
 def test_trackable_args_and_kwargs():
-    """Ensure we can track classes generically [kwargs]."""
-
-    @trackable
-    class NotADataClass:
-        def __init__(self, foo, bar, baz=128, *args, **kwargs):
-            pass
-
-    obj = NotADataClass(32, bar=64)
-    # Only foo / bar were initially passed
-    assert obj._init_kwargs == {"foo", "bar"}
-
-
-def test_trackable_dataclass():
-    """Ensure we can track dataclasses, since is the most useful case."""
+    """Ensure we can track dataclasses created with positional & keyword args."""
 
     @trackable
     @dataclass
@@ -60,6 +49,17 @@ def test_trackable_dataclass():
 
     obj = MyDataClass(32, bar=64)
     assert obj._init_kwargs == {"foo", "bar"}
+
+
+def test_trackable_rejects_non_dataclass():
+    """Ensure @trackable raises TypeError on non-dataclass classes."""
+
+    with pytest.raises(TypeError, match="currently requires classes to be dataclasses"):
+
+        @trackable
+        class NotADataClass:
+            def __init__(self, foo, bar):
+                pass
 
 
 def test_trackable_to_kwargs():

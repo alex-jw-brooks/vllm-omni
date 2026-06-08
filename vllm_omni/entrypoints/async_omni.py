@@ -179,7 +179,7 @@ class AsyncOmni(EngineClient, OmniBase):
     def from_engine_args(
         cls,
         engine_args: OmniEngineArgs,
-    ):
+    ) -> AsyncOmni:
         # Drops non-explicit defaults; this is functionally the same
         # as the way in which TrackingArgumentParser filters omitted
         # kwargs to avoid clobbering config defaults

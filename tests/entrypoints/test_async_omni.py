@@ -12,6 +12,7 @@ from tests.helpers.stage_config import get_deploy_config_path
 from vllm_omni.engine.arg_utils import OmniEngineArgs
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.utils.dataclass_utils import Trackable
 
 pytestmark = [pytest.mark.core_model]
 
@@ -389,6 +390,7 @@ async def test_omni_generate_request_id():
 def test_from_engine_args_forwarding():
     """Ensure from_engine_args correctly forwards explicit positional args or kwargs."""
     args = OmniEngineArgs("my-model", stage_id=1)
+    assert isinstance(args, Trackable)
     with patch.object(AsyncOmni, "__init__", return_value=None) as mock_init:
         AsyncOmni.from_engine_args(args)
         mock_init.assert_called_once_with(model="my-model", stage_id=1)

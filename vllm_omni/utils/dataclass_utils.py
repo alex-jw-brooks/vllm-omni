@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import dataclasses
 import inspect
 from collections.abc import Callable
 from functools import wraps
@@ -25,6 +26,12 @@ def trackable(cls: type[_T]) -> type[_T]:
     type checkers while adding runtime tracking of explicitly-passed positional
     and keyword arguments.
     """
+
+    # Currently we explicitly require anything @trackable to be a dataclass
+    # so that we can use .bind on the signature (i.e., don't have to handle
+    # variadic args), since everything we need it on is a dataclass anyway.
+    if not dataclasses.is_dataclass(cls):
+        raise TypeError(f"@trackable currently requires classes to be dataclasses, but {cls.__name__} is not one")
     original_init: Callable[..., None] = cls.__init__
     sig = inspect.signature(original_init)
 
@@ -41,7 +48,7 @@ def trackable(cls: type[_T]) -> type[_T]:
 
 
 def trackable_to_kwargs(obj: Trackable) -> dict[str, Any]:
-    """Assuming an object is wrapped as Trackable, return the filterered kwargs.
+    """Assuming an object is wrapped as Trackable, return the filtered kwargs.
     This is analogous to what TrackingArgumentParser does to an argparse namespace,
     but in application to classes like Dataclasses, etc.
     """
