@@ -4,19 +4,26 @@
 import inspect
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 _T = TypeVar("_T")
+
+
+# Protocol wrapper for static analysis
+@runtime_checkable
+class Trackable(Protocol):
+    _init_kwargs: set[str]
 
 
 def trackable(cls: type[_T]) -> type[_T]:
     """Decorator that wraps __init__ to track which args/kwargs were explicitly
     passed by the caller without special handling. This is useful for a variety
-    of situations, e.g., merge a user's passed sampling params with the default
+    of situations, e.g., merging a user's passed sampling params with the default
     values provided by a pipeline.
 
     NOTE: This decorator preserves the original __init__ signature for
-    type checkers while adding runtime tracking of explicitly-passed kwargs.
+    type checkers while adding runtime tracking of explicitly-passed positional
+    and keyword arguments.
     """
     original_init: Callable[..., None] = cls.__init__
     sig = inspect.signature(original_init)
@@ -29,12 +36,15 @@ def trackable(cls: type[_T]) -> type[_T]:
         bound.arguments.pop("self", None)
         self._init_kwargs: set[str] = set(bound.arguments)  # type: ignore[attr-defined]
 
-    # Replace __init__ - type: ignore needed due to limitations in typing dynamic method replacement
-    cls.__init__ = new_init  # type: ignore[method-assign]
+    cls.__init__ = new_init
     return cls
 
 
-def trackable_to_kwargs(obj):
-    if not hasattr(obj, "_init_kwargs"):
+def trackable_to_kwargs(obj: Trackable) -> dict[str, Any]:
+    """Assuming an object is wrapped as Trackable, return the filterered kwargs.
+    This is analogous to what TrackingArgumentParser does to an argparse namespace,
+    but in application to classes like Dataclasses, etc.
+    """
+    if not isinstance(obj, Trackable):
         raise TypeError(f"Provided object of type {type(obj)} is not registered as trackable")
     return {kwarg: getattr(obj, kwarg) for kwarg in obj._init_kwargs}
