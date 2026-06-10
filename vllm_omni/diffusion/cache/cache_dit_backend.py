@@ -871,6 +871,7 @@ def enable_cache_for_bagel(pipeline: Any, cache_config: Any) -> refresh_cache_co
         get_pipeline_transformer=lambda pipeline: pipeline.language_model.model,
     )
 
+
 class SensenovaCachedBlocks(CachedBlocks_Pattern_3_4_5):
     """
     Custom CachedBlocks for SenseNova-U1 that only caches image-token hidden
@@ -1027,8 +1028,6 @@ def enable_cache_for_sensenova_u1(pipeline: Any, cache_config: Any) -> Callable[
     return refresh_cache_context
 
 
-
-
 def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
     """Enable cache-dit for Cosmos3.
 
@@ -1112,11 +1111,10 @@ CUSTOM_DIT_ENABLERS.update(
     {
         "Wan22Pipeline": enable_cache_for_wan22,
         "Wan22I2VPipeline": enable_cache_for_wan22,
+        "Wan22TI2VPipeline": enable_cache_for_wan22,
         "Wan22S2VPipeline": enable_cache_for_wan22_s2v,
         "BagelPipeline": enable_cache_for_bagel,
         "SenseNovaU1Pipeline": enable_cache_for_sensenova_u1,
-        "Wan22TI2VPipeline": enable_cache_for_wan22,
-        "BagelPipeline": enable_cache_for_bagel,
         "Cosmos3OmniDiffusersPipeline": enable_cache_for_cosmos3,
     }
 )
