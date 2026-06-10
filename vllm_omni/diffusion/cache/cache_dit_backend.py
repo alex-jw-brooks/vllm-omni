@@ -187,8 +187,13 @@ def enable_cache_for_dit(
 
 
 ### Complex / custom enablers for DiT cache
-# NOTE: This case is rare (currently only Wan / Bagel); most DiT cache
-# enablement should be done by setting the _cache_dit_adapter_config in the models.
+# NOTE (Alex): This case is rare; you should only really need to do this if you have a dual transformer
+# architecture, since it hasn't been handled generically yet, or if the model class has unique attributes
+# that it sets during Cache DiT enablement.
+#
+# For the vast majority of models, you should only need to add a _cache_dit_adapter_config attribute
+# to the Transformer class, which controls the forward pattern, whether or not we have separate CFG,
+# and so on.
 
 
 # from https://github.com/vipshop/cache-dit/pull/542
@@ -837,54 +842,6 @@ class BagelCachedAdapter(CachedAdapter):
         return total_cached_blocks
 
 
-def enable_cache_for_bagel(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
-    """Enable cache-dit for Bagel model (via OmniDiffusion pipeline).
-
-    Args:
-        pipeline: The OmniDiffusion pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-
-    Returns:
-        A refresh function that can be called to update cache context with new num_inference_steps.
-    """
-    # Build DBCacheConfig
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    # Build calibrator config if TaylorSeer is enabled
-    calibrator_config = _resolve_calibrator_config(cache_config)
-
-    # Access the transformer: BagelPipeline -> Qwen2MoTForCausalLM -> Qwen2MoTModel
-    # BagelPipeline has self.language_model which is Qwen2MoTForCausalLM
-    # Qwen2MoTForCausalLM has self.model which is Qwen2MoTModel
-    transformer = pipeline.language_model.model
-
-    logger.info(
-        f"Enabling cache-dit on Bagel transformer: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
-    )
-
-    # Enable cache-dit on the transformer
-    # Pattern_0 corresponds to (hidden_states, encoder_hidden_states) input, output
-    # Custom adapter for Bagel to handle NaiveCache correctly
-    # from vllm_omni.diffusion.cache.bagel_cache_adapter import BagelCachedAdapter # No longer needed
-    BagelCachedAdapter.apply(
-        BlockAdapter(
-            transformer=transformer,
-            blocks=transformer.layers,
-            forward_pattern=ForwardPattern.Pattern_0,
-        ),
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
-    )
-
-    return build_cache_context_refresh(
-        cache_config,
-        get_pipeline_transformer=lambda pipeline: pipeline.language_model.model,
-    )
-
-
 class SensenovaCachedBlocks(CachedBlocks_Pattern_3_4_5):
     """
     Custom CachedBlocks for SenseNova-U1 that only caches image-token hidden
@@ -1005,7 +962,6 @@ CUSTOM_DIT_ENABLERS.update(
         "Wan22I2VPipeline": enable_cache_for_wan22,
         "Wan22TI2VPipeline": enable_cache_for_wan22,
         "Wan22S2VPipeline": enable_cache_for_wan22_s2v,
-        "BagelPipeline": enable_cache_for_bagel,
         "Cosmos3OmniDiffusersPipeline": enable_cache_for_cosmos3,
     }
 )
