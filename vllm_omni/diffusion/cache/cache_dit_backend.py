@@ -59,9 +59,12 @@ CUSTOM_DIT_ENABLERS: dict[str, Callable] = {}
 
 # Small helper to centralize cache-dit summaries.
 def cache_summary(pipeline: Any, details: bool = True) -> None:
-    cache_dit.summary(pipeline.transformer, details=details)
-    if hasattr(pipeline, "transformer_2"):
+    if hasattr(pipeline, "transformer"):
+        cache_dit.summary(pipeline.transformer, details=details)
+    elif hasattr(pipeline, "transformer_2"):
         cache_dit.summary(pipeline.transformer_2, details=details)
+    else:
+        logger.warning("CacheDiT summary failed; this pipeline has no defined transformer attribute")
 
 
 def default_get_pipeline_transformer(pipeline: Any) -> Any:
