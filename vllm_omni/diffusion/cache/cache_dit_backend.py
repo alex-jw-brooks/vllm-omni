@@ -63,6 +63,14 @@ def cache_summary(pipeline: Any, details: bool = True) -> None:
 
 
 def default_get_pipeline_transformer(pipeline: Any) -> Any:
+    # NOTE: SenseNova is a special case because it doesn't have a .transformer attribute,
+    # which is assumed in a few places in the current code. This is imported here to avoid
+    # circular imports and should be cleaned up in the future.
+    from vllm_omni.diffusion.models.sensenova_u1.pipeline_sensenova_u1 import SenseNovaU1Pipeline
+
+    if isinstance(pipeline, SenseNovaU1Pipeline):
+        return pipeline.language_model.model
+
     return pipeline.transformer
 
 
@@ -959,75 +967,6 @@ class SensenovaCachedAdapter(CachedAdapter):
         return total_cached_blocks
 
 
-def enable_cache_for_sensenova_u1(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
-    """Enable cache-dit for SenseNova-U1 model.
-
-    Args:
-        pipeline: The SenseNova-U1 pipeline instance.
-        cache_config: DiffusionCacheConfig instance with cache configuration.
-
-    Returns:
-        A refresh function that can be called to update cache context with new num_inference_steps.
-    """
-    transformer = getattr(getattr(pipeline, "language_model", None), "model", None)
-    if transformer is None or not hasattr(transformer, "layers"):
-        raise ValueError("SenseNovaU1Pipeline cache-dit expects pipeline.language_model.model.layers.")
-
-    # Build DBCacheConfig
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    modifier = ParamsModifier(
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
-    )
-
-    logger.info(
-        f"Enabling cache-dit on SenseNova-U1 decoder layers: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
-    )
-
-    SensenovaCachedAdapter.apply(
-        BlockAdapter(
-            transformer=transformer,
-            blocks=transformer.layers,
-            forward_pattern=ForwardPattern.Pattern_3,
-            params_modifiers=[modifier],
-            check_forward_pattern=True,
-            has_separate_cfg=True,
-        ),
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
-    )
-
-    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
-        transformer = pipeline.language_model.model
-        if cache_config.scm_steps_mask_policy is None:
-            cache_dit.refresh_context(transformer, num_inference_steps=num_inference_steps, verbose=verbose)
-        else:
-            cache_dit.refresh_context(
-                transformer,
-                cache_config=DBCacheConfig().reset(
-                    num_inference_steps=num_inference_steps,
-                    steps_computation_mask=cache_dit.steps_mask(
-                        mask_policy=cache_config.scm_steps_mask_policy,
-                        total_steps=num_inference_steps,
-                    ),
-                    steps_computation_policy=cache_config.scm_steps_policy,
-                ),
-                verbose=verbose,
-            )
-
-    return refresh_cache_context
-
-
 def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
     """Enable cache-dit for Cosmos3.
 
@@ -1062,7 +1001,6 @@ CUSTOM_DIT_ENABLERS.update(
         "Wan22TI2VPipeline": enable_cache_for_wan22,
         "Wan22S2VPipeline": enable_cache_for_wan22_s2v,
         "BagelPipeline": enable_cache_for_bagel,
-        "SenseNovaU1Pipeline": enable_cache_for_sensenova_u1,
         "Cosmos3OmniDiffusersPipeline": enable_cache_for_cosmos3,
     }
 )
@@ -1110,8 +1048,6 @@ class CacheDiTBackend(CacheBackend):
         """If a module defines `_cache_dit_adapter_config`, build the corresponding
         block adapter.
         """
-        # TODO (Alex): Handle this more flexibly after PR lands:
-        # https://github.com/vllm-project/vllm-omni/pull/2811
         transformer = default_get_pipeline_transformer(pipeline)
 
         adapter_cfg: CacheDiTAdapterConfig | None = getattr(transformer, "_cache_dit_adapter_config", None)
