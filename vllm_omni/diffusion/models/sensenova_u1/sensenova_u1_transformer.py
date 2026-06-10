@@ -31,7 +31,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
-from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig
+from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig, SensenovaCachedAdapter
 
 
 @dataclass
@@ -613,6 +613,7 @@ class SenseNovaU1Model(nn.Module):
             "layers": ForwardPattern.Pattern_3,
         },
         has_separate_cfg=True,
+        cached_adapter_cls=SensenovaCachedAdapter,
     )
 
     def __init__(self, config, quant_config=None, prefix: str = ""):

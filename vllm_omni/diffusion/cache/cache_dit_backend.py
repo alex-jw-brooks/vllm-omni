@@ -48,6 +48,7 @@ class CacheDiTAdapterConfig:
 
     block_forward_patterns: dict[str, ForwardPattern]
     has_separate_cfg: bool = False
+    cached_adapter_cls: type[CachedAdapter] | None = None
 
 
 # Registry of custom cache-dit enablers for specific models
@@ -63,14 +64,6 @@ def cache_summary(pipeline: Any, details: bool = True) -> None:
 
 
 def default_get_pipeline_transformer(pipeline: Any) -> Any:
-    # NOTE: SenseNova is a special case because it doesn't have a .transformer attribute,
-    # which is assumed in a few places in the current code. This is imported here to avoid
-    # circular imports and should be cleaned up in the future.
-    from vllm_omni.diffusion.models.sensenova_u1.pipeline_sensenova_u1 import SenseNovaU1Pipeline
-
-    if isinstance(pipeline, SenseNovaU1Pipeline):
-        return pipeline.language_model.model
-
     return pipeline.transformer
 
 
@@ -146,6 +139,7 @@ def enable_cache_for_dit(
     pipeline: Any,
     cache_config: Any,
     block_adapter: BlockAdapter | None = None,
+    adapter_cls: type[CachedAdapter] | None = None,
 ) -> refresh_cache_context_func:
     """Enable cache-dit for regular single-transformer DiT models.
 
@@ -153,6 +147,7 @@ def enable_cache_for_dit(
         pipeline: The diffusion pipeline instance.
         cache_config: DiffusionCacheConfig instance with cache configuration.
         block_adapter: Custom block adapters for specific model architectures.
+        adapter_cls: Custom cached adapter class for specific model architectures.
 
     Returns:
         A refresh function that can be called to update cache context with new num_inference_steps.
@@ -172,11 +167,21 @@ def enable_cache_for_dit(
 
     # Enable cache-dit on the transformer
     transformer = default_get_pipeline_transformer(pipeline)
-    cache_dit.enable_cache(
-        transformer if block_adapter is None else block_adapter,
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
-    )
+
+    # If we have a custom cached adapter subclass, call apply directly
+    if adapter_cls is not None:
+        adapter_cls.apply(
+            transformer if block_adapter is None else block_adapter,
+            cache_config=db_cache_config,
+            calibrator_config=calibrator_config,
+        )
+    else:
+        # Otherwise, call enable cache, which will call CachedAdapter.apply for us
+        cache_dit.enable_cache(
+            transformer if block_adapter is None else block_adapter,
+            cache_config=db_cache_config,
+            calibrator_config=calibrator_config,
+        )
 
     return build_cache_context_refresh(cache_config)
 
@@ -1068,6 +1073,17 @@ class CacheDiTBackend(CacheBackend):
         )
         return block_adapter
 
+    @staticmethod
+    def maybe_get_cached_adapter_cls(pipeline) -> type[CachedAdapter] | None:
+        """If a module has a custom cached adapter type registered, e.g., SenseNova, retrieve it
+        from the transformer's CacheDiTAdapterConfig."""
+        transformer = default_get_pipeline_transformer(pipeline)
+
+        adapter_cfg: CacheDiTAdapterConfig | None = getattr(transformer, "_cache_dit_adapter_config", None)
+        if adapter_cfg is None:
+            return None
+        return adapter_cfg.cached_adapter_cls
+
     def enable(self, pipeline: Any) -> None:
         """Enable cache-dit on the pipeline if configured.
 
@@ -1090,7 +1106,8 @@ class CacheDiTBackend(CacheBackend):
             # Or it defines its _cache_dit_adapter_config, which describes how we should
             # create its block adapter.
             block_adapter = self.maybe_build_block_adapter(pipeline)
-            self._refresh_func = enable_cache_for_dit(pipeline, self.config, block_adapter)
+            adapter_cls = self.maybe_get_cached_adapter_cls(pipeline)
+            self._refresh_func = enable_cache_for_dit(pipeline, self.config, block_adapter, adapter_cls)
 
         self.enabled = True
         logger.info(f"Cache-dit enabled successfully on {pipeline_name}")
