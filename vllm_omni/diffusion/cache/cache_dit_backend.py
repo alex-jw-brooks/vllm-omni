@@ -36,7 +36,7 @@ from vllm_omni.diffusion.data import DiffusionCacheConfig, OmniDiffusionConfig
 
 logger = init_logger(__name__)
 
-refresh_cache_context_func: TypeAlias = Callable[[Any, int, bool], None]
+RefreshCacheContextFunc: TypeAlias = Callable[[Any, int, bool], None]
 
 
 @dataclass
@@ -70,7 +70,7 @@ def default_get_pipeline_transformer(pipeline: Any) -> Any:
 def build_cache_context_refresh(
     cache_config: DiffusionCacheConfig,
     get_pipeline_transformer: Callable[[Any], Any] = default_get_pipeline_transformer,
-) -> refresh_cache_context_func:
+) -> RefreshCacheContextFunc:
     """Build the cache context refresh func for a single Transformer."""
 
     def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
@@ -140,7 +140,7 @@ def enable_cache_for_dit(
     cache_config: Any,
     block_adapter: BlockAdapter | None = None,
     adapter_cls: type[CachedAdapter] | None = None,
-) -> refresh_cache_context_func:
+) -> RefreshCacheContextFunc:
     """Enable cache-dit for regular single-transformer DiT models.
 
     Args:
@@ -228,7 +228,7 @@ def _split_wan22_inference_steps(pipeline, num_inference_steps: int) -> tuple[in
     return num_high_noise_steps, num_low_noise_steps
 
 
-def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
+def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> RefreshCacheContextFunc:
     """Enable cache-dit for Wan2.2 single or dual-transformer architecture.
 
     Wan2.2 can use single or dual transformers (transformer and transformer_2) that need
@@ -246,7 +246,6 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_co
 
     if getattr(pipeline, "transformer_2", None) is None:
         logger.info("transformer_2 not found, enabling cache-dit for single transformer mode")
-        db_cache_config = _build_db_cache_config(cache_config)
         cache_dit.enable_cache(
             BlockAdapter(
                 transformer=pipeline.transformer,
@@ -312,7 +311,7 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> refresh_cache_co
     return refresh_cache_context
 
 
-def enable_cache_for_wan22_s2v(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
+def enable_cache_for_wan22_s2v(pipeline: Any, cache_config: Any) -> RefreshCacheContextFunc:
     """Enable cache-dit for Wan2.2 S2V.
 
     S2V uses a single transformer, but unlike the other Wan2.2 variants its
@@ -929,7 +928,7 @@ class SensenovaCachedAdapter(CachedAdapter):
         return total_cached_blocks
 
 
-def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> refresh_cache_context_func:
+def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> RefreshCacheContextFunc:
     """Enable cache-dit for Cosmos3.
 
     Cosmos3 has a dual-pathway architecture (UND + GEN) but only the GEN
