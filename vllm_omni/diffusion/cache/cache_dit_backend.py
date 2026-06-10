@@ -1043,41 +1043,6 @@ def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> refresh_cache_
     Returns:
         A refresh function that can be called to update cache context with new num_inference_steps.
     """
-    db_cache_config = _build_db_cache_config(cache_config)
-
-    calibrator_config = None
-    if cache_config.enable_taylorseer:
-        taylorseer_order = cache_config.taylorseer_order
-        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
-        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
-
-    logger.info(
-        f"Enabling cache-dit on Cosmos3 gen_layers: "
-        f"Fn={db_cache_config.Fn_compute_blocks}, "
-        f"Bn={db_cache_config.Bn_compute_blocks}, "
-        f"W={db_cache_config.max_warmup_steps}, "
-    )
-
-    cache_dit.enable_cache(
-        BlockAdapter(
-            transformer=pipeline.transformer,
-            blocks=[pipeline.transformer.gen_layers],
-            # Cosmos3 GEN blocks return only hidden_states.  Per-layer UND K/V
-            # conditioning uses the transformer's cache-dit fallback path.
-            forward_pattern=[ForwardPattern.Pattern_3],
-            params_modifiers=[
-                ParamsModifier(
-                    cache_config=db_cache_config,
-                    calibrator_config=calibrator_config,
-                ),
-            ],
-            check_forward_pattern=False,
-            has_separate_cfg=True,
-        ),
-        cache_config=db_cache_config,
-        calibrator_config=calibrator_config,
-    )
-
     # The T2I denoising loop skips the unconditional forward outside the
     # guidance interval as a speed optimization. cache-dit distinguishes the
     # conditional vs unconditional passes purely by transformer-forward parity
@@ -1085,25 +1050,8 @@ def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> refresh_cache_
     # step accounting. Still do both cond/uncond CFG steps when cache-dit is active.
     # CFG is instead neutralized via scale=1.0 outside the interval.
     pipeline._cache_dit_requires_paired_cfg = True
-
-    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
-        if cache_config.scm_steps_mask_policy is None:
-            cache_dit.refresh_context(pipeline.transformer, num_inference_steps=num_inference_steps, verbose=verbose)
-        else:
-            cache_dit.refresh_context(
-                pipeline.transformer,
-                cache_config=DBCacheConfig().reset(
-                    num_inference_steps=num_inference_steps,
-                    steps_computation_mask=cache_dit.steps_mask(
-                        mask_policy=cache_config.scm_steps_mask_policy,
-                        total_steps=num_inference_steps,
-                    ),
-                    steps_computation_policy=cache_config.scm_steps_policy,
-                ),
-                verbose=verbose,
-            )
-
-    return refresh_cache_context
+    block_adapter = CacheDiTBackend.maybe_build_block_adapter(pipeline)
+    return enable_cache_for_dit(pipeline, cache_config, block_adapter)
 
 
 # Register custom cache-dit enablers after function definitions
