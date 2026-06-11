@@ -627,6 +627,7 @@ stages:
         deploy = load_deploy_config(deploy_path)
         pipeline = resolve_pipeline_config("qwen3_tts")
         stages = merge_pipeline_deploy(pipeline, deploy)
+        assert isinstance(pipeline, PipelineConfig)
 
         assert deploy.custom_voice_dir == str(custom_voice_dir)
         assert {s.yaml_engine_args.get("custom_voice_dir") for s in stages} == {str(custom_voice_dir)}
@@ -1237,6 +1238,8 @@ class TestMingFlashOmniPipeline:
     def test_image_processor_wiring_resolves(self):
         """The prompt_expand_func and custom_process_input_func strings must point to real callables."""
         pipeline = resolve_pipeline_config("ming_flash_omni_image")
+        assert isinstance(pipeline, PipelineConfig)
+
         thinker = pipeline.get_stage(0)
         dit = pipeline.get_stage(1)
         for ref in (thinker.prompt_expand_func, dit.custom_process_input_func):
@@ -1258,6 +1261,7 @@ class TestMingFlashOmniPipeline:
         assert "shared_memory_connector" in deploy.connectors
 
         pipeline = resolve_pipeline_config("ming_flash_omni_image")
+        assert isinstance(pipeline, PipelineConfig)
         stages = merge_pipeline_deploy(pipeline, deploy)
         assert len(stages) == 2
         # Stage 0 thinker: AR worker that emits latents.
@@ -1541,6 +1545,7 @@ class TestSentinelDefaultPrecedence:
         processors based on ``deploy.async_chunk``, without needing a
         separate variant pipeline registration."""
         pipeline = resolve_pipeline_config("qwen3_tts")
+        assert isinstance(pipeline, PipelineConfig)
 
         # async_chunk=True → stage 0's per-chunk processor wires up, stage 1
         # has no sync input processor.
@@ -1610,6 +1615,7 @@ class TestSentinelDefaultPrecedence:
         Merge under either async_chunk mode must not re-introduce a
         stage-0 full-payload hook."""
         pipeline = resolve_pipeline_config("ming_flash_omni")
+        assert isinstance(pipeline, PipelineConfig)
 
         stage0, stage1 = pipeline.stages
         assert stage0.custom_process_next_stage_input_func is None, (
@@ -1648,6 +1654,7 @@ class TestSamplingConstraintsPrecedence:
 
         deploy = load_deploy_config(deploy_path)
         pipeline = resolve_pipeline_config("qwen3_omni_moe")
+        assert isinstance(pipeline, PipelineConfig)
         stages = merge_pipeline_deploy(pipeline, deploy)
 
         # Pipeline says detokenize=True for thinker, deploy can't override
