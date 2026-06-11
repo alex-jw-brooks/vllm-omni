@@ -625,7 +625,7 @@ stages:
         )
 
         deploy = load_deploy_config(deploy_path)
-        pipeline = _PIPELINE_REGISTRY["qwen3_tts"]
+        pipeline = resolve_pipeline_config("qwen3_tts")
         stages = merge_pipeline_deploy(pipeline, deploy)
 
         assert deploy.custom_voice_dir == str(custom_voice_dir)
@@ -1203,14 +1203,14 @@ class TestMingFlashOmniPipeline:
         assert stages[0].yaml_engine_args["model_arch"] == "MingFlashOmniForConditionalGeneration"
 
     def test_image_pipeline_registered(self):
-        p = _PIPELINE_REGISTRY.get("ming_flash_omni_image")
+        p = OMNI_PIPELINES.get("ming_flash_omni_image")
         assert p is not None
         assert p.model_arch == "MingFlashOmniForConditionalGeneration"
         assert len(p.stages) == 2
         assert p.validate() == []
 
     def test_image_thinker_stage(self):
-        s = _PIPELINE_REGISTRY["ming_flash_omni_image"].get_stage(0)
+        s = resolve_pipeline_config("ming_flash_omni_image").get_stage(0)
         assert s.model_stage == "thinker"
         assert s.execution_type == StageExecutionType.LLM_AR
         assert s.input_sources == ()
@@ -1224,7 +1224,7 @@ class TestMingFlashOmniPipeline:
         assert s.prompt_expand_func is not None
 
     def test_image_dit_stage(self):
-        s = _PIPELINE_REGISTRY["ming_flash_omni_image"].get_stage(1)
+        s = resolve_pipeline_config("ming_flash_omni_image").get_stage(1)
         assert s.model_stage == "dit"
         assert s.execution_type == StageExecutionType.DIFFUSION
         assert s.input_sources == (0,)
@@ -1236,8 +1236,9 @@ class TestMingFlashOmniPipeline:
 
     def test_image_processor_wiring_resolves(self):
         """The prompt_expand_func and custom_process_input_func strings must point to real callables."""
-        thinker = _PIPELINE_REGISTRY["ming_flash_omni_image"].get_stage(0)
-        dit = _PIPELINE_REGISTRY["ming_flash_omni_image"].get_stage(1)
+        pipeline = resolve_pipeline_config("ming_flash_omni_image")
+        thinker = pipeline.get_stage(0)
+        dit = pipeline.get_stage(1)
         for ref in (thinker.prompt_expand_func, dit.custom_process_input_func):
             module_path, _, attr = ref.rpartition(".")
             module = importlib.import_module(module_path)
@@ -1256,7 +1257,7 @@ class TestMingFlashOmniPipeline:
         assert deploy.connectors is not None
         assert "shared_memory_connector" in deploy.connectors
 
-        pipeline = _PIPELINE_REGISTRY["ming_flash_omni_image"]
+        pipeline = resolve_pipeline_config("ming_flash_omni_image")
         stages = merge_pipeline_deploy(pipeline, deploy)
         assert len(stages) == 2
         # Stage 0 thinker: AR worker that emits latents.
@@ -1608,9 +1609,7 @@ class TestSentinelDefaultPrecedence:
         ``thinker2talker_token_only`` placeholder (sync_process_input_func).
         Merge under either async_chunk mode must not re-introduce a
         stage-0 full-payload hook."""
-        from vllm_omni.config.stage_config import DeployConfig, merge_pipeline_deploy
-
-        pipeline = _PIPELINE_REGISTRY["ming_flash_omni"]
+        pipeline = resolve_pipeline_config("ming_flash_omni")
 
         stage0, stage1 = pipeline.stages
         assert stage0.custom_process_next_stage_input_func is None, (

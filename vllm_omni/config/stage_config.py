@@ -22,6 +22,7 @@ from vllm_omni.core.sched.omni_generation_scheduler import OmniGenerationSchedul
 
 logger = init_logger(__name__)
 
+_DEPLOY_DIR = Path(__file__).resolve().parent.parent / "deploy"
 
 _STAGE_OVERRIDE_PATTERN = re.compile(r"^stage_(\d+)_(.+)$")
 

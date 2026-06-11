@@ -11,7 +11,6 @@ from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.transformers_utils.config import get_config, get_hf_file_to_dict
 from vllm.transformers_utils.repo_utils import file_or_path_exists
 
-from vllm_omni.config.pipeline_registry import StageConfigFactory
 from vllm_omni.config.yaml_util import create_config, load_yaml_config, merge_configs
 from vllm_omni.diffusion.utils.hf_utils import _looks_like_dreamzero
 from vllm_omni.entrypoints.stage_utils import _to_dict
@@ -342,6 +341,8 @@ def load_stage_configs_from_model(
         for stage_id_str, overrides in stage_overrides.items():
             for key, val in overrides.items():
                 cli_overrides[f"stage_{stage_id_str}_{key}"] = val
+
+    from vllm_omni.config.pipeline_registry import StageConfigFactory
 
     stages = StageConfigFactory.create_from_model(
         model,

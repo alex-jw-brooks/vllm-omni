@@ -15,20 +15,9 @@ To add a new pipeline:
     3. Update the registry to map the key to the new config object (in the case
        of new keys) or to the resolver func.
 
-<<<<<<< HEAD
-Plain single-stage diffusion models continue to use the
-``_create_default_diffusion_stage_cfg`` fallback in ``async_omni_engine.py``.
-The empty ``_DIFFUSION_PIPELINES`` placeholder previously here (#2915) was
-removed once #2987 (which would have populated it) was deferred.
-
-``register_pipeline(config)`` in ``stage_config`` is still supported for
-out-of-tree plugins and tests that create pipelines at runtime; those override
-the entries declared here.
-=======
 NOTE: Single-stage diffusion models continue to use the
 ``_create_default_diffusion_stage_cfg`` fallback in
 ``async_omni_engine.py``; for now we do not add them to registry.
->>>>>>> 2da150ed (refactor to avoid cyclical imports)
 """
 
 from __future__ import annotations
@@ -54,7 +43,6 @@ from vllm_omni.config.stage_config import (
     PipelineConfig,
     StageConfig,
     StageType,
-    _warn_deprecated_kwargs,
     build_stage_runtime_overrides,
     load_deploy_config,
     merge_pipeline_deploy,
@@ -181,8 +169,6 @@ class StageConfigFactory:
         back to using the Transformers config & finding pipelines that have overlapping
         supported architectures.
         """
-        _warn_deprecated_kwargs(deprecated_kwargs)
-
         if cli_overrides is None:
             cli_overrides = {}
 
@@ -237,8 +223,6 @@ class StageConfigFactory:
         Precedence: caller-typed (non-None) value > deploy YAML >
         StageDeployConfig dataclass default.
         """
-        _warn_deprecated_kwargs(deprecated_kwargs)
-
         # Resolve deploy config path
         if deploy_config_path is None:
             deploy_path = _DEPLOY_DIR / f"{model_type}.yaml"
