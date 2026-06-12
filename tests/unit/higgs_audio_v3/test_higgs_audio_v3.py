@@ -1199,9 +1199,9 @@ class TestRegistry:
         assert "HiggsAudioV3Code2WavForConditionalGeneration" in _OMNI_MODELS
 
     def test_pipeline_registered(self):
-        from vllm_omni.config.pipeline_registry import _OMNI_PIPELINES
+        from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
 
-        assert "higgs_multimodal_qwen3" in _OMNI_PIPELINES
+        assert "higgs_multimodal_qwen3" in OMNI_PIPELINES
 
     def test_deploy_yaml_exists(self):
         import os
