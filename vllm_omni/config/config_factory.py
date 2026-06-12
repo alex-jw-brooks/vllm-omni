@@ -69,7 +69,7 @@ class StageConfigFactory:
         # --- New path: check pipeline registry by model_type first ---
         model_type, hf_config = cls._auto_detect_model_type(model, trust_remote_code=trust_remote_code)
         if model_type and model_type in OMNI_PIPELINES:
-            pipeline_cfg = cls.StageConfigFactory.resolve_pipeline_config(model_type, hf_config)
+            pipeline_cfg = cls.resolve_pipeline_config(model_type, hf_config)
             if pipeline_cfg is not None:
                 return cls._create_from_registry(
                     model_type,
@@ -202,25 +202,6 @@ class StageConfigFactory:
 
         return [config_dict]
 
-    # Keys consumed as explicit StageConfig fields — everything else is
-    # passed through via yaml_extras.
-    _KNOWN_STAGE_KEYS: set[str] = {
-        "stage_id",
-        "model_stage",
-        "stage_type",
-        "input_sources",
-        "engine_input_source",
-        "custom_process_input_func",
-        "final_output",
-        "final_output_type",
-        "worker_type",
-        "scheduler_cls",
-        "hf_config_name",
-        "is_comprehension",
-        "engine_args",
-        "runtime",
-    }
-
     @classmethod
     def _auto_detect_model_type(cls, model: str, trust_remote_code: bool = True) -> tuple[str | None, Any]:
         """Auto-detect model_type from model directory.
@@ -311,6 +292,8 @@ class StageConfigFactory:
 
     @staticmethod
     def resolve_pipeline_config(model_type: str, hf_config: PreTrainedConfig | None = None) -> PipelineConfig | None:
+        """Given a model type, resolve to the pipeline to be used. If the pipeline
+        maps to a callable we resolve based on the HF config."""
         if model_type not in OMNI_PIPELINES:
             return None
         obj = OMNI_PIPELINES[model_type]
