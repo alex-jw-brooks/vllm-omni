@@ -1,140 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Pipeline registry and factory for vllm-omni.
-
-``OMNI_PIPELINES`` maps each ``model_type`` to either a ``PipelineConfig``
-instance or a resolver callable that accepts an optional HF config and returns
-a ``PipelineConfig``.
-
-To add a new pipeline:
-    1. Define the ``PipelineConfig`` instance as a module-level variable in
-       ``vllm_omni/.../pipeline.py``.
-    2. If the model needs to support several configurations, e.g., because some
-       stages are optional, implement a resolver that consumes the HF config
-       and returns a ``PipelineConfig``.
-    3. Update the registry to map the key to the new config object (in the case
-       of new keys) or to the resolver func.
-
-NOTE: Single-stage diffusion models continue to use the
-``_create_default_diffusion_stage_cfg`` fallback in
-``async_omni_engine.py``; for now we do not add them to registry.
-"""
+"""Config factories for vllm-omni, e.g., StageConfigFactory."""
 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any
 
 from transformers import PreTrainedConfig
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_config
 from vllm.transformers_utils.repo_utils import get_hf_file_to_dict
 
+from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
 from vllm_omni.config.stage_config import (
     _DEPLOY_DIR,
     DeployConfig,
     PipelineConfig,
     StageConfig,
     StageType,
-    _warn_deprecated_kwargs,
     build_stage_runtime_overrides,
     load_deploy_config,
     merge_pipeline_deploy,
 )
 from vllm_omni.config.yaml_util import create_config
-from vllm_omni.model_executor.models.aura_omni.pipeline import AURA_OMNI_PIPELINE
-from vllm_omni.model_executor.models.bagel.pipeline import (
-    BAGEL_PIPELINE,
-    BAGEL_SINGLE_STAGE_PIPELINE,
-    BAGEL_THINK_PIPELINE,
-)
-from vllm_omni.model_executor.models.cosyvoice3.pipeline import COSYVOICE3_PIPELINE
-from vllm_omni.model_executor.models.covo_audio.pipeline import COVO_AUDIO_PIPELINE
-from vllm_omni.model_executor.models.dreamzero.pipeline import DREAMZERO_PIPELINE
-from vllm_omni.model_executor.models.dynin_omni.pipeline import DYNIN_OMNI_PIPELINE
-from vllm_omni.model_executor.models.fish_speech.pipeline import FISH_SPEECH_PIPELINE
-from vllm_omni.model_executor.models.glm_image.pipeline import GLM_IMAGE_PIPELINE
-from vllm_omni.model_executor.models.glm_tts.pipeline import GLM_TTS_PIPELINE
-from vllm_omni.model_executor.models.higgs_audio_v2.pipeline import HIGGS_AUDIO_V2_PIPELINE
-from vllm_omni.model_executor.models.higgs_audio_v3.pipeline import HIGGS_AUDIO_V3_PIPELINE
-from vllm_omni.model_executor.models.hunyuan_image3.pipeline import (
-    HUNYUAN_IMAGE3_AR_PIPELINE,
-    HUNYUAN_IMAGE3_DIT_PIPELINE,
-    HUNYUAN_IMAGE3_PIPELINE,
-)
-from vllm_omni.model_executor.models.indextts2.pipeline import INDEXTTS2_PIPELINE
-from vllm_omni.model_executor.models.lance.pipeline import LANCE_PIPELINE
-from vllm_omni.model_executor.models.mimo_audio.pipeline import MIMO_AUDIO_PIPELINE
-from vllm_omni.model_executor.models.ming_flash_omni.pipeline import (
-    MING_FLASH_OMNI_IMAGE_PIPELINE,
-    MING_FLASH_OMNI_PIPELINE,
-    MING_FLASH_OMNI_THINKER_ONLY_PIPELINE,
-    MING_FLASH_OMNI_TTS_PIPELINE,
-)
-from vllm_omni.model_executor.models.ming_tts.pipeline import MING_TTS_PIPELINE
-from vllm_omni.model_executor.models.minicpmo_4_5.pipeline import MINICPMO_4_5_PIPELINE
-from vllm_omni.model_executor.models.moss_tts.pipeline import MOSS_TTS_PIPELINE, MOSS_TTS_REALTIME_PIPELINE
-from vllm_omni.model_executor.models.moss_tts_nano.pipeline import MOSS_TTS_NANO_PIPELINE
-from vllm_omni.model_executor.models.qwen2_5_omni.pipeline import (
-    QWEN2_5_OMNI_PIPELINE,
-    QWEN2_5_OMNI_THINKER_ONLY_PIPELINE,
-)
-from vllm_omni.model_executor.models.qwen3_omni.pipeline import resolve_qwen3_omni_pipeline
-from vllm_omni.model_executor.models.qwen3_tts.pipeline import QWEN3_TTS_PIPELINE
-from vllm_omni.model_executor.models.voxcpm2.pipeline import VOXCPM2_PIPELINE
-from vllm_omni.model_executor.models.voxtral_tts.pipeline import VOXTRAL_TTS_PIPELINE
 
 logger = init_logger(__name__)
-
-PipelineResolverFunc: TypeAlias = Callable[[PreTrainedConfig | None], PipelineConfig]
-
-# --- Multi-stage omni pipelines (LLM-centric; audio / video I/O) ---
-OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
-    "aura_omni": AURA_OMNI_PIPELINE,
-    "qwen2_5_omni": QWEN2_5_OMNI_PIPELINE,
-    "qwen2_5_omni_thinker_only": QWEN2_5_OMNI_THINKER_ONLY_PIPELINE,
-    "qwen3_omni_moe": resolve_qwen3_omni_pipeline,
-    "qwen3_tts": QWEN3_TTS_PIPELINE,
-    "covo_audio": COVO_AUDIO_PIPELINE,
-    "bagel": BAGEL_PIPELINE,
-    "bagel_think": BAGEL_THINK_PIPELINE,
-    "bagel_single_stage": BAGEL_SINGLE_STAGE_PIPELINE,
-    "lance": LANCE_PIPELINE,
-    "dreamzero": DREAMZERO_PIPELINE,
-    "glm_image": GLM_IMAGE_PIPELINE,
-    "hunyuan_image_3_moe": HUNYUAN_IMAGE3_PIPELINE,
-    "hunyuan_image3_ar": HUNYUAN_IMAGE3_AR_PIPELINE,
-    "hunyuan_image3_dit": HUNYUAN_IMAGE3_DIT_PIPELINE,
-    "voxcpm2": VOXCPM2_PIPELINE,
-    "cosyvoice3": COSYVOICE3_PIPELINE,
-    "mimo_audio": MIMO_AUDIO_PIPELINE,
-    "ming_tts": MING_TTS_PIPELINE,
-    "voxtral_tts": VOXTRAL_TTS_PIPELINE,
-    "glm_tts": GLM_TTS_PIPELINE,
-    "fish_qwen3_omni": FISH_SPEECH_PIPELINE,
-    "ming_flash_omni": MING_FLASH_OMNI_PIPELINE,
-    "ming_flash_omni_tts": MING_FLASH_OMNI_TTS_PIPELINE,
-    "ming_flash_omni_thinker_only": MING_FLASH_OMNI_THINKER_ONLY_PIPELINE,
-    "ming_flash_omni_image": MING_FLASH_OMNI_IMAGE_PIPELINE,
-    "moss_tts_nano": MOSS_TTS_NANO_PIPELINE,
-    "moss_tts_delay": MOSS_TTS_PIPELINE,
-    "moss_tts_realtime": MOSS_TTS_REALTIME_PIPELINE,
-    "minicpmo_4_5": MINICPMO_4_5_PIPELINE,
-    "higgs_audio_v2": HIGGS_AUDIO_V2_PIPELINE,
-    "higgs_multimodal_qwen3": HIGGS_AUDIO_V3_PIPELINE,
-    "dynin_omni": DYNIN_OMNI_PIPELINE,
-    "indextts2": INDEXTTS2_PIPELINE,
-}
-
-
-def resolve_pipeline_config(model_type: str, hf_config: PreTrainedConfig | None = None) -> PipelineConfig | None:
-    if model_type not in OMNI_PIPELINES:
-        return None
-    obj = OMNI_PIPELINES[model_type]
-    return obj(hf_config) if callable(obj) else obj
 
 
 class StageConfigFactory:
@@ -166,8 +59,6 @@ class StageConfigFactory:
         back to using the Transformers config & finding pipelines that have overlapping
         supported architectures.
         """
-        _warn_deprecated_kwargs(deprecated_kwargs)
-
         if cli_overrides is None:
             cli_overrides = {}
 
@@ -178,7 +69,7 @@ class StageConfigFactory:
         # --- New path: check pipeline registry by model_type first ---
         model_type, hf_config = cls._auto_detect_model_type(model, trust_remote_code=trust_remote_code)
         if model_type and model_type in OMNI_PIPELINES:
-            pipeline_cfg = resolve_pipeline_config(model_type, hf_config)
+            pipeline_cfg = cls.StageConfigFactory.resolve_pipeline_config(model_type, hf_config)
             if pipeline_cfg is not None:
                 return cls._create_from_registry(
                     model_type,
@@ -222,8 +113,6 @@ class StageConfigFactory:
         Precedence: caller-typed (non-None) value > deploy YAML >
         StageDeployConfig dataclass default.
         """
-        _warn_deprecated_kwargs(deprecated_kwargs)
-
         # Resolve deploy config path
         if deploy_config_path is None:
             deploy_path = _DEPLOY_DIR / f"{model_type}.yaml"
@@ -419,3 +308,10 @@ class StageConfigFactory:
         ``filter_dataclass_kwargs(OmniEngineArgs, ...)``.
         """
         return build_stage_runtime_overrides(stage.stage_id, cli_overrides)
+
+    @staticmethod
+    def resolve_pipeline_config(model_type: str, hf_config: PreTrainedConfig | None = None) -> PipelineConfig | None:
+        if model_type not in OMNI_PIPELINES:
+            return None
+        obj = OMNI_PIPELINES[model_type]
+        return obj(hf_config) if callable(obj) else obj
