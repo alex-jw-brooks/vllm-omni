@@ -92,10 +92,35 @@ class StageConfigFactory:
             hf_archs = set(getattr(hf_config, "architectures", []) or [])
             if hf_archs:
                 for registered in OMNI_PIPELINES.values():
-                    if isinstance(registered, PipelineConfig) and hf_archs.intersection(registered.hf_architectures):
+                    pipeline_cfg = registered if isinstance(registered, PipelineConfig) else registered(hf_config)
+                    # Resolvers that get configs of the incorrect type should return None
+                    if not pipeline_cfg:
+                        continue
+                    predicate = pipeline_cfg.hf_config_predicate
+                    if predicate is not None:
+                        try:
+                            if not predicate(hf_config):
+                                logger.debug(
+                                    "Pipeline %r matched on architectures %s but its "
+                                    "hf_config_predicate rejected the loaded config; "
+                                    "continuing fallback search.",
+                                    pipeline_cfg.model_type,
+                                    sorted(hf_archs.intersection(pipeline_cfg.hf_architectures)),
+                                )
+                                continue
+                        except Exception:
+                            logger.exception(
+                                "Pipeline %r hf_config_predicate raised; skipping.",
+                                pipeline_cfg.model_type,
+                            )
+                            continue
+
+                    if isinstance(pipeline_cfg, PipelineConfig) and hf_archs.intersection(
+                        pipeline_cfg.hf_architectures
+                    ):
                         return cls._create_from_registry(
-                            registered.model_type,
-                            registered,
+                            pipeline_cfg.model_type,
+                            pipeline_cfg,
                             cli_overrides,
                             deploy_config_path,
                         )

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from transformers import PretrainedConfig, Qwen3OmniMoeConfig
 
 from tests.helpers.stage_config import get_deploy_config_path
 from vllm_omni.config.config_factory import StageConfigFactory
@@ -36,7 +37,9 @@ from vllm_omni.engine.arg_utils import SHARED_FIELDS, EngineArgs, internal_black
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
-pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
+Q3_OMNI_ALL_STAGES_HF_CONFIG = Qwen3OmniMoeConfig(enable_audio_output=True)
+Q3_OMNI_THINKER_HF_CONFIG = Qwen3OmniMoeConfig(enable_audio_output=False)
 
 
 class TestStageType:
@@ -520,12 +523,28 @@ class TestPipelineDiscovery:
         assert "qwen3_omni_moe" in OMNI_PIPELINES
         assert "qwen3_tts" in OMNI_PIPELINES
 
-    def test_registry_loads_pipeline_on_getitem(self):
+    def test_registry_with_no_resolver(self):
         """Looking up a registered model_type returns the matching PipelineConfig."""
-        pipeline = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+
+    def test_registry_resolver_qwen3_omni_all_stages(self):
+        """Test that providing the HF config for qwen3 omni with audio enabled uses all stages."""
+        pipeline = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(pipeline, PipelineConfig)
         assert pipeline.model_type == "qwen3_omni_moe"
         assert len(pipeline.stages) == 3  # thinker + talker + code2wav
+
+    def test_registry_resolver_qwen3_omni_thinker_only(self):
+        """Test that providing the HF config for qwen3 omni with audio enabled uses all stages."""
+        pipeline = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_THINKER_HF_CONFIG,
+        )
+        assert isinstance(pipeline, PipelineConfig)
+        assert pipeline.model_type == "qwen3_omni_moe_thinker_only"
+        assert len(pipeline.stages) == 1  # thinker only
 
     def test_registry_returns_none_for_unknown(self):
         """Unknown model_types aren't found and resolve to `None`."""
@@ -658,7 +677,10 @@ stages:
         if not deploy_path.exists():
             pytest.skip("Deploy config not found")
 
-        pipeline = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        pipeline = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(pipeline, PipelineConfig)
 
         deploy = load_deploy_config(deploy_path)
@@ -672,7 +694,10 @@ stages:
         assert s0.yaml_extras["default_sampling_params"]["detokenize"] is True
 
     def test_merge_pipeline_deploy_preserves_num_replicas(self, tmp_path):
-        pipeline = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        pipeline = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(pipeline, PipelineConfig)
 
         base = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
@@ -888,14 +913,20 @@ stages:
 
 class TestQwen3OmniPipeline:
     def test_registered(self):
-        p = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        p = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(p, PipelineConfig)
         assert p.model_arch == "Qwen3OmniMoeForConditionalGeneration"
         assert len(p.stages) == 3
         assert p.validate() == []
 
     def test_thinker(self):
-        p = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        p = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(p, PipelineConfig)
 
         s = p.get_stage(0)
@@ -907,7 +938,10 @@ class TestQwen3OmniPipeline:
         assert s.sampling_constraints["detokenize"] is True
 
     def test_talker(self):
-        p = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        p = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(p, PipelineConfig)
 
         s = p.get_stage(1)
@@ -918,7 +952,10 @@ class TestQwen3OmniPipeline:
         assert s.custom_process_next_stage_input_func is not None
 
     def test_code2wav(self):
-        p = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        p = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(p, PipelineConfig)
 
         s = p.get_stage(2)
@@ -1414,7 +1451,10 @@ class TestCLIOverrideFlow:
             pytest.skip("Deploy config not found")
 
         deploy = load_deploy_config(deploy_path)
-        pipeline = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        pipeline = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(pipeline, PipelineConfig)
         stages = merge_pipeline_deploy(pipeline, deploy)
 
@@ -1429,7 +1469,10 @@ class TestCLIOverrideFlow:
             pytest.skip("Deploy config not found")
 
         deploy = load_deploy_config(deploy_path)
-        pipeline = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        pipeline = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(pipeline, PipelineConfig)
         stages = merge_pipeline_deploy(pipeline, deploy)
 
@@ -1473,7 +1516,10 @@ class TestSentinelDefaultPrecedence:
 
     def _stages(self, cli_overrides):
         model_type = "qwen3_omni_moe"
-        pipeline_cfg = StageConfigFactory.resolve_pipeline_config(model_type)
+        pipeline_cfg = StageConfigFactory.resolve_pipeline_config(
+            model_type,
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         return StageConfigFactory._create_from_registry(
             "qwen3_omni_moe",
             pipeline_cfg,
@@ -1650,7 +1696,10 @@ class TestSamplingConstraintsPrecedence:
             pytest.skip("Deploy config not found")
 
         deploy = load_deploy_config(deploy_path)
-        pipeline = StageConfigFactory.resolve_pipeline_config("qwen3_omni_moe")
+        pipeline = StageConfigFactory.resolve_pipeline_config(
+            "qwen3_omni_moe",
+            Q3_OMNI_ALL_STAGES_HF_CONFIG,
+        )
         assert isinstance(pipeline, PipelineConfig)
         stages = merge_pipeline_deploy(pipeline, deploy)
 
@@ -1658,3 +1707,14 @@ class TestSamplingConstraintsPrecedence:
         assert stages[0].yaml_extras["default_sampling_params"]["detokenize"] is True
         # Pipeline says stop_token_ids=[2150] for talker
         assert stages[1].yaml_extras["default_sampling_params"]["stop_token_ids"] == [2150]
+
+
+class TestPipelineConfigResolvers:
+    @pytest.mark.parametrize("resolver", [obj for obj in OMNI_PIPELINES.values() if callable(obj)])
+    def test_all_resolvers_reject_bad_types(self, resolver):
+        """Ensure that all resolvers registered reject incorrect config types."""
+
+        class NotTheRightHfConfig(PretrainedConfig):
+            pass
+
+        assert resolver(NotTheRightHfConfig()) is None

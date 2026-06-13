@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import re
 import warnings
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from transformers import PretrainedConfig
 from vllm.logger import init_logger
 from vllm.v1.core.sched.scheduler import Scheduler as VLLMScheduler
 
@@ -25,6 +27,21 @@ logger = init_logger(__name__)
 _DEPLOY_DIR = Path(__file__).resolve().parent.parent / "deploy"
 
 _STAGE_OVERRIDE_PATTERN = re.compile(r"^stage_(\d+)_(.+)$")
+
+
+def pipeline_cfg_resolver(config_type: type[PretrainedConfig]):
+    """Wraps a resolver such that we return None if a hf_config of the wrong type is provided."""
+
+    def resolver_builder(func):
+        @functools.wraps(func)
+        def wrapper(hf_config: PretrainedConfig | None):
+            if hf_config is None or not isinstance(hf_config, config_type):
+                return None
+            return func(hf_config)
+
+        return wrapper
+
+    return resolver_builder
 
 
 def build_stage_runtime_overrides(
