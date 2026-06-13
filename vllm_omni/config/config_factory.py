@@ -94,7 +94,7 @@ class StageConfigFactory:
                 for registered in OMNI_PIPELINES.values():
                     pipeline_cfg = registered if isinstance(registered, PipelineConfig) else registered(hf_config)
                     # Resolvers that get configs of the incorrect type should return None
-                    if not pipeline_cfg:
+                    if pipeline_cfg is None:
                         continue
                     predicate = pipeline_cfg.hf_config_predicate
                     if predicate is not None:
