@@ -26,6 +26,7 @@ from vllm_omni.config.stage_config import (
     merge_pipeline_deploy,
 )
 from vllm_omni.config.yaml_util import create_config
+from vllm_omni.diffusion.utils.hf_utils import _looks_like_dreamzero
 
 logger = init_logger(__name__)
 
@@ -68,9 +69,14 @@ class StageConfigFactory:
 
         # --- New path: check pipeline registry by model_type first ---
         model_type, hf_config = cls._auto_detect_model_type(model, trust_remote_code=trust_remote_code)
+        if model_type == "vla":
+            if _looks_like_dreamzero(model):
+                model_type = "dreamzero"
+
         if model_type and model_type in OMNI_PIPELINES:
             pipeline_cfg = cls.resolve_pipeline_config(model_type, hf_config)
             if pipeline_cfg is not None:
+                # FIXME - predicate handling was dropped need to put it back
                 return cls._create_from_registry(
                     model_type,
                     pipeline_cfg,
@@ -93,11 +99,9 @@ class StageConfigFactory:
                             cli_overrides,
                             deploy_config_path,
                         )
-
-        raise ValueError(
-            f"Unable to create model; Model type {model_type} is not registered in OMNI_PIPELINES,"
-            f" and hf_config of type {type(hf_config)}"
-        )
+        # Not in the pipeline registry — let the caller fall back to the
+        # legacy ``stage_configs/*.yaml`` path (resolve_model_config_path).
+        return None
 
     @classmethod
     def _create_from_registry(
@@ -127,6 +131,16 @@ class StageConfigFactory:
             deploy_cfg = DeployConfig()
         else:
             deploy_cfg = load_deploy_config(deploy_path)
+            # Fallback to using the deploy config pipeline class if it's a mismatch
+            if deploy_cfg.pipeline and deploy_cfg.pipeline != model_type:
+                resolved = cls.resolve_pipeline_config(deploy_cfg.pipeline)
+                if resolved is None:
+                    raise KeyError(
+                        f"Pipeline {deploy_cfg.pipeline!r} from {deploy_path.name!r} "
+                        f"not found in OMNI_PIPELINES. Available: "
+                        f"{sorted(OMNI_PIPELINES.keys())}"
+                    )
+                pipeline_cfg = resolved
 
         cli_async_chunk = cli_overrides.get("async_chunk")
         if cli_async_chunk is not None:
