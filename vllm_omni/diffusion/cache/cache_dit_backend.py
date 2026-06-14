@@ -49,6 +49,7 @@ class CacheDiTAdapterConfig:
     block_forward_patterns: dict[str, ForwardPattern]
     has_separate_cfg: bool = False
     cached_adapter_cls: type[CachedAdapter] | None = None
+    check_forward_pattern: bool = True
 
 
 # Registry of custom cache-dit enablers for specific models
@@ -1025,6 +1026,7 @@ class CacheDiTBackend(CacheBackend):
             blocks=[getattr(transformer, block_attr) for block_attr in block_attrs],
             forward_pattern=list(forward_pattern),
             has_separate_cfg=adapter_cfg.has_separate_cfg,
+            check_forward_pattern=adapter_cfg.check_forward_pattern,
         )
         return block_adapter
 
