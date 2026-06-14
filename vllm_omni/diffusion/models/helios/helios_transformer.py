@@ -608,6 +608,7 @@ class HeliosTransformer3DModel(nn.Module):
         block_forward_patterns={
             "blocks": ForwardPattern.Pattern_2,
         },
+        has_separate_cfg=True,
     )
 
     _repeated_blocks = ["HeliosTransformerBlock"]
