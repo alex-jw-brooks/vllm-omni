@@ -464,7 +464,8 @@ class ErnieImageTransformer2DModel(nn.Module):
     _cache_dit_adapter_config = CacheDiTAdapterConfig(
         block_forward_patterns={
             "layers": ForwardPattern.Pattern_3,
-        }
+        },
+        check_forward_pattern=False,
     )
     _repeated_blocks = ["ErnieImageSharedAdaLNBlock"]
     _layerwise_offload_blocks_attrs = ["layers"]

@@ -2023,7 +2023,8 @@ class HunyuanImage3Model(nn.Module):
     _cache_dit_adapter_config = CacheDiTAdapterConfig(
         block_forward_patterns={
             "layers": ForwardPattern.Pattern_4,
-        }
+        },
+        check_forward_pattern=False,
     )
 
     _sp_plan = {

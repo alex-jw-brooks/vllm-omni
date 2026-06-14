@@ -1456,6 +1456,7 @@ class LTX2VideoTransformer3DModel(nn.Module):
             "transformer_blocks": ForwardPattern.Pattern_0,
         },
         has_separate_cfg=True,
+        check_forward_pattern=False,
     )
 
     _supports_gradient_checkpointing = True

@@ -973,6 +973,7 @@ class Cosmos3VFMTransformer(nn.Module):
             "gen_layers": ForwardPattern.Pattern_3,
         },
         has_separate_cfg=True,
+        check_forward_pattern=False,
     )
 
     _repeated_blocks = ["Cosmos3GenDecoderLayer"]
