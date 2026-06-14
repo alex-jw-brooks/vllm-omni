@@ -14,9 +14,10 @@ This module tests the cache backend implementations:
 from unittest.mock import Mock, patch
 
 import pytest
+from cache_dit import ForwardPattern
 
 from vllm_omni.diffusion.cache.cache_dit_backend import (
-    CUSTOM_DIT_ENABLERS,
+    CacheDiTAdapterConfig,
     CacheDiTBackend,
 )
 from vllm_omni.diffusion.cache.magcache.backend import MagCacheBackend
@@ -45,13 +46,20 @@ class TestCacheDiTBackend:
         assert backend.config.Fn_compute_blocks == 4
         assert backend.enabled is False
 
+    @patch("vllm_omni.diffusion.cache.cache_dit_backend.BlockAdapter")
     @patch("vllm_omni.diffusion.cache.cache_dit_backend.cache_dit")
-    def test_enable_single_transformer(self, mock_cache_dit):
+    def test_enable_single_transformer(self, mock_cache_dit, mock_block_adapter):
         """Test enabling cache-dit on single-transformer pipeline."""
         # Mock pipeline
         mock_pipeline = Mock()
         mock_pipeline.__class__.__name__ = "DiTPipeline"
         mock_transformer = Mock()
+        mock_transformer._cache_dit_adapter_config = CacheDiTAdapterConfig(
+            block_forward_patterns={
+                "layers": ForwardPattern.Pattern_0,
+            },
+        )
+
         mock_pipeline.transformer = mock_transformer
 
         # Mock cache_dit functions
@@ -66,14 +74,20 @@ class TestCacheDiTBackend:
         assert backend._refresh_func is not None
         mock_cache_dit.enable_cache.assert_called_once()
 
+    @patch("vllm_omni.diffusion.cache.cache_dit_backend.BlockAdapter")
     @patch("vllm_omni.diffusion.cache.cache_dit_backend.cache_dit")
-    def test_refresh(self, mock_cache_dit):
+    def test_refresh(self, mock_cache_dit, mock_block_adapter):
         """Test refreshing cache context with SCM mask policy updates when num_inference_steps changes."""
         # Mock pipeline
         mock_pipeline = Mock()
         mock_pipeline.__class__.__name__ = "DiTPipeline"
         mock_transformer = Mock()
         mock_pipeline.transformer = mock_transformer
+        mock_transformer._cache_dit_adapter_config = CacheDiTAdapterConfig(
+            block_forward_patterns={
+                "layers": ForwardPattern.Pattern_0,
+            },
+        )
 
         # Mock cache_dit functions
         mock_cache_dit.enable_cache = Mock()
@@ -124,23 +138,24 @@ class TestCacheDiTBackend:
         assert "cache_config" in call_args[1]
         assert backend._last_num_inference_steps == 100
 
-    def test_hunyuan_custom_enabler_registered(self):
-        """Test HunyuanImage3 custom cache-dit enabler is registered."""
-        assert "HunyuanImage3Pipeline" in CUSTOM_DIT_ENABLERS
-
-    def test_dreamid_custom_enabler_registered(self):
-        """Test DreamIDOmni custom cache-dit enabler is registered."""
-        assert "DreamIDOmniPipeline" in CUSTOM_DIT_ENABLERS
-
     @patch("vllm_omni.diffusion.cache.cache_dit_backend.BlockAdapter")
     @patch("vllm_omni.diffusion.cache.cache_dit_backend.cache_dit")
     def test_enable_hunyuan_pipeline_uses_model_transformer(self, mock_cache_dit, mock_block_adapter):
-        """Test HunyuanImage3 custom enabler uses pipeline.model for cache enable/refresh."""
+        """Test HunyuanImage3 uses pipeline.transformer for cache enable/refresh.
+
+        NOTE: HunyuanImage3 no longer has a custom enabler, so this tests against the generic path.
+        """
         mock_pipeline = Mock()
         mock_pipeline.__class__.__name__ = "HunyuanImage3Pipeline"
         mock_pipeline.model = Mock()
         mock_pipeline.model.layers = Mock()
-
+        mock_pipeline.model._cache_dit_adapter_config = CacheDiTAdapterConfig(
+            block_forward_patterns={
+                "layers": ForwardPattern.Pattern_4,
+            },
+        )
+        # NOTE: pipe.transformer is pipe.model in HunyuanImage3Pipelines
+        mock_pipeline.transformer = mock_pipeline.model
         mock_cache_dit.enable_cache = Mock()
         mock_cache_dit.refresh_context = Mock()
 
@@ -152,9 +167,9 @@ class TestCacheDiTBackend:
         mock_block_adapter.assert_called_once()
         adapter_kwargs = mock_block_adapter.call_args.kwargs
         assert adapter_kwargs["transformer"] is mock_pipeline.model
-        assert adapter_kwargs["blocks"] is mock_pipeline.model.layers
-        assert adapter_kwargs["forward_pattern"] == adapter_kwargs["forward_pattern"].__class__.Pattern_4
-        assert len(adapter_kwargs["params_modifiers"]) == 1
+        assert len(adapter_kwargs["blocks"]) == 1
+        assert adapter_kwargs["blocks"][0] == mock_pipeline.model.layers
+        assert adapter_kwargs["forward_pattern"][0] == ForwardPattern.Pattern_4
         mock_cache_dit.enable_cache.assert_called_once()
 
         backend.refresh(mock_pipeline, num_inference_steps=12)
@@ -163,24 +178,23 @@ class TestCacheDiTBackend:
         assert call_args[0][0] is mock_pipeline.model
         assert call_args[1]["num_inference_steps"] == 12
 
-    def test_enable_hunyuan_pipeline_requires_model_layers(self):
-        """Test HunyuanImage3 enabler fails with a formatted pipeline class name."""
-        mock_pipeline = Mock()
-        mock_pipeline.__class__.__name__ = "HunyuanImage3Pipeline"
-        mock_pipeline.model = Mock(spec=[])
-
-        backend = CacheDiTBackend({"Fn_compute_blocks": 2})
-
-        with pytest.raises(ValueError, match="HunyuanImage3Pipeline"):
-            backend.enable(mock_pipeline)
-
     @patch("vllm_omni.diffusion.cache.cache_dit_backend.BlockAdapter")
     @patch("vllm_omni.diffusion.cache.cache_dit_backend.cache_dit")
     def test_enable_dreamid_pipeline_uses_fused_blocks(self, mock_cache_dit, mock_block_adapter):
+        """Test DreamID uses pipeline.transformer for cache enable/refresh.
+
+        NOTE: DreamID no longer has a custom enabler, so this tests against the generic path.
+        """
         mock_pipeline = Mock()
         mock_pipeline.__class__.__name__ = "DreamIDOmniPipeline"
         mock_pipeline.transformer = Mock()
         mock_pipeline.transformer.fused_blocks = Mock()
+        mock_pipeline.transformer._cache_dit_adapter_config = CacheDiTAdapterConfig(
+            block_forward_patterns={
+                "fused_blocks": ForwardPattern.Pattern_0,
+            },
+            has_separate_cfg=True,
+        )
 
         mock_cache_dit.enable_cache = Mock()
         mock_cache_dit.refresh_context = Mock()
@@ -193,10 +207,10 @@ class TestCacheDiTBackend:
         mock_block_adapter.assert_called_once()
         adapter_kwargs = mock_block_adapter.call_args.kwargs
         assert adapter_kwargs["transformer"] is mock_pipeline.transformer
-        assert adapter_kwargs["blocks"] is mock_pipeline.transformer.fused_blocks
-        assert adapter_kwargs["forward_pattern"] == adapter_kwargs["forward_pattern"].__class__.Pattern_0
+        assert len(adapter_kwargs["blocks"]) == 1
+        assert adapter_kwargs["blocks"][0] == mock_pipeline.transformer.fused_blocks
+        assert adapter_kwargs["forward_pattern"][0] == ForwardPattern.Pattern_0
         assert adapter_kwargs["has_separate_cfg"] is True
-        assert len(adapter_kwargs["params_modifiers"]) == 1
         mock_cache_dit.enable_cache.assert_called_once()
 
         backend.refresh(mock_pipeline, num_inference_steps=12)
@@ -204,16 +218,6 @@ class TestCacheDiTBackend:
         call_args = mock_cache_dit.refresh_context.call_args
         assert call_args[0][0] is mock_pipeline.transformer
         assert call_args[1]["num_inference_steps"] == 12
-
-    def test_enable_dreamid_pipeline_requires_fused_blocks(self):
-        mock_pipeline = Mock()
-        mock_pipeline.__class__.__name__ = "DreamIDOmniPipeline"
-        mock_pipeline.transformer = Mock(spec=[])
-
-        backend = CacheDiTBackend({"Fn_compute_blocks": 2})
-
-        with pytest.raises(ValueError, match="DreamIDOmniPipeline"):
-            backend.enable(mock_pipeline)
 
 
 class TestTeaCacheBackend:
