@@ -89,7 +89,7 @@ from vllm_omni.model_executor.models.voxtral_tts.pipeline import VOXTRAL_TTS_PIP
 
 logger = init_logger(__name__)
 
-PipelineResolverFunc: TypeAlias = Callable[[PreTrainedConfig | None], PipelineConfig]
+PipelineResolverFunc: TypeAlias = Callable[[PreTrainedConfig | None], PipelineConfig | None]
 
 # --- Multi-stage omni pipelines (LLM-centric; audio / video I/O) ---
 OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {

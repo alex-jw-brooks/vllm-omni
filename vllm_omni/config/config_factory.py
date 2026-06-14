@@ -76,7 +76,6 @@ class StageConfigFactory:
         if model_type and model_type in OMNI_PIPELINES:
             pipeline_cfg = cls.resolve_pipeline_config(model_type, hf_config)
             if pipeline_cfg is not None:
-                # FIXME - predicate handling was dropped need to put it back
                 return cls._create_from_registry(
                     model_type,
                     pipeline_cfg,
