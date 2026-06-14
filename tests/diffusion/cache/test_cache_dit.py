@@ -5,6 +5,7 @@
 Model specific tests for CacheDiT enablement.
 """
 
+import sys
 from unittest.mock import Mock, patch
 
 import pytest
@@ -15,11 +16,18 @@ import vllm_omni.diffusion.cache.cache_dit_backend as cd_backend
 from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig, CacheDiTBackend
 from vllm_omni.diffusion.data import DiffusionCacheConfig
 from vllm_omni.diffusion.models.cosmos3.transformer_cosmos3 import Cosmos3VFMTransformer
-from vllm_omni.diffusion.models.dreamid_omni.fusion import FusionModel as DreamIdOmniModel
 from vllm_omni.diffusion.models.helios.helios_transformer import HeliosTransformer3DModel
 from vllm_omni.diffusion.models.longcat_image.longcat_image_transformer import LongCatImageTransformer2DModel
 from vllm_omni.diffusion.models.ltx2.ltx2_transformer import LTX2VideoTransformer3DModel
 from vllm_omni.platforms import current_omni_platform
+
+# NOTE: We patch DreamID Omni's modules here with mocks so that we can import and inspect
+# the class even though the dependency may not be set up correctly; this is ok for these
+# tests because we just inspect it and never initialize the model.
+for mod in ("dreamid_omni", "dreamid_omni.modules", "dreamid_omni.modules.model"):
+    sys.modules.setdefault(mod, Mock())
+# isort: split
+from vllm_omni.diffusion.models.dreamid_omni.fusion import FusionModel as DreamIdOmniModel  # noqa: E402
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
