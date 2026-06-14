@@ -25,6 +25,15 @@ def trackable(cls: type[_T]) -> type[_T]:
     NOTE: This decorator preserves the original __init__ signature for
     type checkers while adding runtime tracking of explicitly-passed positional
     and keyword arguments.
+
+    It is also important to consider that @trackable currently needs to be applied
+    above @dataclass, since the consumed class is expected to be a dataclass.
+    You should do this explicitly on any class expected to be @trackable, including
+    the case where you are inheriting from a trackable superclass, otherwise you may
+    see unexpected behaviors due to the way @trackable and @dataclass interact with
+    the initializer. For example, inheriting from a @trackable dataclass and including
+    only @dataclass on the superclass produces a non-trackable subclass unless
+    you explicitly decorate the subclass as @trackable too.
     """
 
     # Currently we explicitly require anything @trackable to be a dataclass

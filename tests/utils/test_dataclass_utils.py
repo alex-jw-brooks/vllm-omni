@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from vllm_omni.utils.dataclass_utils import trackable, trackable_to_kwargs
+from vllm_omni.utils.dataclass_utils import Trackable, trackable, trackable_to_kwargs
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -89,3 +89,24 @@ def test_trackable_to_kwargs_raises_with_bad_types():
     obj = MyDataClass(foo=32, bar=64)
     with pytest.raises(TypeError):
         trackable_to_kwargs(obj)
+
+
+def test_trackable_subclasses_are_nontrackable_by_default():
+    """Ensure that by default, inheriting from a @trackable dataclass is not
+    @trackable, i.e., we just inherit from the dataclass. If the subclass needs
+    to be trackable, it should explicit use the decorator.
+    """
+
+    @trackable
+    @dataclass
+    class MyDataClass:
+        foo: int = 0
+        bar: int = 0
+        baz: int = 128
+
+    @dataclass
+    class NonTrackableSubClass(MyDataClass):
+        baz: int = 256
+
+    obj = NonTrackableSubClass()
+    assert not isinstance(obj, Trackable)
