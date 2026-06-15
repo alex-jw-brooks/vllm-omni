@@ -16,7 +16,7 @@ from transformers import PretrainedConfig, Qwen3OmniMoeConfig
 
 from tests.helpers.stage_config import get_deploy_config_path
 from vllm_omni.config.config_factory import StageConfigFactory
-from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
+from vllm_omni.config.pipeline_registry import OMNI_PIPELINES, register_pipeline
 from vllm_omni.config.stage_config import (
     DeployConfig,
     PipelineConfig,
@@ -31,6 +31,7 @@ from vllm_omni.config.stage_config import (
     build_stage_runtime_overrides,
     load_deploy_config,
     merge_pipeline_deploy,
+    pipeline_cfg_resolver,
     strip_parent_engine_args,
 )
 from vllm_omni.engine.arg_utils import SHARED_FIELDS, EngineArgs, internal_blacklist_keys
@@ -597,6 +598,67 @@ class TestPipelineConfigNew:
     def test_validate_no_stages(self):
         p = PipelineConfig(model_type="t", model_arch="A")
         assert any("no stages" in e.lower() for e in p.validate())
+
+
+class TestPipelineRegistration:
+    def test_pipeline_registration(self, clean_pipeline_registry):
+        """Ensure that we can register and create a custom pipeline config."""
+        new_model_type = "new_model_type"
+        pipe_cfg = PipelineConfig(model_type=new_model_type)
+
+        # Register the new PipelineConfig
+        assert new_model_type not in OMNI_PIPELINES
+        register_pipeline(pipe_cfg)
+        assert new_model_type in OMNI_PIPELINES
+        assert OMNI_PIPELINES[new_model_type] is pipe_cfg
+
+        class FakeConfig(PretrainedConfig):
+            model_type = new_model_type
+
+        # Create the model
+        with (
+            patch("vllm_omni.config.config_factory.get_config", return_value=FakeConfig()),
+            patch.object(StageConfigFactory, "_create_from_registry") as mock_create,
+        ):
+            StageConfigFactory.create_from_model("fake/model")
+            mock_create.assert_called_once()
+            # Ensure that the passed pipeline_config is the right type
+            pipeline_cfg = mock_create.call_args[0][1]
+        assert isinstance(pipeline_cfg, PipelineConfig)
+        assert pipe_cfg.model_type == new_model_type
+
+    def test_resolver_registration(self, clean_pipeline_registry):
+        """Ensure that we can register and create a custom resolver."""
+        new_model_type = "new_model_type"
+        resolved_type = "resolved_type"
+
+        class FakeConfig(PretrainedConfig):
+            model_type = new_model_type
+
+        @pipeline_cfg_resolver(config_type=FakeConfig)
+        def custom_resolver(
+            hf_config: FakeConfig,
+        ) -> PipelineConfig:
+            return PipelineConfig(model_type=resolved_type)
+
+        # Register the new PipelineConfig
+        assert new_model_type not in OMNI_PIPELINES
+
+        register_pipeline(custom_resolver, model_type=new_model_type)
+        assert new_model_type in OMNI_PIPELINES
+        assert OMNI_PIPELINES[new_model_type] is custom_resolver
+
+        # Create the model
+        with (
+            patch("vllm_omni.config.config_factory.get_config", return_value=FakeConfig()),
+            patch.object(StageConfigFactory, "_create_from_registry") as mock_create,
+        ):
+            StageConfigFactory.create_from_model("fake/model")
+            mock_create.assert_called_once()
+            # Ensure that the passed pipeline_config is the right type
+            pipeline_cfg = mock_create.call_args[0][1]
+        assert isinstance(pipeline_cfg, PipelineConfig)
+        assert pipeline_cfg.model_type == resolved_type
 
 
 class TestResolveScheduler:
