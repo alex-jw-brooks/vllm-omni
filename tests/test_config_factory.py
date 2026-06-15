@@ -517,15 +517,10 @@ class TestPipelineDiscovery:
     """Tests for the central pipeline registry (``OMNI_PIPELINES``)."""
 
     def test_registry_has_known_models(self):
-        """Built-in pipelines are lazy-loaded from the central declaration
-        on first access; no eager import or discovery walk needed."""
-        # ``in`` triggers the lazy-map lookup without forcing a load.
+        """Check that specific models are in OMNI_PIPELINES."""
         assert "qwen2_5_omni" in OMNI_PIPELINES
         assert "qwen3_omni_moe" in OMNI_PIPELINES
         assert "qwen3_tts" in OMNI_PIPELINES
-
-    def test_registry_with_no_resolver(self):
-        """Looking up a registered model_type returns the matching PipelineConfig."""
 
     def test_registry_resolver_qwen3_omni_all_stages(self):
         """Test that providing the HF config for qwen3 omni with audio enabled uses all stages."""
@@ -538,7 +533,7 @@ class TestPipelineDiscovery:
         assert len(pipeline.stages) == 3  # thinker + talker + code2wav
 
     def test_registry_resolver_qwen3_omni_thinker_only(self):
-        """Test that providing the HF config for qwen3 omni with audio enabled uses all stages."""
+        """Test that providing the HF config for qwen3 omni without audio is thinker only."""
         pipeline = StageConfigFactory.resolve_pipeline_config(
             "qwen3_omni_moe",
             Q3_OMNI_THINKER_HF_CONFIG,
