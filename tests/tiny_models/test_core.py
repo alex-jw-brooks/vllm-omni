@@ -9,9 +9,29 @@ from tests.tiny_models.config_types import DiffAccs, DiffTasks, DiffusionModelTe
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
+
 # NOTE: Pipeline are not consistent in handling input multimodal data
 # right now, so for image2image, we have to pass a PIL image.
 # TODO (Alex): Standardize input types & add common checks
+@pytest.fixture(scope="session")
+def tiny_model_paths(request):
+    """Build or download the tiny models for the selected tests."""
+    model_paths = {}
+    print("Initializing...")
+    for item in request.session.items:
+        if not hasattr(item, "callspec"):
+            raise ValueError("tiny_model_paths should not be used with non-parametrized models.")
+        model_name = item.callspec.params["model_name"]
+        if model_name not in model_paths:
+            print(f"Calling tiny model builder for: {model_name}")
+            model_builder = item.callspec.params["model_builder"]
+            model_paths[model_name] = model_builder()
+
+    yield model_paths
+    for path in model_paths.values():
+        rmtree(path, ignore_errors=True)
+
+
 IMAGE_DIMS = (512, 512)
 HEIGHT, WIDTH = IMAGE_DIMS
 INPUT_IMAGE = Image.new("RGB", IMAGE_DIMS)
@@ -38,34 +58,26 @@ DIFFUSION_TEST_SETTINGS = {
     "model_name,model_builder,extra_args,acceleration_type",
     get_parametrized_options(DIFFUSION_TEST_SETTINGS),
 )
-def test_text_to_image(model_name, model_builder, extra_args, acceleration_type: DiffAccs):
-    # TODO - handle model builder more cleanly, there is really no reason it
-    # should be handled here, we can handle it the parametrized expansion
-    tiny_model_path = model_builder()
+def test_text_to_image(model_name, model_builder, extra_args, acceleration_type: DiffAccs, tiny_model_paths):
     run_image_generation_test(
         acceleration_type=acceleration_type,
-        model_path=tiny_model_path,
+        model_path=tiny_model_paths[model_name],
         extra_args=extra_args if extra_args is not None else {},
         execution_func=run_and_validate_text_to_image_request,
     )
-    rmtree(tiny_model_path)
 
 
 @pytest.mark.parametrize(
     "model_name,model_builder,extra_args,acceleration_type",
     get_parametrized_options(DIFFUSION_TEST_SETTINGS),
 )
-def test_image_edit(model_name, model_builder, extra_args, acceleration_type: DiffAccs):
-    # TODO - handle model builder more cleanly, there is really no reason it
-    # should be handled here, we can handle it the parametrized expansion
-    tiny_model_path = model_builder()
+def test_image_edit(model_name, model_builder, extra_args, acceleration_type: DiffAccs, tiny_model_paths):
     run_image_generation_test(
         acceleration_type=acceleration_type,
-        model_path=tiny_model_path,
+        model_path=tiny_model_paths[model_name],
         extra_args=extra_args if extra_args is not None else {},
         execution_func=run_and_validate_image_to_image_request,
     )
-    rmtree(tiny_model_path)
 
 
 def run_image_generation_test(acceleration_type: DiffAccs, model_path, extra_args, execution_func):
@@ -123,9 +135,6 @@ def validate_image_output(outputs):
 
 
 # TODO:
-# 2. Port mark parametrize infra from vLLM to dynamic cross product the tests
-# 3. Common fixtures to only load the model once (this may need to be revisited....)
 # 4. Skip tests based on device requirements
 # 5. Add pytest marks, ability to filter what we actually run
-# 6. Move the tempdir stuff to be handled by pytest (session scoped)
 # 7. Write alignment tests
