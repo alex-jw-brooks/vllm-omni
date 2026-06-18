@@ -25,7 +25,7 @@ def tiny_model_paths(request):
 
     NOTE: this is session scoped to avoid churn in tiny model creation,
     but will ensure all the tiny models you need are created for the selected tests
-    before it starts to execute them. If you exclude tiny models"""
+    before it starts to execute them."""
     model_paths = {}
     print("Initializing tiny models...")
     for item in request.session.items:
@@ -34,8 +34,7 @@ def tiny_model_paths(request):
         model_name = item.callspec.params["model_name"]
         if model_name not in model_paths:
             print(f"Calling tiny model builder for: {model_name}")
-            model_builder = item.callspec.params["model_builder"]
-            model_paths[model_name] = model_builder()
+            model_paths[model_name] = DIFFUSION_TEST_SETTINGS[model_name].builder()
 
     yield model_paths
     for path in model_paths.values():
@@ -81,15 +80,14 @@ DIFFUSION_TEST_SETTINGS = {
 
 
 @pytest.mark.parametrize(
-    "model_name,accelerations,supported_tasks,model_builder",
+    "model_name,accelerations,supported_tasks",
     get_parametrized_options(DIFFUSION_TEST_SETTINGS),
 )
 def test_pipeline_on_supported_tasks(
     model_name,
     accelerations: list[DiffAccs] | None,
-    model_builder,
     supported_tasks: list[DiffTasks],
-    tiny_model_paths,
+    tiny_model_paths: dict[str, str],
     subtests,
 ):
     """Run a smoke test on all of the pipelines supported tasks using a set of enabled accelerations."""
@@ -98,7 +96,7 @@ def test_pipeline_on_supported_tasks(
     # This lets us init the model once, but display separate failures in pytest, and avoid halting the
     # checks on other tasks if one fails.
     #
-    # This allows ut so have some degree of test isolation without the cost of redundant initialization,
+    # This allows us to have some degree of test isolation without the cost of redundant initialization,
     # since starting the server can take 10+ seconds, even for tiny models.
     #
     # NOTE: Be sure to install pytest-subtests if you're running on pytest < 9
