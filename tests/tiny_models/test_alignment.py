@@ -78,12 +78,8 @@ def test_all_non_excluded_pipelines_have_tests():
     configuration in DIFFUSION_TEST_SETTINGS, or is explicitly excluded for a
     known reason."""
     non_excluded_diff_pipes = _DIFFUSION_MODELS.keys() - set(EXCLUDED_MODELS)
-    missing_pipes = DIFFUSION_TEST_SETTINGS.keys() - set(non_excluded_diff_pipes)
-    # Subtract out the union; we do not expect to have keys in both, but that should
-    # not cause this check to fail (i.e., we test mutual exclusivity separately).
-    overlapping_pipes = set(_DIFFUSION_MODELS.keys()).union(set(EXCLUDED_MODELS))
-    bad_pipes = missing_pipes - overlapping_pipes
-    assert len(bad_pipes) == 0
+    missing_tests = non_excluded_diff_pipes - DIFFUSION_TEST_SETTINGS.keys()
+    assert len(missing_tests) == 0, f"Pipelines missing test settings: {missing_tests}"
 
 
 def test_no_excluded_models_have_test_settings():
