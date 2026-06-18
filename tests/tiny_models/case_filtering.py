@@ -16,7 +16,26 @@ import itertools
 
 import pytest
 
-from tests.tiny_models.config_types import DiffusionModelTestOpts
+from tests.tiny_models.config_types import DiffusionModelTestOpts, get_required_device_count
+from vllm_omni.platforms import current_omni_platform
+
+
+def get_test_group_marks(test_group, model_marks: list | None) -> list:
+    """Build the full set of pytest marks for a test group. This will append a skip
+    based on the device counts for the current platform if we don't have the device
+    count needed to run the test group."""
+    marks = list(model_marks) if model_marks is not None else []
+    required_devices = get_required_device_count(test_group)
+    if required_devices > 1:
+        assert current_omni_platform is not None and current_omni_platform.device_count is not None
+        device_count = current_omni_platform.device_count()
+        if device_count < required_devices:
+            marks.append(
+                pytest.mark.skip(
+                    reason=f"Need {required_devices} devices, got {device_count}",
+                )
+            )
+    return marks
 
 
 def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts):
@@ -30,9 +49,9 @@ def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts
         pytest.param(
             model_name,
             test_info.builder,
-            test_info.extra_args,
-            test_group,  # A test group consists of one or more acceleration types
-            marks=test_info.marks if test_info.marks is not None else [],
+            test_group,
+            test_info.supported_tasks,
+            marks=get_test_group_marks(test_group, test_info.marks),
         )
         for test_group in test_info.test_groups
     ]

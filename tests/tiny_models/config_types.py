@@ -42,19 +42,12 @@ class DiffusionModelTestOpts(NamedTuple):
     builder: TinyDiffusionBuilder
 
     # Actual tasks which controls the tests actually run
-    supported_tasks: list[DiffTasks] | None = None
+    supported_tasks: list[DiffTasks]
 
     # Accelerations to be run together for this model; we currently specify
     # this explicitly because the time to start a model is nontrivial, even
     # for tiny models.
-    test_groups: list[None | list[DiffAccs]] | None = None
-
-    # Extra args to passed to sampling params. These should be used sparingly,
-    # but in some cases might be needed due to current pipeline implementations,
-    # e.g., to ensure we can actually make small models.
-    #
-    # Generally this should only be used to decouple test refactoring from model fixes.
-    extra_args: dict | None = None
+    test_groups: list[None | list[DiffAccs]]
 
     # Pytest Marks for this model. This may be useful for selecting which models
     # we want to run where, similar to the way vLLM's multimodal tests mark some
@@ -76,8 +69,37 @@ ACC_PARALLEL_KWARGS = {
     DiffAccs.TENSOR_PARALLEL: {"tensor_parallel_size": 2},
     DiffAccs.CFG_PARALLEL: {"cfg_parallel_size": 2},
     DiffAccs.VAE_PATCH_PARALLEL: {"vae_patch_parallel_size": 2},
+    # For SP, we don't run ring here to conserve devices, since it is easy
+    # to blow up the number of needed devices fast. Compatibility for ring
+    # and ulysses together should be tested generically outside of these tests.
     DiffAccs.SEQUENCE_PARALLEL: {"ulysses_degree": 2},
 }
+
+# TODO - combine with that ^, this is messy
+ACC_DEVICE_COUNT_KEYS = {
+    DiffAccs.TENSOR_PARALLEL: "tensor_parallel_size",
+    DiffAccs.CFG_PARALLEL: "cfg_parallel_size",
+    DiffAccs.SEQUENCE_PARALLEL: "ulysses_degree",
+    DiffAccs.VAE_PATCH_PARALLEL: "vae_patch_parallel_size",
+    DiffAccs.HSDP: "hsdp_shard_size",
+}
+
+
+def get_required_device_count(accelerations: list[DiffAccs] | None) -> int:
+    """Compute the minimum number of devices needed for a set of accelerations.
+    The total is the product of all parallel dimensions (defaulting to 1).
+
+    If not enough devices are available for a test group's accelerations,
+    that test will be skipped."""
+    count = 1
+    if accelerations is None:
+        return count
+
+    for acc in accelerations:
+        key = ACC_DEVICE_COUNT_KEYS.get(acc)
+        if key is not None:
+            count *= ACC_PARALLEL_KWARGS[acc][key]
+    return count
 
 
 def build_parallel_config_from_diff_accelerations(accelerations: list[DiffAccs]) -> DiffusionParallelConfig | None:
