@@ -8,11 +8,15 @@ from tests.tiny_models.config_types import (
     DiffAccs,
     DiffTasks,
     DiffusionModelTestOpts,
+    build_omni_from_diff_accelerations,
 )
-from tests.tiny_models.task_runners import run_image_generation_test
+from tests.tiny_models.task_runners import (
+    run_and_validate_image_to_image_request,
+    run_and_validate_text_to_image_request,
+)
 
 
-# NOTE: Pipeline are not consistent in handling input multimodal data
+# NOTE: Pipelines are not consistent in handling input multimodal data
 # right now, so for image2image, we have to pass a PIL image.
 # TODO (Alex): Standardize input types & add common checks
 @pytest.fixture(scope="session")
@@ -69,18 +73,25 @@ def test_pipeline_on_supported_tasks(
 ):
     """Run a smoke test on all of the pipelines supported tasks using a set of enabled accelerations."""
     assert len(supported_tasks) > 0
+    # We initialize the Omni object before running the tasks, then run each task as a pytest subtask.
+    # This lets us init the model once, but display separate failures in pytest, and avoid halting the
+    # checks on other tasks if one fails.
+    #
+    # This allows ut so have some degree of test isolation without the cost of redundant initialization,
+    # since starting the server can take 10+ seconds, even for tiny models.
+    #
+    # NOTE: Be sure to install pytest-subtests if you're running on pytest < 9
+    omni = build_omni_from_diff_accelerations(
+        accelerations=accelerations,
+        model=tiny_model_paths[model_name],
+        enforce_eager=True,
+    )
+
     for task_type in supported_tasks:
-        # We run each test as a subtest, so if there is a failure, it will show up as an independent
-        # failure in pytest, and also not halt the checks for the other tasks. This allows us to have
-        # some degree of test isolation without the cost of redundant initialization.
-        #
-        # NOTE: Be sure to install pytest-subtests if you're running on pytest < 9
         with subtests.test(msg=task_type):
-            if task_type in [DiffTasks.TEXT_TO_IMAGE, DiffTasks.IMAGE_EDIT]:
-                run_image_generation_test(
-                    accelerations,
-                    model_path=tiny_model_paths[model_name],
-                    is_tti=task_type == DiffTasks.TEXT_TO_IMAGE,
-                )
+            if task_type == DiffTasks.TEXT_TO_IMAGE:
+                run_and_validate_text_to_image_request(omni)
+            elif task_type == DiffTasks.IMAGE_EDIT:
+                run_and_validate_image_to_image_request(omni)
             else:
                 raise ValueError(f"Task type {task_type} is not yet supported")
