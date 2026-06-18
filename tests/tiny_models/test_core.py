@@ -65,16 +65,22 @@ def test_pipeline_on_supported_tasks(
     accelerations: list[DiffAccs] | None,
     supported_tasks: list[DiffTasks],
     tiny_model_paths,
+    subtests,
 ):
     """Run a smoke test on all of the pipelines supported tasks using a set of enabled accelerations."""
     assert len(supported_tasks) > 0
     for task_type in supported_tasks:
-        if task_type in [DiffTasks.TEXT_TO_IMAGE, DiffTasks.IMAGE_EDIT]:
-            # TODO - would be nice to run these as subtests
-            run_image_generation_test(
-                accelerations,
-                model_path=tiny_model_paths[model_name],
-                is_tti=task_type == DiffTasks.TEXT_TO_IMAGE,
-            )
-        else:
-            raise ValueError(f"Task type {task_type} is not yet supported")
+        # We run each test as a subtest, so if there is a failure, it will show up as an independent
+        # failure in pytest, and also not halt the checks for the other tasks. This allows us to have
+        # some degree of test isolation without the cost of redundant initialization.
+        #
+        # NOTE: Be sure to install pytest-subtests if you're running on pytest < 9
+        with subtests.test(msg=task_type):
+            if task_type in [DiffTasks.TEXT_TO_IMAGE, DiffTasks.IMAGE_EDIT]:
+                run_image_generation_test(
+                    accelerations,
+                    model_path=tiny_model_paths[model_name],
+                    is_tti=task_type == DiffTasks.TEXT_TO_IMAGE,
+                )
+            else:
+                raise ValueError(f"Task type {task_type} is not yet supported")
