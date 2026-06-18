@@ -5,7 +5,12 @@ from PIL import Image
 
 from tests.tiny_models import diff_model_builders
 from tests.tiny_models.case_filtering import get_parametrized_options
-from tests.tiny_models.config_types import DiffAccs, DiffTasks, DiffusionModelTestOpts, build_omni_from_acc_type
+from tests.tiny_models.config_types import (
+    DiffAccs,
+    DiffTasks,
+    DiffusionModelTestOpts,
+    build_omni_from_diff_accelerations,
+)
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
@@ -38,29 +43,28 @@ INPUT_IMAGE = Image.new("RGB", IMAGE_DIMS)
 
 DIFFUSION_TEST_SETTINGS = {
     "Flux2KleinPipeline": DiffusionModelTestOpts(
-        # Indicates this pipeline implementation actually supports
-        # both tti and i2i, so we should run both tests on it
+        # Indicates this pipeline implementation supports both tti and i2i.
+        # In this case, we run both the smoke tests for TTI and for Image edit
+        # together to avoid loading the model twice, because doing so is slow.
         supported_tasks=[DiffTasks.TEXT_TO_IMAGE, DiffTasks.IMAGE_EDIT],
         builder=diff_model_builders.tiny_flux2_klein_builder,
-        supported_accelerations=[
-            DiffAccs.HSDP,
-            DiffAccs.TEA_CACHE,
-            DiffAccs.CACHE_DIT,
-            DiffAccs.SEQUENCE_PARALLEL,
-            DiffAccs.CFG_PARALLEL,
-            DiffAccs.TENSOR_PARALLEL,
+        test_groups=[
+            None,  # No accelerations
+            [DiffAccs.HSDP, DiffAccs.TEA_CACHE],
+            [DiffAccs.SEQUENCE_PARALLEL, DiffAccs.CACHE_DIT],
+            [DiffAccs.CFG_PARALLEL, DiffAccs.TENSOR_PARALLEL],
         ],
     )
 }
 
 
 @pytest.mark.parametrize(
-    "model_name,model_builder,extra_args,acceleration_type",
+    "model_name,model_builder,extra_args,accelerations",
     get_parametrized_options(DIFFUSION_TEST_SETTINGS),
 )
-def test_text_to_image(model_name, model_builder, extra_args, acceleration_type: DiffAccs, tiny_model_paths):
+def test_text_to_image(model_name, model_builder, extra_args, accelerations: list[DiffAccs] | None, tiny_model_paths):
     run_image_generation_test(
-        acceleration_type=acceleration_type,
+        accelerations=accelerations,
         model_path=tiny_model_paths[model_name],
         extra_args=extra_args if extra_args is not None else {},
         execution_func=run_and_validate_text_to_image_request,
@@ -68,24 +72,24 @@ def test_text_to_image(model_name, model_builder, extra_args, acceleration_type:
 
 
 @pytest.mark.parametrize(
-    "model_name,model_builder,extra_args,acceleration_type",
+    "model_name,model_builder,extra_args,accelerations",
     get_parametrized_options(DIFFUSION_TEST_SETTINGS),
 )
-def test_image_edit(model_name, model_builder, extra_args, acceleration_type: DiffAccs, tiny_model_paths):
+def test_image_edit(model_name, model_builder, extra_args, accelerations: list[DiffAccs] | None, tiny_model_paths):
     run_image_generation_test(
-        acceleration_type=acceleration_type,
+        accelerations=accelerations,
         model_path=tiny_model_paths[model_name],
         extra_args=extra_args if extra_args is not None else {},
         execution_func=run_and_validate_image_to_image_request,
     )
 
 
-def run_image_generation_test(acceleration_type: DiffAccs, model_path, extra_args, execution_func):
+def run_image_generation_test(accelerations: list[DiffAccs] | None, model_path, extra_args, execution_func):
     """Common flow for initializing an offline Omni instance, running a dummy image generation request,
     and validating that the output is nonempty & the right shape."""
-    print(f"Building for acceleration {acceleration_type}")
-    omni = build_omni_from_acc_type(
-        acc_type=acceleration_type,
+    print(f"Building for accelerations: {accelerations}")
+    omni = build_omni_from_diff_accelerations(
+        accelerations=accelerations,
         model=model_path,
         enforce_eager=True,
     )

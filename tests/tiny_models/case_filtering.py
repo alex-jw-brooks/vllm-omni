@@ -2,9 +2,10 @@
 Analogous to: https://github.com/vllm-project/vllm/blob/v0.23.0/tests/models/multimodal/generation/vlm_utils/case_filtering.py
 
 This follows a similar pattern so that we can use `get_parametrized_options` to expand our test
-configurations out, similar to the way in which vLLM expands supported input type tests; doing so
-lets us essentially do what pytest's parametrization does, but in a way that lets models support
-different acceleration types without noisy skip tests for missing acceleration support.
+configurations out, similar to the way in which vLLM expands supported input type tests. For now,
+this mostly just means parametrizing over the test groups, which may be unique per model, but
+doing so in this way lets us cleanly define test groups that may be heterogeneous + avoid having
+excessive skip marks for features that may not be supported in every pipeline.
 """
 
 # Engine initialization is currently quite expensive. For efficiency,
@@ -19,23 +20,28 @@ from tests.tiny_models.config_types import DiffusionModelTestOpts
 
 
 def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts):
-    assert test_info.supported_accelerations is not None
+    """Given a model & its corresponding test options, build the list of pytest params
+    to be run for this model. For now, this just means running over the test groups, but
+    writing it this way for now in case we need additionally flexibility later (e.g., could
+    build test groups more dynamically based on number of visible devices, etc).
+    """
+    assert test_info.test_groups is not None
     return [
         pytest.param(
             model_name,
             test_info.builder,
             test_info.extra_args,
-            acc,  # TODO: This should actually be an acceleration list or None
+            test_group,  # A test group consists of one or more acceleration types
             marks=test_info.marks if test_info.marks is not None else [],
         )
-        for acc in test_info.supported_accelerations
+        for test_group in test_info.test_groups
     ]
 
 
 def get_parametrized_options(
     test_settings: dict[str, DiffusionModelTestOpts],
 ):
-    """Converts all of our DiffusionModelTestOpts into an expanded list of parameters
+    """Converts all the DiffusionModelTestOpts into an expanded list of parameters
     based on which accelerations are available.
     """
     # Get a list per model type, where each entry contains a tuple of all of
