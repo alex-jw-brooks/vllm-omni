@@ -11,6 +11,7 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 IMAGE_DIMS = (512, 512)
 HEIGHT, WIDTH = IMAGE_DIMS
 INPUT_IMAGE = Image.new("RGB", IMAGE_DIMS)
+
 IMAGE_GEN_SAMPLING_PARAMS = OmniDiffusionSamplingParams(
     num_inference_steps=4,
     height=HEIGHT,
@@ -48,8 +49,3 @@ def validate_image_output(outputs):
     img = images[0]
     assert isinstance(img, Image.Image)
     assert img.size == IMAGE_DIMS
-
-
-# TODO:
-# 1. Add pytest markers to skip test configurations based on device requirements
-# 2. Add infra to check for things that are not compatible with each other.

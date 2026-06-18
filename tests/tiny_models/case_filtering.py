@@ -48,9 +48,10 @@ def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts
     return [
         pytest.param(
             model_name,
-            test_info.builder,
             test_group,
             test_info.supported_tasks,
+            test_info.builder,
+            id=f"{model_name}[{'+'.join(test_group)}]" if test_group else model_name,
             marks=get_test_group_marks(test_group, test_info.marks),
         )
         for test_group in test_info.test_groups
