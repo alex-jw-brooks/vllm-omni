@@ -14,7 +14,7 @@ def left_pad_stack(
     tensors are on the device of the provided tensors. If all tensors are
     the same length, None is returned for mask.
     """
-    trailing_dims = set([ts.shape[1:] for ts in tensors])
+    trailing_dims = {ts.shape[1:] for ts in tensors}
     if len(trailing_dims) != 1:
         raise ValueError("Tensors must be non-empty and can only vary in dim 0")
     trailing = trailing_dims.pop()
