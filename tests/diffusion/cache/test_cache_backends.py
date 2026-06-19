@@ -13,6 +13,7 @@ This module tests the cache backend implementations:
 
 from unittest.mock import Mock, patch
 
+import cache_dit
 import pytest
 from cache_dit import ForwardPattern
 
@@ -218,6 +219,44 @@ class TestCacheDiTBackend:
         call_args = mock_cache_dit.refresh_context.call_args
         assert call_args[0][0] is mock_pipeline.transformer
         assert call_args[1]["num_inference_steps"] == 12
+
+    @pytest.mark.parametrize("num_inference_steps", [1, 7])
+    @patch("vllm_omni.diffusion.cache.cache_dit_backend.BlockAdapter")
+    @patch("vllm_omni.diffusion.cache.cache_dit_backend.cache_dit")
+    def test_refresh_scm_bypassed_for_unsupported_step_counts(
+        self, mock_cache_dit, mock_block_adapter, num_inference_steps
+    ):
+        """Ensure SCM is bypassed when num_inference_steps < 8 and not in (4, 6),
+        because cache_dit.steps_mask() raises for unsupported step count.
+        For these cases, we fall back to the non-SCM path to avoid crashing.
+        """
+        mock_pipeline = Mock()
+        mock_pipeline.__class__.__name__ = "DiTPipeline"
+        mock_transformer = Mock()
+        mock_pipeline.transformer = mock_transformer
+        mock_transformer._cache_dit_adapter_config = CacheDiTAdapterConfig(
+            block_forward_patterns={
+                "layers": ForwardPattern.Pattern_0,
+            },
+        )
+
+        mock_cache_dit.enable_cache = Mock()
+        mock_cache_dit.refresh_context = Mock()
+        mock_cache_dit.steps_mask = cache_dit.steps_mask
+
+        # Create a cache config with an scm policy & enable it
+        config = DiffusionCacheConfig(scm_steps_mask_policy="fast")
+        backend = CacheDiTBackend(config)
+        backend.enable(mock_pipeline)
+
+        backend.refresh(mock_pipeline, num_inference_steps=num_inference_steps)
+
+        mock_cache_dit.refresh_context.assert_called_once()
+        call_args = mock_cache_dit.refresh_context.call_args
+        # Ensure that we properly guard, i.e., cache config is filtered
+        assert call_args[0][0] == mock_transformer
+        assert call_args[1]["num_inference_steps"] == num_inference_steps
+        assert "cache_config" not in call_args[1]
 
 
 class TestTeaCacheBackend:
