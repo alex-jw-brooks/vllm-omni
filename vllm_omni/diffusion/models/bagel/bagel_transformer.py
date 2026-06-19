@@ -559,6 +559,10 @@ class PackedAttentionMoT(nn.Module):
         vae_k = k[vae_indices]
         vae_v = v[vae_indices]
 
+        num_branches = len(query_lens)
+        text_per_branch = text_q.shape[0] // num_branches
+        vae_per_branch = vae_q.shape[0] // num_branches
+
         # Build joint K/V: [kv_cache, text_markers] (replicated across SP ranks)
         if past_key_values is not None and past_key_values.key_cache[self.layer_idx] is not None:
             cache_k = past_key_values.key_cache[self.layer_idx]
@@ -585,10 +589,6 @@ class PackedAttentionMoT(nn.Module):
                 ),
             )
         else:
-            num_branches = len(query_lens)
-            text_per_branch = text_q.shape[0] // num_branches
-            vae_per_branch = vae_q.shape[0] // num_branches
-
             text_q_parts = text_q.split([text_per_branch] * num_branches)
             vae_q_parts = vae_q.split([vae_per_branch] * num_branches)
             text_k_parts = text_k.split([text_per_branch] * num_branches)
@@ -623,12 +623,12 @@ class PackedAttentionMoT(nn.Module):
                 k_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_k_parts, vae_k_parts)])
                 v_4d = torch.stack([torch.cat([t, v]) for t, v in zip(text_v_parts, vae_v_parts)])
                 metadata = None
-
             attn_out = self.attn_noncausal(q_4d, k_4d, v_4d, metadata)
-            q_per_branch = int(query_lens[0])
-            attn_out = attn_out.reshape(num_branches, q_per_branch, self.q_size)
-            text_attn = attn_out[:, :text_per_branch].reshape(-1, self.q_size)
-            vae_attn = attn_out[:, text_per_branch:].reshape(-1, self.q_size)
+
+        attn_out = attn_out.reshape(num_branches, -1, self.q_size)
+        text_attn = attn_out[:, :text_per_branch].reshape(-1, self.q_size)
+        vae_attn = attn_out[:, text_per_branch:].reshape(-1, self.q_size)
+        text_len = text_attn.shape[0]
 
         # MoT output projection over local [text, vae] order.
         local_packed = torch.cat([text_attn, vae_attn], dim=0)
