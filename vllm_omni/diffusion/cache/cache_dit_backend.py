@@ -82,7 +82,11 @@ def build_cache_context_refresh(
             num_inference_steps: New number of inference steps.
         """
         transformer = get_pipeline_transformer(pipeline)
-        if cache_config.scm_steps_mask_policy is None:
+
+        # Bypass SCM for step counts that don't support predefined masks (e.g., vLLM's 1-step dummy run)
+        scm_supported_steps = num_inference_steps >= 8 or num_inference_steps in (4, 6)
+
+        if cache_config.scm_steps_mask_policy is None or not scm_supported_steps:
             cache_dit.refresh_context(transformer, num_inference_steps=num_inference_steps, verbose=verbose)
         else:
             cache_dit.refresh_context(
