@@ -75,7 +75,6 @@ ACC_PARALLEL_KWARGS = {
     DiffAccs.SEQUENCE_PARALLEL: {"ulysses_degree": 2},
 }
 
-# TODO - combine with that ^, this is messy
 ACC_DEVICE_COUNT_KEYS = {
     DiffAccs.TENSOR_PARALLEL: "tensor_parallel_size",
     DiffAccs.CFG_PARALLEL: "cfg_parallel_size",
@@ -83,6 +82,22 @@ ACC_DEVICE_COUNT_KEYS = {
     DiffAccs.VAE_PATCH_PARALLEL: "vae_patch_parallel_size",
     DiffAccs.HSDP: "hsdp_shard_size",
 }
+
+### CLI args for launching an OmniServer subprocess per acceleration.
+# Follows the same pattern as e2e online serving tests, which hand-code
+# their server_args lists in OmniServerParams.
+ACC_SERVER_ARGS: dict[DiffAccs, list[str]] = {
+    DiffAccs.HSDP: ["--use-hsdp", "--hsdp-shard-size", "2"],
+    DiffAccs.TEA_CACHE: ["--cache-backend", "tea_cache"],
+    DiffAccs.CACHE_DIT: ["--cache-backend", "cache_dit"],
+    DiffAccs.SEQUENCE_PARALLEL: ["--usp", "2"],
+    DiffAccs.CFG_PARALLEL: ["--cfg-parallel-size", "2"],
+    DiffAccs.TENSOR_PARALLEL: ["--tensor-parallel-size", "2"],
+    DiffAccs.CPU_OFFLOAD: ["--enable-cpu-offload"],
+    DiffAccs.VAE_PATCH_PARALLEL: ["--vae-use-tiling", "--vae-patch-parallel-size", "2"],
+}
+
+## TODO ^ These should be in the same object, it's getting messy.
 
 
 def get_required_device_count(accelerations: list[DiffAccs] | None) -> int:
@@ -114,6 +129,7 @@ def build_parallel_config_from_diff_accelerations(accelerations: list[DiffAccs])
     return None
 
 
+### Offline Omni() object builder
 def build_omni_from_diff_accelerations(accelerations: list[DiffAccs] | None, **kwargs) -> Omni:
     """Given one or more acceleration types, build the corresponding Omni() object."""
     # Coerce to a list and build the parallel config, since that depends on the accelerations
@@ -136,3 +152,15 @@ def build_omni_from_diff_accelerations(accelerations: list[DiffAccs] | None, **k
         raise ValueError(f"Explicit Omni kwargs and inferred Omni kwargs for accelerations overlap: {shared_keys}")
     omni_kwargs = {**acc_kwargs, **kwargs}
     return Omni(**omni_kwargs)
+
+
+### Online server flag builder
+def build_server_args_from_diff_accelerations(accelerations: list[DiffAccs] | None) -> list[str]:
+    """Given one or more acceleration types, build the corresponding CLI args
+    for launching an OmniServer subprocess."""
+    if accelerations is None:
+        return []
+    args = []
+    for acc in accelerations:
+        args.extend(ACC_SERVER_ARGS.get(acc, []))
+    return args
