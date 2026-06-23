@@ -46,6 +46,7 @@ from vllm_omni.model_executor.models.dynin_omni.pipeline import DYNIN_OMNI_PIPEL
 from vllm_omni.model_executor.models.fish_speech.pipeline import FISH_SPEECH_PIPELINE
 from vllm_omni.model_executor.models.glm_image.pipeline import GLM_IMAGE_PIPELINE
 from vllm_omni.model_executor.models.glm_tts.pipeline import GLM_TTS_PIPELINE
+from vllm_omni.model_executor.models.gr00t.pipeline import GR00T_N1D7_PIPELINE
 from vllm_omni.model_executor.models.higgs_audio_v2.pipeline import HIGGS_AUDIO_V2_PIPELINE
 from vllm_omni.model_executor.models.higgs_audio_v3.pipeline import HIGGS_AUDIO_V3_PIPELINE
 from vllm_omni.model_executor.models.hunyuan_image3.pipeline import (
@@ -92,6 +93,7 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "bagel_single_stage": BAGEL_SINGLE_STAGE_PIPELINE,
     "lance": LANCE_PIPELINE,
     "dreamzero": DREAMZERO_PIPELINE,
+    "Gr00tN1d7": GR00T_N1D7_PIPELINE,
     "glm_image": GLM_IMAGE_PIPELINE,
     "hunyuan_image_3_moe": HUNYUAN_IMAGE3_PIPELINE,
     "hunyuan_image3_ar": HUNYUAN_IMAGE3_AR_PIPELINE,

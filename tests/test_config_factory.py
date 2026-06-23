@@ -1547,8 +1547,11 @@ class TestAuraOmniDeploy:
         assert deploy.pipeline == "aura_omni"
 
     def test_aura_omni_deploy_resolves_four_native_stages(self):
+        pipeline_cfg = StageConfigFactory.resolve_pipeline_config("aura_omni")
+
         stages = StageConfigFactory._create_from_registry(
             "qwen3_tts",
+            pipeline_cfg,
             cli_overrides={},
             deploy_config_path=str(Path(__file__).parent.parent / "vllm_omni" / "deploy" / "aura_omni.yaml"),
         )
