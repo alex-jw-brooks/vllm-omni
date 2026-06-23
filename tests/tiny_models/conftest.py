@@ -2,7 +2,7 @@ from shutil import rmtree
 
 import pytest
 
-from tests.tiny_models.test_common_offline import DIFFUSION_TEST_SETTINGS
+from tests.tiny_models.model_settings import DIFFUSION_TEST_SETTINGS
 
 
 @pytest.fixture(scope="session")

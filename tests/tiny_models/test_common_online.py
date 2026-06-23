@@ -13,11 +13,11 @@ from tests.tiny_models.config_types import (
     DiffTasks,
     build_server_args_from_diff_accelerations,
 )
+from tests.tiny_models.model_settings import DIFFUSION_TEST_SETTINGS
 from tests.tiny_models.task_runners import (
     run_and_validate_online_image_to_image_request,
     run_and_validate_online_text_to_image_request,
 )
-from tests.tiny_models.test_common_offline import DIFFUSION_TEST_SETTINGS
 
 
 @pytest.mark.parametrize(
