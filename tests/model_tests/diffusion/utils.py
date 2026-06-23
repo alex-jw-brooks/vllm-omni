@@ -4,7 +4,7 @@ Utilities for resolving real models to their tiny model equivalents.
 
 import logging
 
-from tests.tiny_models.model_settings import DIFFUSION_TEST_SETTINGS
+from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
 from vllm_omni.diffusion.data import resolve_model_class_name
 
 logger = logging.getLogger(__name__)

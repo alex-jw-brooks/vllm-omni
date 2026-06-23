@@ -1,13 +1,13 @@
 import pytest
 
-from tests.tiny_models.case_filtering import get_parametrized_options
-from tests.tiny_models.config_types import (
+from tests.model_tests.diffusion.case_filtering import get_parametrized_options
+from tests.model_tests.diffusion.config_types import (
     DiffAccs,
     DiffTasks,
     build_omni_from_diff_accelerations,
 )
-from tests.tiny_models.model_settings import DIFFUSION_TEST_SETTINGS
-from tests.tiny_models.task_runners import (
+from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
+from tests.model_tests.diffusion.task_runners import (
     run_and_validate_image_to_image_request,
     run_and_validate_text_to_image_request,
 )

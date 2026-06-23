@@ -1,5 +1,5 @@
-from tests.tiny_models import diff_model_builders
-from tests.tiny_models.config_types import (
+from tests.model_tests.diffusion import diff_model_builders
+from tests.model_tests.diffusion.config_types import (
     DiffAccs,
     DiffTasks,
     DiffusionModelTestOpts,

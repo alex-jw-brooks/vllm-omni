@@ -16,7 +16,7 @@ import itertools
 
 import pytest
 
-from tests.tiny_models.config_types import DiffusionModelTestOpts, get_required_device_count
+from tests.model_tests.diffusion.config_types import DiffusionModelTestOpts, get_required_device_count
 from vllm_omni.platforms import current_omni_platform
 
 
@@ -33,9 +33,6 @@ def get_test_group_marks(test_group, model_marks: list | None) -> list:
     required_devices = get_required_device_count(test_group)
     if required_devices > 1:
         marks.append(pytest.mark.advanced_model)
-    else:
-        marks.append(pytest.mark.core_model)
-    if required_devices > 1:
         assert current_omni_platform is not None and current_omni_platform.device_count is not None
         device_count = current_omni_platform.device_count()
         if device_count < required_devices:
@@ -44,6 +41,8 @@ def get_test_group_marks(test_group, model_marks: list | None) -> list:
                     reason=f"Need {required_devices} devices, got {device_count}",
                 )
             )
+    else:
+        marks.append(pytest.mark.core_model)
     return marks
 
 

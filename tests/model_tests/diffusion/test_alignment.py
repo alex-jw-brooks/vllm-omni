@@ -4,7 +4,7 @@ tests in this file are failing, you are probably adding a new model, and need
 to account for it in DIFFUSION_TEST_SETTINGS
 """
 
-from tests.tiny_models.model_settings import DIFFUSION_TEST_SETTINGS
+from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
 from vllm_omni.diffusion.registry import _DIFFUSION_MODELS
 
 # These diffusion models currently do not have any added (tiny) model tests.
