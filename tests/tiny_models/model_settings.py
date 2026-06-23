@@ -31,8 +31,9 @@ from tests.tiny_models.config_types import (
 #   ^ Runs only the case with at least one acceleration enabled for only Flux2KleinPipeline
 DIFFUSION_TEST_SETTINGS = {
     "Flux2KleinPipeline": DiffusionModelTestOpts(
-        supported_tasks=[DiffTasks.TEXT_TO_IMAGE, DiffTasks.IMAGE_EDIT],
+        model="black-forest-labs/FLUX.2-klein-4B",
         builder=diff_model_builders.tiny_flux2_klein_builder,
+        supported_tasks=[DiffTasks.TEXT_TO_IMAGE, DiffTasks.IMAGE_EDIT],
         test_groups=[
             None,
             [DiffAccs.HSDP, DiffAccs.TEA_CACHE],

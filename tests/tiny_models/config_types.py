@@ -39,6 +39,13 @@ class DiffTasks(StrEnum):
 class DiffusionModelTestOpts(NamedTuple):
     """Configuration for one Diffusion model's tests."""
 
+    # HF model name for real-weight tests (advanced_model / full_model level).
+    # For now, whether we use the real weights vs tiny weights in the common tests
+    # depends on the run level.
+    model: str
+
+    # Creates a tiny model for the given architecture. We should always use tiny
+    # model weights for tests that do not require us to check the model quality.
     builder: TinyDiffusionBuilder
 
     # Actual tasks which controls the tests actually run
