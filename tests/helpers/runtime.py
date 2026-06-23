@@ -2793,6 +2793,10 @@ def iter_omni_server(
 
     with omni_fixture_lock:
         params: OmniServerParams = request.param
+        # For now, when a tiny model is substituted, we preserve the original model
+        # name via --served-model-name (so that the server still accepts requests with
+        # the original name). We also do the same for server.model so that tests reading
+        # server.model send the correct name in requests.
         original_model = model_prefix + params.model
         model = original_model
         if run_level == "core_model":
@@ -2828,6 +2832,8 @@ def iter_omni_server(
                 port=port,
                 env_dict=params.env_dict,
             ) as server:
+                if model != original_model:
+                    server.model = original_model
                 print("OmniServer started successfully")
                 yield server
                 print("OmniServer stopping...")
@@ -2851,6 +2857,8 @@ def iter_omni_server(
                     use_omni=params.use_omni,
                 )
             ) as server:
+                if model != original_model:
+                    server.model = original_model
                 print("OmniServer started successfully")
                 yield server
                 print("OmniServer stopping...")
