@@ -21,11 +21,20 @@ from vllm_omni.platforms import current_omni_platform
 
 
 def get_test_group_marks(test_group, model_marks: list | None) -> list:
-    """Build the full set of pytest marks for a test group. This will append a skip
-    based on the device counts for the current platform if we don't have the device
-    count needed to run the test group."""
+    """Build the full set of pytest marks for a test group.
+
+    For now, single device groups default to core model, and multi device groups
+    default to advanced_model marks.
+
+    NOTE: We also append a skip mark if the current platform doesn't have enough devices."""
     marks = list(model_marks) if model_marks is not None else []
+
+    # By default, single-device groups are core_model; multi-device groups are advanced_model.
     required_devices = get_required_device_count(test_group)
+    if required_devices > 1:
+        marks.append(pytest.mark.advanced_model)
+    else:
+        marks.append(pytest.mark.core_model)
     if required_devices > 1:
         assert current_omni_platform is not None and current_omni_platform.device_count is not None
         device_count = current_omni_platform.device_count()
