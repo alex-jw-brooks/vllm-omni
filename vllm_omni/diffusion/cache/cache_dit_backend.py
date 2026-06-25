@@ -61,9 +61,9 @@ CUSTOM_DIT_ENABLERS: dict[str, Callable] = {}
 def cache_summary(pipeline: Any, details: bool = True) -> None:
     if hasattr(pipeline, "transformer"):
         cache_dit.summary(pipeline.transformer, details=details)
-    elif hasattr(pipeline, "transformer_2"):
+    if hasattr(pipeline, "transformer_2"):
         cache_dit.summary(pipeline.transformer_2, details=details)
-    else:
+    if not hasattr(pipeline, "transformer") and not hasattr(pipeline, "transformer_2"):
         logger.warning("CacheDiT summary failed; this pipeline has no defined transformer attribute")
 
 
