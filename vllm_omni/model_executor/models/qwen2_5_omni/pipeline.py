@@ -7,7 +7,6 @@ Stage 1: Talker   — text embeddings → speech tokens
 Stage 2: Code2Wav — speech tokens → audio waveform
 """
 
-from vllm_omni.config.endpoint_policy import EndpointRestriction, OmniServingCapability
 from vllm_omni.config.stage_config import (
     PipelineConfig,
     StageExecutionType,
@@ -19,13 +18,6 @@ _PROC = "vllm_omni.model_executor.stage_input_processors.qwen2_5_omni"
 QWEN2_5_OMNI_PIPELINE = PipelineConfig(
     model_type="qwen2_5_omni",
     model_arch="Qwen2_5OmniForConditionalGeneration",
-    endpoint_restrictions=(
-        EndpointRestriction(
-            OmniServingCapability.COMPLETIONS,
-            "Qwen2.5-Omni requires chat template structure for "
-            "thinker-talker handoff. Use /v1/chat/completions instead.",
-        ),
-    ),
     stages=(
         StagePipelineConfig(
             stage_id=0,
