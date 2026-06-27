@@ -511,7 +511,10 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
         await omni_init_app_state(engine_client, app.state, args)
 
         # After initializing the app state, shut down any endpoints that are model specific
-        shutdown_unsupported_routes(app, engine_client.endpoint_restrictions)
+        if hasattr(engine_client, "endpoint_restrictions"):
+            shutdown_unsupported_routes(app, engine_client.endpoint_restrictions)
+        else:
+            logger.warning("engine client has no endpoint restrictions attribute")
 
         # Start background processes
         await STORAGE_MANAGER.start()
