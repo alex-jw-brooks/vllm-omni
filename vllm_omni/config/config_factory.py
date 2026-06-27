@@ -15,6 +15,7 @@ from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_config
 from vllm.transformers_utils.repo_utils import get_hf_file_to_dict
 
+from vllm_omni.config.endpoint_policy import EndpointRestriction
 from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
 from vllm_omni.config.stage_config import (
     _DEPLOY_DIR,
@@ -52,7 +53,7 @@ class StageConfigFactory:
         model: str,
         trust_remote_code: bool,
         deploy_config_path: str | None,
-    ):
+    ) -> tuple[EndpointRestriction, ...]:
         """Given a model string, determine the corresponding endpoint restrictions.
 
         Args:
