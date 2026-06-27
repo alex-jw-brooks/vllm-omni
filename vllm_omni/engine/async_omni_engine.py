@@ -30,6 +30,7 @@ from vllm.logger import init_logger
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.engine.input_processor import InputProcessor
 
+from vllm_omni.config.config_factory import StageConfigFactory
 from vllm_omni.config.stage_config import strip_parent_engine_args
 from vllm_omni.diffusion.data import DiffusionParallelConfig, parse_attention_config
 from vllm_omni.diffusion.diffusion_engine import supports_audio_output
@@ -274,6 +275,13 @@ class AsyncOmniEngine:
             )
 
         self.config_path, self.stage_configs = self._resolve_stage_configs(model, kwargs)
+
+        trust_remote_code = kwargs.get("trust_remote_code", False)
+        pipeline_cfg = StageConfigFactory.resolve_pipeline_config_for_model(
+            model,
+            trust_remote_code=trust_remote_code,
+        )
+        self.endpoint_restrictions = pipeline_cfg.endpoint_restrictions if pipeline_cfg else ()
 
         self.num_stages = len(self.stage_configs)
         stage0_args = getattr(self.stage_configs[0], "engine_args", None) if self.num_stages > 0 else None

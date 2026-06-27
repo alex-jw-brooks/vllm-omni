@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,49 @@ class StageConfigFactory:
     reports ``qwen2``) should declare ``hf_architectures=(...)`` on their
     ``PipelineConfig`` so the factory can disambiguate via ``hf_config.architectures``.
     """
+
+    @classmethod
+    @functools.cache
+    def resolve_pipeline_config_for_model(
+        cls,
+        model: str,
+        trust_remote_code: bool = False,
+    ) -> PipelineConfig | None:
+        """Resolve the PipelineConfig for a model path/name."""
+
+        # TODO - we need to unify this with everything else.
+        model_type, hf_config = cls._auto_detect_model_type(
+            model,
+            trust_remote_code=trust_remote_code,
+        )
+        if model_type == "vla":
+            if _looks_like_dreamzero(model):
+                model_type = "dreamzero"
+
+        if model_type and model_type in OMNI_PIPELINES:
+            pipeline_cfg = cls.resolve_pipeline_config(model_type, hf_config)
+            if pipeline_cfg is not None:
+                return pipeline_cfg
+
+        if hf_config is not None:
+            hf_archs = set(getattr(hf_config, "architectures", []) or [])
+            if hf_archs:
+                for registered in OMNI_PIPELINES.values():
+                    pipeline_cfg = registered if isinstance(registered, PipelineConfig) else registered(hf_config)
+                    if pipeline_cfg is None:
+                        continue
+                    predicate = pipeline_cfg.hf_config_predicate
+                    if predicate is not None:
+                        try:
+                            if not predicate(hf_config):
+                                continue
+                        except Exception:
+                            continue
+                    if isinstance(pipeline_cfg, PipelineConfig) and hf_archs.intersection(
+                        pipeline_cfg.hf_architectures
+                    ):
+                        return pipeline_cfg
+        return None
 
     @classmethod
     def create_from_model(
