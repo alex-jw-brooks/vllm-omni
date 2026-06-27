@@ -91,7 +91,7 @@ from vllm.utils import random_uuid
 from vllm.utils.system_utils import decorate_logs
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 
-from vllm_omni.config.endpoint_policy import OmniServingCapability, shutdown_unsupported_routes
+from vllm_omni.config.endpoint_policy import shutdown_unsupported_routes
 from vllm_omni.diffusion.models.interface import ReferenceVideoDecodeSpec
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
@@ -957,16 +957,6 @@ async def omni_init_app_state(
     if state.openai_serving_chat is not None:
         state.openai_serving_chat.warmup()
 
-    # If any of the current endpoints are explicitly restricted for this model type
-    completions_restriction_reason: str | None = None
-    endpoint_restrictions = getattr(engine_client, "endpoint_restrictions", ())
-    for r in endpoint_restrictions:
-        if r.capability == OmniServingCapability.COMPLETIONS:
-            completions_restriction_reason = r.reason
-            logger.info("Disabling /v1/completions: %s", r.reason)
-            break
-
-    state.completions_restriction_reason = completions_restriction_reason
     state.openai_serving_completion = (
         OpenAIServingCompletion(
             engine_client,
@@ -977,7 +967,7 @@ async def omni_init_app_state(
             enable_prompt_tokens_details=args.enable_prompt_tokens_details,
             enable_force_include_usage=args.enable_force_include_usage,
         )
-        if "generate" in supported_tasks and completions_restriction_reason is None
+        if "generate" in supported_tasks
         else None
     )
     state.openai_serving_pooling = (

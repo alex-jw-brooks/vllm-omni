@@ -277,11 +277,10 @@ class AsyncOmniEngine:
         self.config_path, self.stage_configs = self._resolve_stage_configs(model, kwargs)
 
         trust_remote_code = kwargs.get("trust_remote_code", False)
-        pipeline_cfg = StageConfigFactory.resolve_pipeline_config_for_model(
+        self.endpoint_restrictions = StageConfigFactory.get_pipeline_endpoint_restrictions(
             model,
             trust_remote_code=trust_remote_code,
         )
-        self.endpoint_restrictions = pipeline_cfg.endpoint_restrictions if pipeline_cfg else ()
 
         self.num_stages = len(self.stage_configs)
         stage0_args = getattr(self.stage_configs[0], "engine_args", None) if self.num_stages > 0 else None

@@ -47,6 +47,19 @@ class StageConfigFactory:
     """
 
     @classmethod
+    def get_pipeline_endpoint_restrictions(
+        cls,
+        model: str,
+        trust_remote_code: bool,
+    ):
+        """Given a model string, determine the corresponding endpoint restrictions."""
+        pipeline_cfg = StageConfigFactory.resolve_pipeline_config_for_model(
+            model,
+            trust_remote_code=trust_remote_code,
+        )
+        return pipeline_cfg.endpoint_restrictions if pipeline_cfg else ()
+
+    @classmethod
     @functools.cache
     def resolve_pipeline_config_for_model(
         cls,
