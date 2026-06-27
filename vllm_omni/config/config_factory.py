@@ -228,6 +228,8 @@ class StageConfigFactory:
                 return pipeline_cfg
 
         if hf_config is not None:
+            if model_type is not None:
+                logger.warning("Inferred model type %s is not registered to an Omni pipeline", model_type)
             hf_archs = set(getattr(hf_config, "architectures", []) or [])
             if hf_archs:
                 for registered in OMNI_PIPELINES.values():
@@ -238,8 +240,19 @@ class StageConfigFactory:
                     if predicate is not None:
                         try:
                             if not predicate(hf_config):
+                                logger.debug(
+                                    "Pipeline %r matched on architectures %s but its "
+                                    "hf_config_predicate rejected the loaded config; "
+                                    "continuing fallback search.",
+                                    pipeline_cfg.model_type,
+                                    sorted(hf_archs.intersection(pipeline_cfg.hf_architectures)),
+                                )
                                 continue
                         except Exception:
+                            logger.exception(
+                                "Pipeline %r hf_config_predicate raised; skipping.",
+                                pipeline_cfg.model_type,
+                            )
                             continue
                     if isinstance(pipeline_cfg, PipelineConfig) and hf_archs.intersection(
                         pipeline_cfg.hf_architectures

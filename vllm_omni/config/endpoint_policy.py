@@ -40,7 +40,7 @@ class EndpointRestriction:
 def build_rejection_handler(reason: str):
     """Build a rejection handler for a given endpoint for the provided reason."""
 
-    async def completions_restricted(raw_request: Request):
+    async def rejection_handler(raw_request: Request):
         return JSONResponse(
             status_code=400,
             content={
@@ -52,12 +52,12 @@ def build_rejection_handler(reason: str):
             },
         )
 
-    return completions_restricted
+    return rejection_handler
 
 
 def shutdown_unsupported_routes(
     app: FastAPI,
-    endpoint_restrictions: tuple[EndpointRestriction],
+    endpoint_restrictions: tuple[EndpointRestriction, ...],
 ):
     """Given an initialized FastAPI server instance and a set of model specific endpoint
     restrictions, remove the restricted routes and patch a handler that returns 400.
