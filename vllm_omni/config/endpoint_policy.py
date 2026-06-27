@@ -4,20 +4,77 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import NamedTuple
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+
+class RouteTarget(NamedTuple):
+    """A server path & supported methods."""
+
+    path: str
+    methods: frozenset[str]
 
 
 class OmniServingCapability(Enum):
-    """Serving capabilities that pipelines can restrict."""
+    """Serving capabilities that pipelines can shut down."""
 
-    # TODO: We need to clarify the relationship between serving
-    # capabilities and output modalities. For now this enum is
-    # API level since its only used for completions to prevent server
-    # crashes, but it's likely we will see a strong correlation to output
-    # modality and compatible endpoints as time goes on.
-    COMPLETIONS = "completions"
+    COMPLETIONS = RouteTarget("/v1/completions", frozenset({"POST"}))
+
+    @property
+    def path(self) -> str:
+        return self.value.path
+
+    @property
+    def methods(self) -> frozenset[str]:
+        return self.value.methods
 
 
 @dataclass(frozen=True)
 class EndpointRestriction:
     capability: OmniServingCapability
     reason: str
+
+
+def build_rejection_handler(reason: str):
+    """Build a rejection handler for a given endpoint for the provided reason."""
+
+    async def completions_restricted(raw_request: Request):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": reason,
+                    "type": "BadRequestError",
+                    "code": 400,
+                }
+            },
+        )
+
+    return completions_restricted
+
+
+def shutdown_unsupported_routes(
+    app: FastAPI,
+    endpoint_restrictions: tuple[EndpointRestriction],
+):
+    """Given an initialized FastAPI server instance and a set of model specific endpoint
+    restrictions, remove the restricted routes and patch a handler that returns 400.
+    """
+    from vllm_omni.entrypoints.openai.api_server import _remove_route_from_app
+
+    for end_restrict in endpoint_restrictions:
+        capability = end_restrict.capability
+        # Remove the route from the app
+        _remove_route_from_app(app, capability.path, capability.methods)
+
+        # Patch the bad request error with the model specific
+        # reason for shutting down this endpoint
+        rejection_handler = build_rejection_handler(end_restrict.reason)
+
+        app.add_api_route(
+            capability.path,
+            rejection_handler,
+            methods=list(capability.methods),
+        )

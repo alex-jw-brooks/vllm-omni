@@ -1072,7 +1072,7 @@ class OpenAIClientHandler:
         err_message: str | tuple[str, ...] | list[str] | None = None,
     ) -> list[HttpResponse]:
         """POST ``/v1/completions`` with ``json`` or ``raw_body``."""
-        # TODO: A lot of these helpers should be consolidated as they differ only by endpoint
+        # TODO (Alex): A lot of these helpers should be consolidated as they differ only by endpoint
         cfg = _merge_http_expectation_kwargs(
             request_config,
             err_code=err_code,
