@@ -275,12 +275,16 @@ class AsyncOmniEngine:
                 self._omni_master_port,
             )
 
-        self.config_path, self.stage_configs = self._resolve_stage_configs(model, kwargs)
-
+        # Stage resolution pops deploy_config, so get the pipeline endpoint
+        # restriction beforehand. TODO (Alex) make this cleaner.
+        deploy_config_path = kwargs.get("deploy_config")
         self.endpoint_restrictions = StageConfigFactory.get_pipeline_endpoint_restrictions(
-            model,
+            model=model,
             trust_remote_code=trust_remote_code,
+            deploy_config_path=deploy_config_path,
         )
+
+        self.config_path, self.stage_configs = self._resolve_stage_configs(model, kwargs)
 
         self.num_stages = len(self.stage_configs)
         stage0_args = getattr(self.stage_configs[0], "engine_args", None) if self.num_stages > 0 else None

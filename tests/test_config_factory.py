@@ -39,6 +39,15 @@ from vllm_omni.engine.arg_utils import SHARED_FIELDS, EngineArgs, internal_black
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
+@pytest.fixture(autouse=True)
+def clear_config_factory_caches():
+    """Clear cached classmethods from the StageConfigFactory to prevent test pollution."""
+    yield
+    StageConfigFactory.get_hf_config.cache_clear()
+    StageConfigFactory.try_infer_model_type.cache_clear()
+    StageConfigFactory.get_pipeline_config.cache_clear()
+
+
 Q3_OMNI_ALL_STAGES_HF_CONFIG = Qwen3OmniMoeConfig(enable_audio_output=True)
 Q3_OMNI_THINKER_HF_CONFIG = Qwen3OmniMoeConfig(enable_audio_output=False)
 
