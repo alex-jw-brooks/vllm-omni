@@ -217,6 +217,7 @@ class AsyncOmniEngine:
         transfer_emitter: Any = None,
         log_stats: bool = False,
         tokenizer: str | None = None,
+        trust_remote_code: bool = False,
         **kwargs: Any,
     ) -> None:
         self.model = model
@@ -276,7 +277,6 @@ class AsyncOmniEngine:
 
         self.config_path, self.stage_configs = self._resolve_stage_configs(model, kwargs)
 
-        trust_remote_code = kwargs.get("trust_remote_code", False)
         self.endpoint_restrictions = StageConfigFactory.get_pipeline_endpoint_restrictions(
             model,
             trust_remote_code=trust_remote_code,

@@ -64,7 +64,7 @@ class StageConfigFactory:
     def resolve_pipeline_config_for_model(
         cls,
         model: str,
-        trust_remote_code: bool = False,
+        trust_remote_code: bool,
     ) -> PipelineConfig | None:
         """Resolve the PipelineConfig for a model path/name."""
 
@@ -106,6 +106,7 @@ class StageConfigFactory:
     def create_from_model(
         cls,
         model: str,
+        trust_remote_code: bool = False,
         cli_overrides: dict[str, Any] | None = None,
         deploy_config_path: str | None = None,
         **deprecated_kwargs: Any,
@@ -120,10 +121,7 @@ class StageConfigFactory:
         if cli_overrides is None:
             cli_overrides = {}
 
-        trust_remote_code = cli_overrides.get("trust_remote_code", True)
-        if trust_remote_code is None:
-            trust_remote_code = False
-
+        # --- New path: check pipeline registry by model_type first ---
         model_type, hf_config = cls._auto_detect_model_type(model, trust_remote_code=trust_remote_code)
         if model_type == "vla":
             if _looks_like_dreamzero(model):
