@@ -197,31 +197,13 @@ class StageConfigFactory:
         model_type = cls.try_infer_model_type(model=model, trust_remote_code=trust_remote_code)
         hf_config = cls.get_hf_config(model=model, trust_remote_code=trust_remote_code)
 
-        # --- 1. Explicit deploy-config pipeline override (highest precedence) ---
-        # A deploy YAML may set ``pipeline: <model_type>`` to force routing for
-        # models whose HF config has a generic/colliding ``model_type`` or no
-        # matching architectures. Ming-omni-tts, for example, reports
-        # model_type="dense" with arch BailingMMNative…, which matches no
-        # pipeline — without this it falls through to the diffusion default and
-        # dies with "Model class BailingMMNativeForConditionalGeneration not
-        # found in diffusion model registry". Honor the key before auto-detection.
-        explicit_pipeline = None
-        if deploy_config_path:
-            try:
-                explicit_pipeline = load_deploy_config(deploy_config_path).pipeline
-            except Exception:
-                logger.exception("Failed to read 'pipeline' key from deploy config %s", deploy_config_path)
-        if explicit_pipeline:
-            pipeline_cfg = cls.resolve_pipeline_config(explicit_pipeline, hf_config)
-            if pipeline_cfg is not None:
-                return pipeline_cfg
-            logger.warning(
-                "Deploy config %s requested pipeline %r which is not in OMNI_PIPELINES; "
-                "falling back to auto-detection.",
-                deploy_config_path,
-                explicit_pipeline,
-            )
+        # Resolve the deploy config & check if the user set the pipeline;
+        # If the pipeline is explicitly set, it takes highest priority
+        deploy_config_pipe = cls._get_deploy_override_pipe_config(hf_config, deploy_config_path)
+        if deploy_config_pipe is not None:
+            return deploy_config_pipe
 
+        # Pipeline isn't set in the yaml spec, so we need infer it ourselves.
         if model_type and model_type in OMNI_PIPELINES:
             pipeline_cfg = cls.resolve_pipeline_config(model_type, hf_config)
             if pipeline_cfg is not None:
@@ -258,17 +240,23 @@ class StageConfigFactory:
                         pipeline_cfg.hf_architectures
                     ):
                         return pipeline_cfg
+        return None
 
-        # --- Explicit deploy-config pipeline ---
-        # When auto-detection above resolves nothing (generic/missing HF model_type
-        # and no matching architecture), honor an explicit pipeline key in the deploy config
-        if deploy_config_path is not None:
-            deploy_path = Path(deploy_config_path)
-            if deploy_path.exists():
-                deploy_cfg = load_deploy_config(deploy_path)
-                if deploy_cfg.pipeline:
-                    pipeline_cfg = cls.resolve_pipeline_config(deploy_cfg.pipeline, hf_config)
-                    return pipeline_cfg
+    @classmethod
+    def _get_deploy_override_pipe_config(
+        cls,
+        hf_config: PretrainedConfig | None,
+        deploy_config_path: str | None,
+    ) -> PipelineConfig | None:
+        """Load the deploy config and extract + resolve its pipeline field."""
+        if deploy_config_path is None:
+            return None
+
+        deploy_path = Path(deploy_config_path)
+        if deploy_path.exists():
+            deploy_cfg = load_deploy_config(deploy_path)
+            if deploy_cfg.pipeline is not None:
+                return cls.resolve_pipeline_config(deploy_cfg.pipeline, hf_config)
         return None
 
     @classmethod
@@ -438,6 +426,7 @@ class StageConfigFactory:
         """Given a model type, resolve to the pipeline to be used. If the pipeline
         maps to a callable we resolve based on the HF config."""
         if model_type not in OMNI_PIPELINES:
+            logger.warning("Model type %s is not registered to OMNI_PIPELINES", model_type)
             return None
         obj = OMNI_PIPELINES[model_type]
         return obj(hf_config) if callable(obj) else obj
