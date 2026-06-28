@@ -8,6 +8,7 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from vllm.entrypoints.serve.utils.error_response import create_error_response
 
 
 class RouteTarget(NamedTuple):
@@ -41,15 +42,10 @@ def build_rejection_handler(reason: str):
     """Build a rejection handler for a given endpoint for the provided reason."""
 
     async def rejection_handler(raw_request: Request):
+        error = create_error_response(message=reason)
         return JSONResponse(
-            status_code=400,
-            content={
-                "error": {
-                    "message": reason,
-                    "type": "BadRequestError",
-                    "code": 400,
-                }
-            },
+            content=error.model_dump(),
+            status_code=error.error.code,
         )
 
     return rejection_handler

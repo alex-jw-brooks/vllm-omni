@@ -87,7 +87,7 @@ class StageConfigFactory:
         try:
             return get_config(model, trust_remote_code=trust_remote_code)
         except Exception as e:
-            logger.debug(f"`get_config` failed for {e}; Falling back to raw config.json path")
+            logger.debug(f"`get_config` failed with exception {e}; inferred HF config is None")
         return hf_config
 
     @classmethod
