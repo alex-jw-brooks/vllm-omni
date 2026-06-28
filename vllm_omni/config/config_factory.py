@@ -275,6 +275,7 @@ class StageConfigFactory:
     def create_from_model(
         cls,
         model: str,
+        *,
         trust_remote_code: bool = False,
         cli_overrides: dict[str, Any] | None = None,
         deploy_config_path: str | None = None,
