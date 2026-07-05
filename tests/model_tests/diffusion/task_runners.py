@@ -38,7 +38,7 @@ IMAGE_GEN_EXTRA_BODY = {
 
 
 def run_and_validate_text_to_image_request(omni: Omni):
-    """Run a T2I request an ensure the resulting image is valid."""
+    """Run a T2I request and ensure the resulting image is valid."""
     outputs = omni.generate(
         {"prompt": PROMPT},
         IMAGE_GEN_SAMPLING_PARAMS,
@@ -47,7 +47,7 @@ def run_and_validate_text_to_image_request(omni: Omni):
 
 
 def run_and_validate_image_to_image_request(omni: Omni):
-    """Run an I2I request an ensure the resulting image is valid."""
+    """Run an I2I request and ensure the resulting image is valid."""
     outputs = omni.generate(
         {
             "prompt": PROMPT,

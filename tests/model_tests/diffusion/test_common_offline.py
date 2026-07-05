@@ -2,8 +2,8 @@ import pytest
 
 from tests.model_tests.diffusion.case_filtering import get_parametrized_options
 from tests.model_tests.diffusion.config_types import (
-    DiffAccs,
-    DiffTasks,
+    DiffusionAccs,
+    DiffusionTasks,
     build_omni_from_diff_accelerations,
 )
 from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
@@ -19,8 +19,8 @@ from tests.model_tests.diffusion.task_runners import (
 )
 def test_pipeline_on_supported_tasks(
     model_name,
-    accelerations: list[DiffAccs] | None,
-    supported_tasks: list[DiffTasks],
+    accelerations: list[DiffusionAccs] | None,
+    supported_tasks: list[DiffusionTasks],
     tiny_model_paths: dict[str, str],
     subtests,
 ):
@@ -42,9 +42,9 @@ def test_pipeline_on_supported_tasks(
 
     for task_type in supported_tasks:
         with subtests.test(msg=task_type):
-            if task_type == DiffTasks.TEXT_TO_IMAGE:
+            if task_type == DiffusionTasks.TEXT_TO_IMAGE:
                 run_and_validate_text_to_image_request(omni)
-            elif task_type == DiffTasks.IMAGE_EDIT:
+            elif task_type == DiffusionTasks.IMAGE_TO_IMAGE:
                 run_and_validate_image_to_image_request(omni)
             else:
                 raise ValueError(f"Task type {task_type} is not yet supported")

@@ -1,8 +1,8 @@
 from tests.model_tests.diffusion import diff_model_builders
 from tests.model_tests.diffusion.config_types import (
-    DiffAccs,
-    DiffTasks,
+    DiffusionAccs,
     DiffusionModelTestOpts,
+    DiffusionTasks,
 )
 
 # This object defines the (tiny) model configurations for common tests.
@@ -33,12 +33,12 @@ DIFFUSION_TEST_SETTINGS = {
     "Flux2KleinPipeline": DiffusionModelTestOpts(
         model="black-forest-labs/FLUX.2-klein-4B",
         builder=diff_model_builders.tiny_flux2_klein_builder,
-        supported_tasks=[DiffTasks.TEXT_TO_IMAGE, DiffTasks.IMAGE_EDIT],
+        supported_tasks=[DiffusionTasks.TEXT_TO_IMAGE, DiffusionTasks.IMAGE_TO_IMAGE],
         test_groups=[
             None,
-            [DiffAccs.HSDP, DiffAccs.TEA_CACHE],
-            [DiffAccs.SEQUENCE_PARALLEL, DiffAccs.CACHE_DIT],
-            [DiffAccs.CFG_PARALLEL, DiffAccs.TENSOR_PARALLEL],
+            [DiffusionAccs.HSDP, DiffusionAccs.TEA_CACHE],
+            [DiffusionAccs.SEQUENCE_PARALLEL, DiffusionAccs.CACHE_DIT],
+            [DiffusionAccs.CFG_PARALLEL, DiffusionAccs.TENSOR_PARALLEL],
         ],
     )
 }

@@ -15,7 +15,7 @@ from vllm_omni.entrypoints.omni import Omni
 TinyDiffusionBuilder: TypeAlias = Callable[[], str]
 
 
-class DiffAccs(StrEnum):
+class DiffusionAccs(StrEnum):
     """Supported acceleration types / test settings for Diffusion Models."""
 
     HSDP = auto()
@@ -28,11 +28,11 @@ class DiffAccs(StrEnum):
     VAE_PATCH_PARALLEL = auto()
 
 
-class DiffTasks(StrEnum):
+class DiffusionTasks(StrEnum):
     """Supported tasks for Diffusion Models."""
 
     TEXT_TO_IMAGE = auto()
-    IMAGE_EDIT = auto()
+    IMAGE_TO_IMAGE = auto()
     # Text to video, text to audio, etc should be added here as needed
 
 
@@ -49,12 +49,12 @@ class DiffusionModelTestOpts(NamedTuple):
     builder: TinyDiffusionBuilder
 
     # Actual tasks which controls the tests actually run
-    supported_tasks: list[DiffTasks]
+    supported_tasks: list[DiffusionTasks]
 
     # Accelerations to be run together for this model; we currently specify
     # this explicitly because the time to start a model is nontrivial, even
     # for tiny models.
-    test_groups: list[None | list[DiffAccs]]
+    test_groups: list[None | list[DiffusionAccs]]
 
     # Pytest Marks for this model. This may be useful for selecting which models
     # we want to run where, similar to the way vLLM's multimodal tests mark some
@@ -65,49 +65,49 @@ class DiffusionModelTestOpts(NamedTuple):
 
 ### Mappings & utils for building offline Omni() instances given a list of enabled accelerations
 ACC_OMNI_KWARGS = {
-    DiffAccs.VAE_PATCH_PARALLEL: {"vae_use_tiling": True},
-    DiffAccs.CPU_OFFLOAD: {"enable_cpu_offload": True},
-    DiffAccs.CACHE_DIT: {"cache_backend": "cache_dit"},
-    DiffAccs.TEA_CACHE: {"cache_backend": "tea_cache"},
+    DiffusionAccs.VAE_PATCH_PARALLEL: {"vae_use_tiling": True},
+    DiffusionAccs.CPU_OFFLOAD: {"enable_cpu_offload": True},
+    DiffusionAccs.CACHE_DIT: {"cache_backend": "cache_dit"},
+    DiffusionAccs.TEA_CACHE: {"cache_backend": "tea_cache"},
 }
 
 ACC_PARALLEL_KWARGS = {
-    DiffAccs.HSDP: {"use_hsdp": True, "hsdp_shard_size": 2},
-    DiffAccs.TENSOR_PARALLEL: {"tensor_parallel_size": 2},
-    DiffAccs.CFG_PARALLEL: {"cfg_parallel_size": 2},
-    DiffAccs.VAE_PATCH_PARALLEL: {"vae_patch_parallel_size": 2},
+    DiffusionAccs.HSDP: {"use_hsdp": True, "hsdp_shard_size": 2},
+    DiffusionAccs.TENSOR_PARALLEL: {"tensor_parallel_size": 2},
+    DiffusionAccs.CFG_PARALLEL: {"cfg_parallel_size": 2},
+    DiffusionAccs.VAE_PATCH_PARALLEL: {"vae_patch_parallel_size": 2},
     # For SP, we don't run ring here to conserve devices, since it is easy
     # to blow up the number of needed devices fast. Compatibility for ring
     # and ulysses together should be tested generically outside of these tests.
-    DiffAccs.SEQUENCE_PARALLEL: {"ulysses_degree": 2},
+    DiffusionAccs.SEQUENCE_PARALLEL: {"ulysses_degree": 2},
 }
 
 ACC_DEVICE_COUNT_KEYS = {
-    DiffAccs.TENSOR_PARALLEL: "tensor_parallel_size",
-    DiffAccs.CFG_PARALLEL: "cfg_parallel_size",
-    DiffAccs.SEQUENCE_PARALLEL: "ulysses_degree",
-    DiffAccs.VAE_PATCH_PARALLEL: "vae_patch_parallel_size",
-    DiffAccs.HSDP: "hsdp_shard_size",
+    DiffusionAccs.TENSOR_PARALLEL: "tensor_parallel_size",
+    DiffusionAccs.CFG_PARALLEL: "cfg_parallel_size",
+    DiffusionAccs.SEQUENCE_PARALLEL: "ulysses_degree",
+    DiffusionAccs.VAE_PATCH_PARALLEL: "vae_patch_parallel_size",
+    DiffusionAccs.HSDP: "hsdp_shard_size",
 }
 
 ### CLI args for launching an OmniServer subprocess per acceleration.
 # Follows the same pattern as e2e online serving tests, which hand-code
 # their server_args lists in OmniServerParams.
-ACC_SERVER_ARGS: dict[DiffAccs, list[str]] = {
-    DiffAccs.HSDP: ["--use-hsdp", "--hsdp-shard-size", "2"],
-    DiffAccs.TEA_CACHE: ["--cache-backend", "tea_cache"],
-    DiffAccs.CACHE_DIT: ["--cache-backend", "cache_dit"],
-    DiffAccs.SEQUENCE_PARALLEL: ["--usp", "2"],
-    DiffAccs.CFG_PARALLEL: ["--cfg-parallel-size", "2"],
-    DiffAccs.TENSOR_PARALLEL: ["--tensor-parallel-size", "2"],
-    DiffAccs.CPU_OFFLOAD: ["--enable-cpu-offload"],
-    DiffAccs.VAE_PATCH_PARALLEL: ["--vae-use-tiling", "--vae-patch-parallel-size", "2"],
+ACC_SERVER_ARGS: dict[DiffusionAccs, list[str]] = {
+    DiffusionAccs.HSDP: ["--use-hsdp", "--hsdp-shard-size", "2"],
+    DiffusionAccs.TEA_CACHE: ["--cache-backend", "tea_cache"],
+    DiffusionAccs.CACHE_DIT: ["--cache-backend", "cache_dit"],
+    DiffusionAccs.SEQUENCE_PARALLEL: ["--usp", "2"],
+    DiffusionAccs.CFG_PARALLEL: ["--cfg-parallel-size", "2"],
+    DiffusionAccs.TENSOR_PARALLEL: ["--tensor-parallel-size", "2"],
+    DiffusionAccs.CPU_OFFLOAD: ["--enable-cpu-offload"],
+    DiffusionAccs.VAE_PATCH_PARALLEL: ["--vae-use-tiling", "--vae-patch-parallel-size", "2"],
 }
 
 ## TODO ^ These should be in the same object, it's getting messy.
 
 
-def get_required_device_count(accelerations: list[DiffAccs] | None) -> int:
+def get_required_device_count(accelerations: list[DiffusionAccs] | None) -> int:
     """Compute the minimum number of devices needed for a set of accelerations.
     The total is the product of all parallel dimensions (defaulting to 1).
 
@@ -124,7 +124,7 @@ def get_required_device_count(accelerations: list[DiffAccs] | None) -> int:
     return count
 
 
-def build_parallel_config_from_diff_accelerations(accelerations: list[DiffAccs]) -> DiffusionParallelConfig | None:
+def build_parallel_config_from_diff_accelerations(accelerations: list[DiffusionAccs]) -> DiffusionParallelConfig | None:
     """Given a list of accelerations pertaining to the current test group,
     build the parallel config needed for the Omni() object (if any)."""
     config_kwargs = {}
@@ -137,7 +137,7 @@ def build_parallel_config_from_diff_accelerations(accelerations: list[DiffAccs])
 
 
 ### Offline Omni() object builder
-def build_omni_from_diff_accelerations(accelerations: list[DiffAccs] | None, **kwargs) -> Omni:
+def build_omni_from_diff_accelerations(accelerations: list[DiffusionAccs] | None, **kwargs) -> Omni:
     """Given one or more acceleration types, build the corresponding Omni() object."""
     # Coerce to a list and build the parallel config, since that depends on the accelerations
     if accelerations is None:
@@ -162,7 +162,7 @@ def build_omni_from_diff_accelerations(accelerations: list[DiffAccs] | None, **k
 
 
 ### Online server flag builder
-def build_server_args_from_diff_accelerations(accelerations: list[DiffAccs] | None) -> list[str]:
+def build_server_args_from_diff_accelerations(accelerations: list[DiffusionAccs] | None) -> list[str]:
     """Given one or more acceleration types, build the corresponding CLI args
     for launching an OmniServer subprocess."""
     if accelerations is None:
