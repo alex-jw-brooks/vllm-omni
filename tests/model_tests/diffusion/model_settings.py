@@ -35,9 +35,9 @@ DIFFUSION_TEST_SETTINGS = {
         builder=diff_model_builders.tiny_flux2_klein_builder,
         supported_tasks=[DiffusionTasks.TEXT_TO_IMAGE, DiffusionTasks.IMAGE_TO_IMAGE],
         test_groups=[
-            None,
+            [DiffusionAccs.CPU_OFFLOAD],
             [DiffusionAccs.HSDP, DiffusionAccs.TEA_CACHE],
-            [DiffusionAccs.SEQUENCE_PARALLEL, DiffusionAccs.CACHE_DIT],
+            [DiffusionAccs.SEQUENCE_PARALLEL, DiffusionAccs.CACHE_DIT, DiffusionAccs.LAYERWISE_OFFLOAD],
             [DiffusionAccs.CFG_PARALLEL, DiffusionAccs.TENSOR_PARALLEL],
         ],
     )

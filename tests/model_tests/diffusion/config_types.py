@@ -25,6 +25,7 @@ class DiffusionAccs(StrEnum):
     CFG_PARALLEL = auto()
     TENSOR_PARALLEL = auto()
     CPU_OFFLOAD = auto()
+    LAYERWISE_OFFLOAD = auto()
     VAE_PATCH_PARALLEL = auto()
 
 
@@ -67,6 +68,7 @@ class DiffusionModelTestOpts(NamedTuple):
 ACC_OMNI_KWARGS = {
     DiffusionAccs.VAE_PATCH_PARALLEL: {"vae_use_tiling": True},
     DiffusionAccs.CPU_OFFLOAD: {"enable_cpu_offload": True},
+    DiffusionAccs.LAYERWISE_OFFLOAD: {"enable_layerwise_offload": True},
     DiffusionAccs.CACHE_DIT: {"cache_backend": "cache_dit"},
     DiffusionAccs.TEA_CACHE: {"cache_backend": "tea_cache"},
 }
@@ -101,6 +103,7 @@ ACC_SERVER_ARGS: dict[DiffusionAccs, list[str]] = {
     DiffusionAccs.CFG_PARALLEL: ["--cfg-parallel-size", "2"],
     DiffusionAccs.TENSOR_PARALLEL: ["--tensor-parallel-size", "2"],
     DiffusionAccs.CPU_OFFLOAD: ["--enable-cpu-offload"],
+    DiffusionAccs.LAYERWISE_OFFLOAD: ["--enable-layerwise-offload"],
     DiffusionAccs.VAE_PATCH_PARALLEL: ["--vae-use-tiling", "--vae-patch-parallel-size", "2"],
 }
 
