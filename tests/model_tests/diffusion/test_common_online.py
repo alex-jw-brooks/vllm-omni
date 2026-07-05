@@ -24,7 +24,7 @@ pytestmark = [pytest.mark.diffusion, pytest.mark.gpu]
 
 @pytest.mark.parametrize(
     "model_name,accelerations,supported_tasks",
-    get_parametrized_options(DIFFUSION_TEST_SETTINGS),
+    get_parametrized_options(DIFFUSION_TEST_SETTINGS, online=True),
 )
 def test_online_on_supported_tasks(
     model_name: str,

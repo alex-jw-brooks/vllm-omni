@@ -63,6 +63,13 @@ class DiffusionModelTestOpts(NamedTuple):
     # Example: https://github.com/vllm-project/vllm/blob/v0.23.0/tests/models/multimodal/generation/test_common.py#L131
     marks: list[MarkDecorator] | None = None
 
+    # When True (default), online tests only run the base case (no accelerations).
+    # When False, online tests run all test_groups, same as offline. This should be
+    # True unless there is a good reason for it not to be, because the execution of
+    # the acceleration should be the same on both codepaths, and CLI parsing etc should
+    # be tested by tests adding the acceleration, and not per model.
+    online_base_only: bool = True
+
 
 ### Mappings & utils for building offline Omni() instances given a list of enabled accelerations
 ACC_OMNI_KWARGS = {

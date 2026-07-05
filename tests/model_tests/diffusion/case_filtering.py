@@ -48,13 +48,15 @@ def get_test_group_marks(test_group, model_marks: list | None) -> list:
     return marks
 
 
-def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts):
+def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts, online: bool):
     """Given a model & its corresponding test options, build the list of pytest params
     to be run for this model. For now, this just means running over the test groups, but
     writing it this way for now in case we need additionally flexibility later (e.g., could
     build test groups more dynamically based on number of visible devices, etc).
     """
     assert test_info.test_groups is not None
+    test_groups = [None] if online and test_info.online_base_only else test_info.test_groups
+
     return [
         pytest.param(
             model_name,
@@ -63,20 +65,26 @@ def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts
             id=f"{model_name}[{'+'.join(test_group)}]" if test_group else model_name,
             marks=get_test_group_marks(test_group, test_info.marks),
         )
-        for test_group in test_info.test_groups
+        for test_group in test_groups
     ]
 
 
 def get_parametrized_options(
     test_settings: dict[str, DiffusionModelTestOpts],
+    online: bool = False,
 ):
     """Converts all the DiffusionModelTestOpts into an expanded list of parameters
     based on which accelerations are available.
+
+    When online=True and a model has online_base_only=True, only the base case
+    (no accelerations) is included for that model's parametrization to minimize
+    redundancy between offline / online tests.
     """
     # Get a list per model type, where each entry contains a tuple of all of
     # that model type's cases, then flatten them into the top level so that
     # we can consume them in one mark.parametrize call.
     parametrization = [
-        get_model_parametrization(model_name, test_info) for model_name, test_info in test_settings.items()
+        get_model_parametrization(model_name, test_info, online=online)
+        for model_name, test_info in test_settings.items()
     ]
     return list(itertools.chain(*parametrization))
