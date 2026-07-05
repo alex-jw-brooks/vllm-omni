@@ -1,3 +1,4 @@
+import os
 import tempfile
 
 import torch
@@ -7,10 +8,18 @@ from diffusers.pipelines.flux2.pipeline_flux2_klein import Flux2KleinPipeline
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from transformers import AutoTokenizer, Qwen3Config, Qwen3ForCausalLM
 
+TINY_MODEL_DIR = os.path.join(tempfile.gettempdir(), "vllm-omni-tiny-models")
+
+
+def _get_tiny_model_path(name: str) -> str:
+    path = os.path.join(TINY_MODEL_DIR, name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
 
 def tiny_flux2_klein_builder() -> str:
     """Build a tiny Flux2Klein model."""
-    tmpdir = tempfile.mkdtemp(prefix="tiny-flux2klein-")
+    model_dir = _get_tiny_model_path("Flux2KleinPipeline")
 
     pipe = Flux2KleinPipeline(
         scheduler=FlowMatchEulerDiscreteScheduler(),
@@ -50,5 +59,5 @@ def tiny_flux2_klein_builder() -> str:
         ),
     )
     # Need dtypes to be consistent; for now we just put it on bfloat16
-    pipe.to(torch.bfloat16).save_pretrained(tmpdir)
-    return tmpdir
+    pipe.to(torch.bfloat16).save_pretrained(model_dir)
+    return model_dir

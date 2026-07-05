@@ -2797,6 +2797,10 @@ def iter_omni_server(
         # name via --served-model-name (so that the server still accepts requests with
         # the original name). We also do the same for server.model so that tests reading
         # server.model send the correct name in requests.
+        #
+        # TODO: core models on this path currently do not clean up tiny models, although
+        # tiny model paths are deterministic, so it's not a huge footprint. Still, it would
+        # be ideal to cleanup consistently everywhere.
         original_model = model_prefix + params.model
         model = original_model
         if run_level == "core_model":
