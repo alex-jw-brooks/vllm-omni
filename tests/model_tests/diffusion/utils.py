@@ -10,9 +10,6 @@ from vllm_omni.diffusion.data import resolve_model_class_name
 logger = logging.getLogger(__name__)
 
 
-# TODO: Cache built models so repeated calls for the same pipeline class
-# return the same path instead of creating a new temp dir each time.
-# TODO: Caller is currently responsible for cleanup (rmtree) of returned paths.
 def resolve_tiny_model_path(model: str) -> str:
     """Given a real model name/path, resolve it to a tiny model path.
 

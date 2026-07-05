@@ -37,4 +37,5 @@ def tiny_model_paths(request, run_level):
 
     yield model_paths
     for path in built_paths:
+        print(f"Removing tiny model: {path}")
         rmtree(path, ignore_errors=True)

@@ -39,12 +39,14 @@ def test_pipeline_on_supported_tasks(
         model=tiny_model_paths[model_name],
         enforce_eager=True,
     )
-
-    for task_type in supported_tasks:
-        with subtests.test(msg=task_type):
-            if task_type == DiffusionTasks.TEXT_TO_IMAGE:
-                run_and_validate_text_to_image_request(omni)
-            elif task_type == DiffusionTasks.IMAGE_TO_IMAGE:
-                run_and_validate_image_to_image_request(omni)
-            else:
-                raise ValueError(f"Task type {task_type} is not yet supported")
+    try:
+        for task_type in supported_tasks:
+            with subtests.test(msg=task_type):
+                if task_type == DiffusionTasks.TEXT_TO_IMAGE:
+                    run_and_validate_text_to_image_request(omni)
+                elif task_type == DiffusionTasks.IMAGE_TO_IMAGE:
+                    run_and_validate_image_to_image_request(omni)
+                else:
+                    raise ValueError(f"Task type {task_type} is not yet supported")
+    finally:
+        omni.close()
