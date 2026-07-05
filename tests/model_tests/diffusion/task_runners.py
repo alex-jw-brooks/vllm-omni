@@ -17,8 +17,9 @@ IMAGE_DIMS = (512, 512)
 HEIGHT, WIDTH = IMAGE_DIMS
 INPUT_IMAGE = Image.new("RGB", IMAGE_DIMS)
 
-# TODO: Add multi-output (n>1) and deterministic (same seed → same output)
-# task runners to cover cases currently only tested in e2e expansion tests.
+# TODO: Add multi-output (n>1) and determinism task runners to cover cases
+# currently only tested in e2e expansion tests. For these, we probably only
+# only need to run it for one configuration.
 
 # Offline sampling params
 IMAGE_GEN_SAMPLING_PARAMS = OmniDiffusionSamplingParams(
