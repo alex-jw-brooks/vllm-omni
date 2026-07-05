@@ -20,15 +20,10 @@ from tests.model_tests.diffusion.config_types import (
 # TO RUN A SUBSET OF THE TESTS:
 # These tests should be fast, but if you'd like to run a subset of the tests, you can do so
 # with `-k`; the IDs of the tests are the name of the pipeline joined by +.
-# Examples:
+#
+# Example:
 # $ pytest test_common_offline.py -k test_pipeline_on_supported_tasks[Flux2KleinPipeline
 #   ^ Runs all 4 test_groups for Flux2KleinPipeline only
-#
-# $ pytest test_common_offline.py -k test_pipeline_on_supported_tasks[Flux2KleinPipeline]
-#   ^ Runs only the case with no accelerations enabled for only Flux2KleinPipeline
-#
-# $ pytest test_common_offline.py -k test_pipeline_on_supported_tasks[Flux2KleinPipeline[
-#   ^ Runs only the case with at least one acceleration enabled for only Flux2KleinPipeline
 DIFFUSION_TEST_SETTINGS = {
     "Flux2KleinPipeline": DiffusionModelTestOpts(
         model="black-forest-labs/FLUX.2-klein-4B",
