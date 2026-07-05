@@ -12,6 +12,8 @@ from tests.model_tests.diffusion.task_runners import (
     run_and_validate_text_to_image_request,
 )
 
+pytestmark = [pytest.mark.diffusion]
+
 
 @pytest.mark.parametrize(
     "model_name,accelerations,supported_tasks",
