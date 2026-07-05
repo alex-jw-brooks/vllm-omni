@@ -9,7 +9,7 @@ import pytest
 from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
 from vllm_omni.diffusion.registry import _DIFFUSION_MODELS
 
-pytestmark = [pytest.mark.diffusion, pytest.mark.cpu]
+pytestmark = [pytest.mark.diffusion, pytest.mark.cpu, pytest.mark.core_model]
 
 # These diffusion models currently do not have any added (tiny) model tests.
 # In general, pipelines should only be in the list below if they have not been
