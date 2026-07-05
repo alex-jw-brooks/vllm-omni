@@ -19,7 +19,7 @@ from tests.model_tests.diffusion.task_runners import (
     run_and_validate_online_text_to_image_request,
 )
 
-pytestmark = [pytest.mark.diffusion]
+pytestmark = [pytest.mark.diffusion, pytest.mark.gpu]
 
 
 @pytest.mark.parametrize(
