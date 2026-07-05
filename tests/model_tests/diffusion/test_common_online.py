@@ -31,6 +31,7 @@ def test_online_on_supported_tasks(
     accelerations: list[DiffusionAccs] | None,
     supported_tasks: list[DiffusionTasks],
     tiny_model_paths: dict[str, str],
+    run_level: str,
     subtests,
 ):
     """Smoke test: start a tiny model server and run each supported task via the API."""
@@ -39,10 +40,14 @@ def test_online_on_supported_tasks(
     server_args.append("--enforce-eager")
 
     with OmniServer(model_path, server_args) as server:
+        # TODO: We may want to revisit run_level validation here,
+        # because checks for things like image size etc should not
+        # depend on whether or not the weights are real or random
         client = OpenAIClientHandler(
             host=server.host,
             port=server.port,
             api_key="EMPTY",
+            run_level=run_level,
             log_stats=server.log_stats,
         )
         for task_type in supported_tasks:
