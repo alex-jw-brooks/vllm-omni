@@ -31,16 +31,18 @@ def get_test_group_marks(test_group, model_marks: list | None) -> list:
 
     # By default, single-device groups are core_model; multi-device groups are advanced_model.
     required_devices = get_required_device_count(test_group)
+    assert current_omni_platform is not None and current_omni_platform.device_count is not None
+    device_count = current_omni_platform.device_count()
+    # NOTE: For now, we always assume we need at least one accelerator;
+    # in the future we can revisit whether these should run on CPU.
+    if device_count < required_devices:
+        marks.append(
+            pytest.mark.skip(
+                reason=f"Need {required_devices} devices, got {device_count}",
+            )
+        )
     if required_devices > 1:
         marks.append(pytest.mark.advanced_model)
-        assert current_omni_platform is not None and current_omni_platform.device_count is not None
-        device_count = current_omni_platform.device_count()
-        if device_count < required_devices:
-            marks.append(
-                pytest.mark.skip(
-                    reason=f"Need {required_devices} devices, got {device_count}",
-                )
-            )
     else:
         marks.append(pytest.mark.core_model)
     return marks
