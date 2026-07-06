@@ -52,10 +52,10 @@ class DiffusionModelTestOpts(NamedTuple):
     # Actual tasks which controls the tests actually run
     supported_tasks: list[DiffusionTasks]
 
-    # Accelerations to be run together for this model; we currently specify
-    # this explicitly because the time to start a model is nontrivial, even
-    # for tiny models.
-    test_groups: list[None | list[DiffusionAccs]]
+    # Additional acceleration groups to run beyond the base case (no acceleration).
+    # The base case is always run for every model in the test settings. None means
+    # we only run the base case.
+    extra_test_groups: list[list[DiffusionAccs]] | None = None
 
     # Pytest Marks for this model. This may be useful for selecting which models
     # we want to run where, similar to the way vLLM's multimodal tests mark some

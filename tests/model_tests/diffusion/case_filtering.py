@@ -16,7 +16,7 @@ import itertools
 
 import pytest
 
-from tests.model_tests.diffusion.config_types import DiffusionModelTestOpts, get_required_device_count
+from tests.model_tests.diffusion.config_types import DiffusionAccs, DiffusionModelTestOpts, get_required_device_count
 from vllm_omni.platforms import current_omni_platform
 
 
@@ -50,12 +50,13 @@ def get_test_group_marks(test_group, model_marks: list | None) -> list:
 
 def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts, online: bool):
     """Given a model & its corresponding test options, build the list of pytest params
-    to be run for this model. For now, this just means running over the test groups, but
-    writing it this way for now in case we need additionally flexibility later (e.g., could
-    build test groups more dynamically based on number of visible devices, etc).
+    to be run for this model. The base case (no accelerations) is always included. Extra
+    test groups are always appended for offline tests, but are only added to the online
+    tests if online_base_only is overridden to False to avoid redundant testing.
     """
-    assert test_info.test_groups is not None
-    test_groups = [None] if online and test_info.online_base_only else test_info.test_groups
+    test_groups: list[list[DiffusionAccs] | None] = [None]
+    if not (online and test_info.online_base_only) and test_info.extra_test_groups:
+        test_groups.extend(test_info.extra_test_groups)
 
     return [
         pytest.param(

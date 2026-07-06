@@ -9,6 +9,8 @@ from tests.model_tests.diffusion.config_types import (
 from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
 from tests.model_tests.diffusion.task_runners import (
     run_and_validate_image_to_image_request,
+    run_and_validate_text_to_image_determinism,
+    run_and_validate_text_to_image_multi_output,
     run_and_validate_text_to_image_request,
 )
 
@@ -50,5 +52,12 @@ def test_pipeline_on_supported_tasks(
                     run_and_validate_image_to_image_request(omni)
                 else:
                     raise ValueError(f"Task type {task_type} is not yet supported")
+        # For now, we only check determinism + multi output for the base case,
+        # since checking it on every extra acceleration configuration is redundant.
+        if accelerations is None:
+            with subtests.test(msg="determinism"):
+                run_and_validate_text_to_image_determinism(omni)
+            with subtests.test(msg="multi_output"):
+                run_and_validate_text_to_image_multi_output(omni)
     finally:
         omni.close()
