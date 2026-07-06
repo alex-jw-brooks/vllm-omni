@@ -16,31 +16,42 @@ import itertools
 
 import pytest
 
+from tests.helpers.mark import hardware_marks
 from tests.model_tests.diffusion.config_types import DiffusionAccs, DiffusionModelTestOpts, get_required_device_count
 from vllm_omni.platforms import current_omni_platform
 
+# These tests are intended to run on L4 GPUs since they test parallelism (i.e., need GPUs),
+# but are intended to be smoke tests that we can properly validate without real model
+# weights in the CI.
+#
+# As such, no DiffusionAccs may require more than 4 GPUs, since we would otherwise skip
+# them in the CI.
+MAX_CI_DEVICES = 4
 
-def get_test_group_marks(test_group, model_marks: list | None) -> list:
+
+def get_test_group_marks(model_name: str, test_group: list[DiffusionAccs] | None, model_marks: list | None) -> list:
     """Build the full set of pytest marks for a test group.
 
     For now, single device groups default to core model, and multi device groups
-    default to advanced_model marks.
-
-    NOTE: We also append a skip mark if the current platform doesn't have enough devices."""
+    default to advanced_model marks. We also validate and throw if a test group exceeds
+    the max number of GPUs for the CI to prevent accidentally adding configurations that
+    would be skipped in the CI."""
     marks = list(model_marks) if model_marks is not None else []
 
-    # By default, single-device groups are core_model; multi-device groups are advanced_model.
     required_devices = get_required_device_count(test_group)
+    if required_devices > MAX_CI_DEVICES:
+        raise ValueError(
+            f"Test group {test_group} for {model_name} requires {required_devices} devices, "
+            f"but the max CI device count is {MAX_CI_DEVICES}. "
+        )
+
+    marks.extend(hardware_marks(res={"cuda": "L4"}, num_cards=required_devices))
+    # hardware_marks only adds skipif for num_cards > 1, so we currently handle the single-device case
+    # directly here. This should probably be handled in a more common way later on.
     assert current_omni_platform is not None and current_omni_platform.device_count is not None
     device_count = current_omni_platform.device_count()
-    # NOTE: For now, we always assume we need at least one accelerator;
-    # in the future we can revisit whether these should run on CPU.
-    if device_count < required_devices:
-        marks.append(
-            pytest.mark.skip(
-                reason=f"Need {required_devices} devices, got {device_count}",
-            )
-        )
+    if current_omni_platform.is_cuda() and device_count < required_devices:
+        marks.append(pytest.mark.skip(reason=f"Need {required_devices} devices, got {device_count}"))
     if required_devices > 1:
         marks.append(pytest.mark.advanced_model)
     else:
@@ -66,7 +77,7 @@ def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts
             test_info.check_multi_output and test_group is None,
             test_info.check_determinism and test_group is None,
             id=f"{model_name}[{'+'.join(test_group)}]" if test_group else model_name,
-            marks=get_test_group_marks(test_group, test_info.marks),
+            marks=get_test_group_marks(model_name, test_group, test_info.marks),
         )
         for test_group in test_groups
     ]
