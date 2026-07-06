@@ -18,13 +18,15 @@ pytestmark = [pytest.mark.diffusion, pytest.mark.gpu]
 
 
 @pytest.mark.parametrize(
-    "model_name,accelerations,supported_tasks",
+    "model_name,accelerations,supported_tasks,check_multioutput,check_determinism",
     get_parametrized_options(DIFFUSION_TEST_SETTINGS),
 )
 def test_pipeline_on_supported_tasks(
     model_name,
     accelerations: list[DiffusionAccs] | None,
     supported_tasks: list[DiffusionTasks],
+    check_multioutput: bool,
+    check_determinism: bool,
     tiny_model_paths: dict[str, str],
     subtests,
 ):
@@ -52,11 +54,14 @@ def test_pipeline_on_supported_tasks(
                     run_and_validate_image_to_image_request(omni)
                 else:
                     raise ValueError(f"Task type {task_type} is not yet supported")
-        # For now, we only check determinism + multi output for the base case,
-        # since checking it on every extra acceleration configuration is redundant.
-        if accelerations is None:
+
+        # NOTE: For now, we only check determinism + multi output for the base case,
+        # since checking it on every extra acceleration configuration is redundant
+        # (see case_filtering).
+        if check_determinism:
             with subtests.test(msg="determinism"):
                 run_and_validate_text_to_image_determinism(omni)
+        if check_multioutput:
             with subtests.test(msg="multi_output"):
                 run_and_validate_text_to_image_multi_output(omni)
     finally:

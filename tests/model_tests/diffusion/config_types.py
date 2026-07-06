@@ -70,6 +70,10 @@ class DiffusionModelTestOpts(NamedTuple):
     # be tested by tests adding the acceleration, and not per model.
     online_base_only: bool = True
 
+    # Additional checks to run for the base case.
+    check_multi_output: bool = True  # Runs multiple generations in one request
+    check_determinism: bool = True  # Runs 2 generations with the same seed and check determinism
+
 
 ### Mappings & utils for building offline Omni() instances given a list of enabled accelerations
 ACC_OMNI_KWARGS = {
