@@ -94,7 +94,7 @@ def _build_online_image_data_url() -> str:
 def _run_online_t2i(
     server: OmniServer, client: OpenAIClientHandler, extra_body: dict | None = None
 ) -> list[DiffusionResponse]:
-    """Run a image to image request through the server."""
+    """Run a text to image request through the server."""
     messages = dummy_messages_from_mix_data(content_text=PROMPT)
     request_config = {
         "model": server.model,
