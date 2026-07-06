@@ -21,7 +21,8 @@ from tests.model_tests.diffusion.task_runners import (
     run_and_validate_online_text_to_image_request,
 )
 
-pytestmark = [pytest.mark.diffusion, pytest.mark.gpu]
+# NOTE : Hardware marks are added dynamically based on test requirements
+pytestmark = [pytest.mark.diffusion]
 
 
 @pytest.mark.parametrize(
