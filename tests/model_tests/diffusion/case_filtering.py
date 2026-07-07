@@ -53,7 +53,7 @@ def get_test_group_marks(model_name: str, test_group: list[DiffusionAccs] | None
     if current_omni_platform.is_cuda() and device_count < required_devices:
         marks.append(pytest.mark.skip(reason=f"Need {required_devices} devices, got {device_count}"))
     if required_devices > 1:
-        marks.append(pytest.mark.advanced_model)
+        marks.append(pytest.mark.full_model)
     else:
         marks.append(pytest.mark.core_model)
     return marks

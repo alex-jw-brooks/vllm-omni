@@ -598,22 +598,24 @@ steps:
                       path: /mnt/hf-cache
                       type: DirectoryOrCreate
 
-  - group: ":card_index_dividers: Tiny Model Tests [Single & MultiGPU]"
+  - group: ":card_index_dividers: Tiny Model Tests [Multi-GPU]"
     key: nightly-tiny-model-test-group
     depends_on: upload-nightly-pipeline
     if: >-
       build.env("NIGHTLY") == "1" ||
       build.pull_request.labels includes "nightly-test"
     steps:
-      - label: ":full_moon: Tiny Model Tests · Diffusion (all accelerations)"
+      - label: ":full_moon: Tiny Model Tests · Diffusion (Multi-GPU accelerations)"
         timeout_in_minutes: 30
-        # NOTE: We currently run both single gpu (which run on ready label) and multi gpu checks
-        # in nightly builds with tiny model weights (i.e., core_model level).
+        # NOTE: Single-GPU (core_model) tiny model tests run on the ready label,
+        # so nightly only adds the multi-GPU parallelism configurations.
         #
-        # Parallelism tests can be filtered out with the advanced level marker if needed in the future,
-        # but this should only be done if there is a good reason to, as it makes the semantics confusing.
+        # This is a bit confusing, but `full_model` is used to mark the multigpu tests, and
+        # --run-level `core_model` is used to indicate that we should use tiny model weights
+        # for the CI, since these tests should pass irrespective of whether or not we use
+        # the full weights or not.
         commands:
-          - timeout 25m pytest -sv tests/model_tests/diffusion -m 'cuda' --run-level "core_model"
+          - timeout 25m pytest -sv tests/model_tests/diffusion -m 'full_model and cuda' --run-level "core_model"
         agents:
           queue: "gpu_4_queue" # g6.12xlarge instance on AWS, has 4 L4 GPU
         plugins:
