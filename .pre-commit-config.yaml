@@ -63,6 +63,13 @@ repos:
       pass_filenames: false
     # Insert new entries above the `suggestion` entry
 
+    - id: check-test-ci-coverage
+      name: Ensure test files are collected by CI
+      entry: python tools/pre_commit/check_test_ci_coverage.py
+      language: python
+      types: [python]
+      files: ^tests/
+
     - id: check-pickle-imports
       name: Prevent new pickle/cloudpickle imports
       entry: python tools/pre_commit/check_pickle_imports.py
