@@ -64,8 +64,8 @@ repos:
     # Insert new entries above the `suggestion` entry
 
     - id: check-test-ci-coverage
-      name: Ensure test files are collected by CI
-      entry: python tools/pre_commit/check_test_ci_coverage.py
+      name: Ensure test files have pytestmarks
+      entry: python tools/pre_commit/check_test_marks.py
       language: python
       types: [python]
       files: ^tests/
