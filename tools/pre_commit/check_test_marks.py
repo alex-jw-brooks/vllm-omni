@@ -26,12 +26,12 @@ LEVEL_RE = re.compile(r"mark\.(?:" + "|".join(LEVEL_MARKERS) + r")\b")
 TEST_FILE_RE = re.compile(r"^tests/(?:.*/)?test_[^/]*\.py$")
 
 
-def _is_test_file(path: str) -> bool:
+def is_test_file(path: str) -> bool:
     """Determine whether or not a path is pointing at a test file or not."""
-    return bool(TEST_FILE_RE.search(path))
+    return bool(TEST_FILE_RE.match(path))
 
 
-def _has_level_marker(path: str) -> bool:
+def has_level_marker(path: str) -> bool:
     """Return True if the file path exists and has at least one level marker
     somewhere in the file; this passes for both a decorator per test func and
     module level marks at the moment."""
@@ -46,7 +46,7 @@ def get_files_missing_markers(staged_files: list[str]) -> list[str]:
     added/modified files have level markers."""
     missing_markers = []
     for path in staged_files:
-        if _is_test_file(path) and not _has_level_marker(path):
+        if is_test_file(path) and not has_level_marker(path):
             missing_markers.append(path)
     return missing_markers
 

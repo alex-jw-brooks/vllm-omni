@@ -54,6 +54,13 @@ repos:
       verbose: true
       stages: [commit-msg]
 
+    - id: check-test-ci-coverage
+      name: Ensure test files have pytestmarks
+      entry: python tools/pre_commit/check_test_marks.py
+      language: python
+      types: [python]
+      files: ^tests/
+
     # Keep `suggestion` last
     - id: suggestion
       name: Suggestion
@@ -62,13 +69,6 @@ repos:
       verbose: true
       pass_filenames: false
     # Insert new entries above the `suggestion` entry
-
-    - id: check-test-ci-coverage
-      name: Ensure test files have pytestmarks
-      entry: python tools/pre_commit/check_test_marks.py
-      language: python
-      types: [python]
-      files: ^tests/
 
     - id: check-pickle-imports
       name: Prevent new pickle/cloudpickle imports
