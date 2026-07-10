@@ -106,8 +106,6 @@ if __name__ == "__main__":
             f"  or helpers: {', '.join(HARDWARE_HELPERS)}\n\n"
             "The following files are missing marks:\n"
             f"{file_lines}\n\n"
-            "Example fix:\n"
-            "  pytestmark = [pytest.mark.core_model, pytest.mark.cpu]\n\n"
             "To skip: SKIP=check-test-ci-coverage git commit ..."
         )
         sys.exit(1)
