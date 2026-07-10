@@ -18,8 +18,8 @@ def resolve_tiny_model_path(model: str) -> str:
     if pipeline_class is None:
         # resolve_model_class_name is currently diffusion only, but this is also integrated
         # into the non-common tests so that the tiny builders can be used for diffusion e2e
-        # tests. If we can't find a pipeline_class returns None, it is most likely because
-        # the test is for a non-diffusion model.
+        # tests. If we can't find a pipeline_class, it is most likely because the test is
+        # for a non-diffusion model.
         logger.warning(
             "Could not resolve the pipeline config for %s; is it a diffusion model?",
             model,
