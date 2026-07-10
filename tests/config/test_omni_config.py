@@ -36,6 +36,7 @@ from vllm_omni.config.omni_config import (
     OmniStageParallelConfig,
     OmniStageRuntimeConfig,
     OmniStageSchedulerConfig,
+    StagePipelineConfig,
     VllmOmniARStageConfig,
     VllmOmniConfig,
     VllmOmniDiffusionStageConfig,
@@ -2285,3 +2286,31 @@ def test_platform_stage_overlay_rejects_invalid_model_runner():
     )
     with pytest.raises(ValueError, match="model_runner must be 'v1' or 'v2'"):
         _apply_platform_overrides(deploy, platform="cuda")
+
+
+def test_async_chunk_auto_disabled_without_processor():
+    """Ensure a multi-stage model that doesn't support async chunk turns it off by default."""
+    pipeline = PipelineConfig(
+        model_type="test_no_async",
+        model_arch="TestNoAsync",
+        stages=(
+            StagePipelineConfig(
+                stage_id=0,
+                model_stage="ar",
+                execution_type=StageExecutionType.LLM_AR,
+                final_output=True,
+            ),
+            StagePipelineConfig(
+                stage_id=1,
+                model_stage="generation",
+                execution_type=StageExecutionType.LLM_GENERATION,
+                input_sources=(0,),
+            ),
+        ),
+    )
+
+    deploy = DeployConfig()
+    # async chunk should not try to default to True in this case,
+    # since doing so will just raise a ValueError in validation.
+    merge_pipeline_deploy(pipeline, deploy)
+    assert not deploy.async_chunk
