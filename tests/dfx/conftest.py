@@ -158,18 +158,23 @@ def extract_server_args_by_test_name(configs: list[dict[str, Any]]) -> dict[str,
 def create_reliability_omni_server_params(
     configs: list[dict[str, Any]], stage_configs_dir: Path
 ) -> list[OmniServerParams]:
+    server_params = []
     adjusted_configs = configs_with_platform_stage_configs(configs)
     unique_params = create_unique_server_params(adjusted_configs, stage_configs_dir)
     server_args_by_name = extract_server_args_by_test_name(adjusted_configs)
-    return [
-        OmniServerParams(
-            model=model,
-            stage_config_path=stage_config_path,
-            server_args=server_args_by_name.get(test_name),
-            use_omni=use_omni,
+
+    for p in unique_params:
+        server_args = server_args_by_name.get(p.test_name) or []
+        if p.trust_remote_code:
+            server_args.append("--trust-remote-code")
+        param = OmniServerParams(
+            model=p.model,
+            stage_config_path=p.stage_config_path,
+            server_args=server_args,
+            use_omni=p.use_omni,
         )
-        for test_name, model, stage_config_path, _stage_overrides_json, _extra_cli_args, use_omni in unique_params
-    ]
+        server_params.append(param)
+    return server_params
 
 
 def supports_video_generation(model_name: str) -> bool:

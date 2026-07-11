@@ -34,16 +34,23 @@ _omni_server_lock = threading.Lock()
 def omni_server(request: pytest.FixtureRequest):
     """Start OmniServer for stability tests, with per-module timeout override."""
     timeout_args = getattr(request.module, "STABILITY_SERVER_TIMEOUT_ARGS", DEFAULT_STABILITY_SERVER_TIMEOUT_ARGS)
-    with _omni_server_lock:
-        # Same tuple and CLI composition as ``tests/dfx/perf/scripts/run_benchmark.py``;
-        # ``serve_args`` from JSON are folded into ``extra_cli_args`` inside
-        # ``create_unique_server_params``.
-        test_name, model, deploy_path, stage_overrides, extra_cli_args, use_omni = request.param
+    (
+        test_name,
+        model,
+        deploy_path,
+        stage_overrides,
+        extra_cli_args,
+        use_omni,
+        trust_remote_code,
+    ) = request.param
 
+    with _omni_server_lock:
         print(f"Starting OmniServer with test: {test_name}, model: {model}")
         server_args: list[str] = []
         if use_omni:
             server_args += list(timeout_args)
+        if trust_remote_code:
+            server_args += ["--trust-remote-code"]
         if deploy_path:
             server_args = ["--deploy-config", deploy_path] + server_args
         if stage_overrides:
