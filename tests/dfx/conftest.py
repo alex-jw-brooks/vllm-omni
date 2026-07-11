@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -14,6 +14,16 @@ from tests.dfx.reliability.helpers import list_remote_process_pids_by_pattern, p
 from tests.helpers.runtime import OmniServerParams
 from tests.helpers.stage_config import modify_stage_config
 from vllm_omni.platforms import current_omni_platform
+
+
+class BenchmarkServerParams(NamedTuple):
+    test_name: str
+    model: str
+    stage_config_path: str | None
+    stage_overrides: str | None
+    extra_cli_args: tuple[str, ...]
+    use_omni: bool
+    trust_remote_code: bool
 
 
 def load_configs(config_path: str) -> list[dict[str, Any]]:
@@ -71,7 +81,7 @@ def _build_serve_args(serve_args: Any) -> list[str]:
 def create_unique_server_params(
     configs: list[dict[str, Any]],
     stage_configs_dir: Path,
-) -> list[tuple[str, str, str | None, str | None, tuple[str, ...], bool]]:
+) -> list[BenchmarkServerParams]:
     """Return one row per unique server configuration.
 
     ``(test_name, model, deploy_yaml_path, stage_overrides_json, extra_cli_args, use_omni)``.
@@ -80,8 +90,8 @@ def create_unique_server_params(
     and **prepended** to ``extra_cli_args`` so perf / stability ``omni_server`` fixtures
     stay identical to main while still honoring ``serve_args`` in benchmark JSON.
     """
-    unique_params: list[tuple[str, str, str | None, str | None, tuple[str, ...], bool]] = []
-    seen: set[tuple[str, str, str | None, str | None, tuple[str, ...], bool]] = set()
+    unique_params: list[BenchmarkServerParams] = []
+    seen: set[BenchmarkServerParams] = set()
     for config in configs:
         test_name = config["test_name"]
         server_params = config["server_params"]
@@ -106,14 +116,16 @@ def create_unique_server_params(
         raw_extra = tuple(server_params.get("extra_cli_args") or ())
         extra_cli_args = tuple(serve_flat) + raw_extra
         use_omni = bool(server_params.get("use_omni", True))
+        trust_remote_code = bool(server_params.get("trust_remote_code", False))
 
-        server_param = (
+        server_param = BenchmarkServerParams(
             test_name,
             model,
             stage_config_path,
             stage_overrides_json,
             extra_cli_args,
             use_omni,
+            trust_remote_code,
         )
         if server_param not in seen:
             seen.add(server_param)
