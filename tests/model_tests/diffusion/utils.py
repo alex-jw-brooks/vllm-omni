@@ -13,18 +13,13 @@ logger = logging.getLogger(__name__)
 def resolve_tiny_model_path(model: str) -> str:
     """Given a real model name/path, resolve it to a tiny model path.
 
-    Returns the original model path if no suitable tiny builder is found."""
+    Raises ValueError if the pipeline class cannot be determined (invalid
+    model). Returns the original model path if no tiny builder exists yet."""
     pipeline_class = resolve_model_class_name(model)
     if pipeline_class is None:
-        # resolve_model_class_name is currently diffusion only, but this is also integrated
-        # into the non-common tests so that the tiny builders can be used for diffusion e2e
-        # tests. If we can't find a pipeline_class, it is most likely because the test is
-        # for a non-diffusion model.
-        logger.warning(
-            "Could not resolve the pipeline config for %s; is it a diffusion model?",
-            model,
+        raise ValueError(
+            f"Cannot resolve pipeline class for model: {model}. The model path may be invalid or its config unreadable."
         )
-        return model
 
     test_opts = DIFFUSION_TEST_SETTINGS.get(pipeline_class)
     if test_opts is None:
