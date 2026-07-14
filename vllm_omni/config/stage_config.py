@@ -1151,8 +1151,7 @@ def get_default_async_chunk_enabled(
     pipeline: PipelineConfig,
     deploy: DeployConfig,
 ) -> bool:
-    """Given the pipeline config and deploy config, determine the value of async_chunk
-    for when it hasn't been explicitly set by the CLI.
+    """Given the pipeline config and deploy config, determine the value of async_chunk.
 
     The default is True if the model actually supports async chunk and is multistage,
     and False otherwise. If the user tried to enable async chunk through the deploy
