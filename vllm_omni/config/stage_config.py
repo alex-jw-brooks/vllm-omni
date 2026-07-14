@@ -626,7 +626,6 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
     # TODO (Alex): Clean this up, we should not have fallback values here
     kwargs: dict[str, Any] = {
         "async_chunk": raw_dict.get("async_chunk"),
-        "active_stream_window": raw_dict.get("active_stream_window", 0),
         "connectors": raw_dict.get("connectors", None),
         "edges": raw_dict.get("edges", None),
         "stages": stages,
