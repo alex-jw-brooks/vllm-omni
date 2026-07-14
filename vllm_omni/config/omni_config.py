@@ -1243,14 +1243,13 @@ class VllmOmniConfig:
         if "async_chunk" in cli_overrides:
             deploy.async_chunk = bool(cli_overrides["async_chunk"])
 
-        deploy.async_chunk = get_default_async_chunk_enabled(pipeline, deploy)
-
         for name in _PIPELINE_DEPLOY_CLI_FIELDS:
             if cli_overrides.get(name) is not None:
                 setattr(deploy, name, _copy_value(cli_overrides[name]))
 
         deploy = _apply_platform_overrides(deploy)
         deploy_by_id = {stage.stage_id: stage for stage in deploy.stages}
+        deploy.async_chunk = get_default_async_chunk_enabled(pipeline, deploy)
         model = cli_overrides.get("model")
 
         stage_configs = tuple(
