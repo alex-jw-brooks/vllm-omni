@@ -852,7 +852,6 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
         "session_mode": raw_dict.get("session_mode", "turn"),
         "model_runner": model_runner,
         "duplex_session": DuplexSessionRuntimeConfig(**(raw_dict.get("duplex_session") or {})),
-        "active_stream_window": raw_dict.get("active_stream_window", 0),
         "connectors": raw_dict.get("connectors", None),
         "edges": raw_dict.get("edges", None),
         "stages": stages,
@@ -863,6 +862,11 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
     # so the DeployConfig dataclass defaults take effect otherwise.
     for name in PIPELINE_WIDE_ENGINE_FIELDS:
         if name in raw_dict:
+            value = raw_dict[name]
+            # NOTE: This is arguably bad behavior since it's a one-off for
+            # only this field. We should consider deprecating this coercion.
+            if name == "active_stream_window":
+                value = int(value or 0)
             kwargs[name] = raw_dict[name]
     return DeployConfig(**kwargs)
 
