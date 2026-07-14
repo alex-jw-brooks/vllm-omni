@@ -848,7 +848,7 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
     kwargs: dict[str, Any] = {
         "speech_cache": SpeechCacheConfig(**speech_cache),
         "cuda_mps": raw_dict.get("cuda_mps", False),
-        "async_chunk": raw_dict.get("async_chunk", True),
+        "async_chunk": raw_dict.get("async_chunk"),
         "session_mode": raw_dict.get("session_mode", "turn"),
         "model_runner": model_runner,
         "active_stream_window": int(raw_dict.get("active_stream_window", 0) or 0),
