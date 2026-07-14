@@ -1956,6 +1956,7 @@ class VllmOmniConfig:
 
         deploy = _apply_platform_overrides(deploy)
         deploy_by_id = {stage.stage_id: stage for stage in deploy.stages}
+        deploy.async_chunk = get_default_async_chunk_enabled(pipeline, deploy)
         model = cli_overrides.get("model")
 
         stage_configs = tuple(
