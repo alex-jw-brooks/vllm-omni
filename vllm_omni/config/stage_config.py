@@ -778,7 +778,7 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
 
     # TODO (Alex): Clean this up, we should not have fallback values here
     kwargs: dict[str, Any] = {
-        "async_chunk": raw_dict.get("async_chunk", True),
+        "async_chunk": raw_dict.get("async_chunk"),
         "session_mode": raw_dict.get("session_mode", "turn"),
         "active_stream_window": int(raw_dict.get("active_stream_window", 0) or 0),
         "duplex_session": DuplexSessionRuntimeConfig(**(raw_dict.get("duplex_session") or {})),
