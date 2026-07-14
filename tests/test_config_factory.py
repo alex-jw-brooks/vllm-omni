@@ -2094,14 +2094,10 @@ class TestSentinelDefaultPrecedence:
         assert stage1.sync_process_input_func is not None
         assert stage1.sync_process_input_func.endswith("thinker2talker_token_only")
 
-        # async_chunk=True must now be rejected: removing the fake hook means
-        # there is no next-stage input processor for the validator to accept.
-        # (Positive consequence -- users can't accidentally enable async_chunk
-        # on an arch that doesn't actually support it.)
-        import pytest as _pytest
-
-        with _pytest.raises(ValueError, match="async_chunk=True"):
-            merge_pipeline_deploy(pipeline, DeployConfig(async_chunk=True))
+        # ensure merging the pipeline deploy with async chunk set to True disables it,
+        # since currently it is not supported for this pipeline.
+        stage_configs = merge_pipeline_deploy(pipeline, DeployConfig(async_chunk=True))
+        assert all([not stg_cfg.yaml_engine_args["async_chunk"] for stg_cfg in stage_configs])
 
         # async_chunk=False merges cleanly and stage-0 yaml_engine_args carries
         # no spurious full-payload hook.

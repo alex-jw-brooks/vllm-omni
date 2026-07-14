@@ -626,7 +626,7 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
     # TODO (Alex): Clean this up, we should not have fallback values here
     kwargs: dict[str, Any] = {
         "async_chunk": raw_dict.get("async_chunk"),
-        "active_stream_window": int(raw_dict.get("active_stream_window", 0) or 0),
+        "active_stream_window": raw_dict.get("active_stream_window", 0),
         "connectors": raw_dict.get("connectors", None),
         "edges": raw_dict.get("edges", None),
         "stages": stages,
@@ -829,7 +829,7 @@ def get_default_async_chunk_enabled(
 
     The default is True if the model actually supports async chunk and is multistage,
     and False otherwise. If the user tried to enable async chunk through the deploy
-    config, but its inapplicable or unsupported, it will be disabled with a warning.
+    config, but it's inapplicable or unsupported, it will be disabled with a warning.
     """
     # Single stage should never use async chunk
     if len(pipeline.stages) <= 1:
@@ -840,20 +840,21 @@ def get_default_async_chunk_enabled(
             )
         return False
 
-    # If async chunk was set, pass it through
-    if deploy.async_chunk is not None:
-        return deploy.async_chunk
-
     has_inter_stage_edges = any(stage.input_sources for stage in pipeline.stages)
     has_next_stage_inps = any(stage.async_chunk_process_next_stage_input_func for stage in pipeline.stages)
 
-    if has_inter_stage_edges and has_next_stage_inps:
-        return True if not deploy.async_chunk else deploy.async_chunk
+    # If async chunk was set, make sure it's supported if
+    # requested; otherwise warn and disable it.
+    if deploy.async_chunk is not None:
+        if deploy.async_chunk and not (has_inter_stage_edges and has_next_stage_inps):
+            logger.warning(
+                "Deploy config set async_chunk=True, but the pipeline config does not support it; it will be disabled."
+            )
+            return False
+        return deploy.async_chunk
 
-    if deploy.async_chunk:
-        logger.warning(
-            "Deploy config set async_chunk=True, but the pipeline config does not support it; it will be disabled."
-        )
+    if has_inter_stage_edges and has_next_stage_inps:
+        return True
     return False
 
 
