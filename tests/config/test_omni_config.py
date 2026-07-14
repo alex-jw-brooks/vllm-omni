@@ -36,7 +36,6 @@ from vllm_omni.config.omni_config import (
     OmniStageParallelConfig,
     OmniStageRuntimeConfig,
     OmniStageSchedulerConfig,
-    StagePipelineConfig,
     VllmOmniARStageConfig,
     VllmOmniConfig,
     VllmOmniDiffusionStageConfig,
