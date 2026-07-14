@@ -824,8 +824,7 @@ def get_default_async_chunk_enabled(
     pipeline: PipelineConfig,
     deploy: DeployConfig,
 ) -> bool:
-    """Given the pipeline config and deploy config, determine the value of async_chunk
-    for when it hasn't been explicitly set by the CLI.
+    """Given the pipeline config and deploy config, determine the value of async_chunk.
 
     The default is True if the model actually supports async chunk and is multistage,
     and False otherwise. If the user tried to enable async chunk through the deploy
@@ -858,21 +857,6 @@ def get_default_async_chunk_enabled(
     return False
 
 
-def validate_async_chunk_support(async_chunk_enabled: bool, pipeline: PipelineConfig) -> None:
-    has_inter_stage_edges = any(stage.input_sources for stage in pipeline.stages)
-    if (
-        async_chunk_enabled
-        and has_inter_stage_edges
-        and not any(stage.async_chunk_process_next_stage_input_func for stage in pipeline.stages)
-    ):
-        raise ValueError(
-            f"Pipeline {pipeline.model_type!r} has async_chunk=True in deploy but no stage "
-            "declares a dedicated async-chunk next-stage processor "
-            "(``async_chunk_process_next_stage_input_func``). "
-            "Either set async_chunk=False or implement an async-chunk producer on the pipeline."
-        )
-
-
 def merge_pipeline_deploy(
     pipeline: PipelineConfig,
     deploy: DeployConfig,
@@ -886,7 +870,6 @@ def merge_pipeline_deploy(
     # DeployConfig/PipelineConfig, and this path will be removed with the incorporation
     # of the OmniConfig.
     deploy.async_chunk = get_default_async_chunk_enabled(pipeline, deploy)
-    validate_async_chunk_support(deploy.async_chunk, pipeline)
 
     result: list[StageConfig] = []
     for ps in pipeline.stages:

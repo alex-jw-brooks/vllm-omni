@@ -36,7 +36,6 @@ from vllm_omni.config.stage_config import (
     build_stage_runtime_overrides,
     get_default_async_chunk_enabled,
     load_deploy_config,
-    validate_async_chunk_support,
 )
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
@@ -1241,12 +1240,10 @@ class VllmOmniConfig:
                 f"Pipeline {pipeline_key!r} did not resolve to a concrete PipelineConfig without an HF config"
             )
 
-        deploy.async_chunk = (
-            bool(cli_overrides["async_chunk"])
-            if "async_chunk" in cli_overrides
-            else get_default_async_chunk_enabled(pipeline, deploy)
-        )
-        validate_async_chunk_support(deploy.async_chunk, pipeline)
+        if "async_chunk" in cli_overrides:
+            deploy.async_chunk = bool(cli_overrides["async_chunk"])
+
+        deploy.async_chunk = get_default_async_chunk_enabled(pipeline, deploy)
 
         for name in _PIPELINE_DEPLOY_CLI_FIELDS:
             if cli_overrides.get(name) is not None:
