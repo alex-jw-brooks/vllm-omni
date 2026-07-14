@@ -2171,3 +2171,42 @@ class TestAsyncChunkDefaults:
         # since doing so will just raise a ValueError in validation.
         merge_pipeline_deploy(pipeline, deploy)
         assert not deploy.async_chunk
+
+    def test_async_chunk_auto_disabled_when_yaml_omits_key(self, tmp_path):
+        """Ensure a multi-stage model that doesn't support async chunk turns it off by default
+        when a deploy config is provided that doesn't explicitly set it."""
+
+        deploy_path = tmp_path / "no_async_chunk.yaml"
+        deploy_path.write_text(
+            """
+stages:
+  - stage_id: 0
+    devices: "0"
+  - stage_id: 1
+    devices: "0"
+""",
+            encoding="utf-8",
+        )
+        deploy = load_deploy_config(deploy_path)
+
+        pipeline = PipelineConfig(
+            model_type="test_no_async",
+            model_arch="TestNoAsync",
+            stages=(
+                StagePipelineConfig(
+                    stage_id=0,
+                    model_stage="ar",
+                    execution_type=StageExecutionType.LLM_AR,
+                    final_output=True,
+                ),
+                StagePipelineConfig(
+                    stage_id=1,
+                    model_stage="generation",
+                    execution_type=StageExecutionType.LLM_GENERATION,
+                    input_sources=(0,),
+                ),
+            ),
+        )
+
+        merge_pipeline_deploy(pipeline, deploy)
+        assert not deploy.async_chunk
