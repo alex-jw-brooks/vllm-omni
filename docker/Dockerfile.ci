@@ -6,7 +6,11 @@ ARG VLLM_BASE_TAG=v0.25.0
 FROM ${VLLM_BASE_IMAGE}:${VLLM_BASE_TAG}
 ARG APP_DIR=/workspace/vllm-omni
 WORKDIR ${APP_DIR}
-COPY . .
+
+# Create a vllm_omni dir so that we can install the python package
+# without failing to write the version files; we'll copy over it
+# after installing
+RUN mkdir -p vllm_omni
 
 # Install system dependencies
 RUN apt-get update && \
@@ -14,9 +18,15 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Copy dependency related things first and install deps/
+# We set the version str to 0.0.0 since it doesn't matter
+# for CI
+COPY pyproject.toml setup.py ./
+COPY requirements/ requirements/
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
 RUN uv pip install --system ".[dev]"
 
-
+COPY . .
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 ENTRYPOINT []
