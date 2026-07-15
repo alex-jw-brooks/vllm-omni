@@ -32,6 +32,10 @@ echo "BUILDKITE_PULL_REQUEST: ${BUILDKITE_PULL_REQUEST}"
 aws ecr-public get-login-password --region "$REGION" \
     | docker login --username AWS --password-stdin "$ECR_NAMESPACE"
 
+# Set up buildx with docker-container driver; we need to do this
+# since cache export is not supported for the docker driver.
+docker buildx create --name vllm-omni-builder --driver docker-container --use
+
 # Configure cache refs based on PR vs main branch
 CACHE_FROM="--cache-from type=registry,ref=${REGISTRY}:cache-main"
 
