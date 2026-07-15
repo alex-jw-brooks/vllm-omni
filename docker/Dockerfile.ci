@@ -26,7 +26,15 @@ COPY requirements/ requirements/
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
 RUN uv pip install --system ".[dev]"
 
-COPY . .
+# DEBUG: split COPY to identify slow directories
+COPY .git/ .git/
+COPY vllm_omni/ vllm_omni/
+COPY tests/ tests/
+COPY docs/ docs/
+COPY tools/ tools/
+COPY docker/ docker/
+COPY .buildkite/ .buildkite/
+COPY pyproject.toml setup.py README.md LICENSE ./
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 ENTRYPOINT []
