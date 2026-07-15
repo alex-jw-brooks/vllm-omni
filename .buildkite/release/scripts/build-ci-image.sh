@@ -43,6 +43,6 @@ echo "Image tag: ${REGISTRY}:${BUILDKITE_COMMIT}"
 # Cache is shared across all branches/PRs with the same dependencies.
 docker buildx build --push --progress=plain \
     --cache-from "type=registry,ref=${REGISTRY}:${CACHE_TAG}" \
-    --cache-to "type=registry,ref=${REGISTRY}:${CACHE_TAG},mode=max,compression=zstd,force-compression=true" \
+    --cache-to "type=registry,ref=${REGISTRY}:${CACHE_TAG},mode=max,compression=zstd" \
     --file "$DOCKERFILE" \
     -t "${REGISTRY}:${BUILDKITE_COMMIT}" .
