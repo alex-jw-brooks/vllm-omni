@@ -7,57 +7,42 @@ set -euo pipefail
 #
 # Expects the following environment variables (set by Buildkite):
 #   BUILDKITE_COMMIT          - commit SHA used as the image tag
-#   BUILDKITE_PULL_REQUEST    - PR number, or "false" if not a PR
 ECR_NAMESPACE="public.ecr.aws/q9t5s3a7"
 REGISTRY="${ECR_NAMESPACE}/vllm-ci-test-repo"
 REGION="us-east-1"
 DOCKERFILE="docker/Dockerfile.ci"
 
+# Files that determine the install layer; we use the hash of the contents
+# Of these files as the tag so that we can share the deps across most PRs.
+DEP_FILES="pyproject.toml setup.py requirements/"
+
 # Ensure that the env vars are actually set, otherwise exit early
-MISSING=()
-for var in BUILDKITE_COMMIT BUILDKITE_PULL_REQUEST; do
-    if [ -z "${!var:-}" ]; then
-        MISSING+=("$var")
-    fi
-done
-if [ ${#MISSING[@]} -gt 0 ]; then
-    echo "ERROR: Required environment variable(s) not set: ${MISSING[*]}"
+if [ -z "${BUILDKITE_COMMIT:-}" ]; then
+    echo "ERROR: BUILDKITE_COMMIT is not set"
     exit 1
 fi
 echo "BUILDKITE_COMMIT: ${BUILDKITE_COMMIT}"
-echo "BUILDKITE_PULL_REQUEST: ${BUILDKITE_PULL_REQUEST}"
 
+# Compute cache tag from dependency file contents
+CACHE_KEY=$(cat pyproject.toml setup.py requirements/*.txt | sha256sum | cut -c1-16)
+CACHE_TAG="deps-cache-${CACHE_KEY}"
+echo "Cache key: ${CACHE_TAG}"
 
 # Authenticate to ECR Public
 aws ecr-public get-login-password --region "$REGION" \
     | docker login --username AWS --password-stdin "$ECR_NAMESPACE"
 
 # Set up buildx with docker-container driver; we need to do this
-# since cache export is not supported for the docker driver.
+# since cache export is not supported for the default docker driver.
 docker buildx create --name vllm-omni-builder --driver docker-container --use
-
-# Configure cache refs based on PR vs main branch
-CACHE_FROM="--cache-from type=registry,ref=${REGISTRY}:cache-main"
-
-if [ "$BUILDKITE_PULL_REQUEST" != "false" ]; then
-    BRANCH_CACHE="cache-pr-${BUILDKITE_PULL_REQUEST}"
-    # It's a PR, so we also have the cache tag based on the PR to pull from
-    CACHE_FROM_BRANCH="--cache-from type=registry,ref=${REGISTRY}:${BRANCH_CACHE}"
-    CACHE_FROM="${CACHE_FROM} ${CACHE_FROM_BRANCH}"
-else
-    BRANCH_CACHE="cache-main"
-fi
-# Write the cache back to the main cache or the PR cache
-CACHE_TO="--cache-to type=registry,ref=${REGISTRY}:${BRANCH_CACHE},mode=max"
-
 
 echo "--- :docker: Building CI image"
 echo "Image tag: ${REGISTRY}:${BUILDKITE_COMMIT}"
-echo "Cache from: ${CACHE_FROM}"
-echo "Cache to: ${CACHE_TO}"
 
-# Build + push the build image to the registry (i.e., don't unpack on the CI machine)
+# Build + push the image to the registry, using content-hashed cache.
+# Cache is shared across all branches/PRs with the same dependencies.
 docker buildx build --push --progress=plain \
-    $CACHE_FROM $CACHE_TO \
+    --cache-from "type=registry,ref=${REGISTRY}:${CACHE_TAG}" \
+    --cache-to "type=registry,ref=${REGISTRY}:${CACHE_TAG},mode=max,compression=zstd,force-compression=true" \
     --file "$DOCKERFILE" \
     -t "${REGISTRY}:${BUILDKITE_COMMIT}" .

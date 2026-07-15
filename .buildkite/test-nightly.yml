@@ -1671,11 +1671,3 @@ steps:
       - buildkite-agent artifact upload "tests/dfx/perf/results/*.html"
     agents:
       queue: "cpu_queue_premerge"
-
-  - label: ":broom: Clean up old CI cache images"
-    depends_on: upload-nightly-pipeline
-    commands:
-      - "aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/q9t5s3a7"
-      - "python3 .buildkite/scripts/cleanup-cache-images.py --max-age-days 3 --repo vllm-ci-test-repo --region us-east-1"
-    agents:
-      queue: "cpu_queue_premerge"
