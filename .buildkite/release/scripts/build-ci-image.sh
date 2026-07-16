@@ -7,7 +7,7 @@ set -euo pipefail
 # builds only need to COPY source code on top — no pip install, no container
 # driver overhead. The deps base is rebuilt automatically when dependencies change.
 #
-# Expects the following environment variables (set by Buildkite):
+# Expects the following environment variable (set by Buildkite):
 #   BUILDKITE_COMMIT          - commit SHA used as the image tag
 ECR_NAMESPACE="public.ecr.aws/q9t5s3a7"
 REGISTRY="${ECR_NAMESPACE}/vllm-ci-test-repo"
