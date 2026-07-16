@@ -8,6 +8,7 @@
 # Build the full CI image:   docker build --build-arg CI_DEPS_IMAGE=deps-image .
 ARG VLLM_BASE_IMAGE=vllm/vllm-openai
 ARG VLLM_BASE_TAG=v0.25.0
+ARG CI_DEPS_IMAGE=deps
 
 # Stage: deps — contains base image + system deps + pip install.
 # Built and pushed separately, tagged by content hash of dependency files.
@@ -38,7 +39,6 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python
 # Stage: final — copies source on top of a pre-built deps image.
 # On cache hit, CI_DEPS_IMAGE points to the pre-built deps from ECR,
 # skipping the deps stage entirely.
-ARG CI_DEPS_IMAGE=deps
 FROM ${CI_DEPS_IMAGE}
 ARG APP_DIR=/workspace/vllm-omni
 WORKDIR ${APP_DIR}
