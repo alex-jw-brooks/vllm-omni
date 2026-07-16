@@ -22,17 +22,19 @@ WORKDIR ${APP_DIR}
 RUN mkdir -p vllm_omni
 
 # Install system dependencies
-RUN apt-get update && \
-    apt-get install -y espeak-ng git jq && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
+    apt-get install -y espeak-ng git jq
 
 # Copy dependency related things first and install deps.
 # We set the version str to 0.0.0 since it doesn't matter for CI.
 COPY pyproject.toml setup.py ./
 COPY requirements/ requirements/
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
-RUN uv pip install --system ".[dev]"
+ENV UV_LINK_MODE=copy
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system ".[dev]"
 
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
