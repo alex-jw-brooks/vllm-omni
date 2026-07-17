@@ -1,20 +1,13 @@
 # Target vllm version: v0.24.0 (releases/v0.24.0 branch).
 # The pinned VLLM_PRECOMPILED_WHEEL_COMMIT and VLLM_BASE_TAG below must
 # be updated on every rebase to match the new upstream vllm commit/tag.
-#
-# CI image with a deps base stage that can be built and tagged separately.
-#
-# Build just the deps base:  docker build --target deps -t deps-image .
-# Build the full CI image:   docker build --build-arg CI_DEPS_IMAGE=deps-image .
 ARG VLLM_BASE_IMAGE=vllm/vllm-openai
 ARG VLLM_BASE_TAG=v0.25.0
-ARG CI_DEPS_IMAGE=deps
-
-# Stage: deps — contains base image + system deps + pip install.
-# Built and pushed separately, tagged by content hash of dependency files.
-FROM ${VLLM_BASE_IMAGE}:${VLLM_BASE_TAG} AS deps
+FROM ${VLLM_BASE_IMAGE}:${VLLM_BASE_TAG}
 ARG APP_DIR=/workspace/vllm-omni
 WORKDIR ${APP_DIR}
+
+RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 # Create a vllm_omni dir so that we can install the python package
 # without failing to write the version files; we'll copy over it
@@ -22,29 +15,22 @@ WORKDIR ${APP_DIR}
 RUN mkdir -p vllm_omni
 
 # Install system dependencies
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && \
-    apt-get install -y espeak-ng git jq
+RUN apt-get update && \
+    apt-get install -y espeak-ng git jq && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy dependency related things first and install deps.
-# We set the version str to 0.0.0 since it doesn't matter for CI.
+# Copy dependency related things first and install deps/
+# We set the version str to 0.0.0 since it doesn't matter
+# for CI
 COPY pyproject.toml setup.py ./
 COPY requirements/ requirements/
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
-ENV UV_LINK_MODE=copy
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system ".[dev]"
+RUN uv pip install --system ".[dev]"
 
-RUN ln -sf /usr/bin/python3 /usr/bin/python
-
-# Stage: final — copies source on top of a pre-built deps image.
-# On cache hit, CI_DEPS_IMAGE points to the pre-built deps from ECR,
-# skipping the deps stage entirely.
-FROM ${CI_DEPS_IMAGE}
-ARG APP_DIR=/workspace/vllm-omni
-WORKDIR ${APP_DIR}
-
-COPY . .
+# NOTE: the --link in the COPY below skips the base image
+# pull on cache hit for dependencies. Don't add any commands
+# that depend on the filesystem after this.
+COPY --link . .
 
 ENTRYPOINT []
