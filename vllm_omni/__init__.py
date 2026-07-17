@@ -12,6 +12,8 @@ Architecture:
   processing
 """
 
+raise ValueError("If we don't see this, the copy link is messing up our code somehow")
+
 # We import version early, because it will warn if vLLM / vLLM Omni
 # are not using the same major + minor version (if vLLM is installed).
 # We should do this before applying patch, because vLLM imports might
