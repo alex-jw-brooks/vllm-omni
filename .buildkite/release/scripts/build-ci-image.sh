@@ -12,10 +12,6 @@ REGISTRY="${ECR_NAMESPACE}/vllm-ci-test-repo"
 REGION="us-east-1"
 DOCKERFILE="docker/Dockerfile.ci"
 
-# Files that determine the install layer; we use the hash of the contents
-# Of these files as the tag so that we can share the deps across most PRs.
-DEP_FILES="pyproject.toml setup.py requirements/"
-
 # Ensure that the env vars are actually set, otherwise exit early
 if [ -z "${BUILDKITE_COMMIT:-}" ]; then
     echo "ERROR: BUILDKITE_COMMIT is not set"
@@ -23,24 +19,27 @@ if [ -z "${BUILDKITE_COMMIT:-}" ]; then
 fi
 echo "BUILDKITE_COMMIT: ${BUILDKITE_COMMIT}"
 
-# Compute cache tag from dependency file contents
-CACHE_KEY=$(cat pyproject.toml setup.py requirements/*.txt | sha256sum | cut -c1-16)
-CACHE_TAG="deps-cache-${CACHE_KEY}"
-echo "Cache key: ${CACHE_TAG}"
-
 # Authenticate to ECR Public
 aws ecr-public get-login-password --region "$REGION" \
     | docker login --username AWS --password-stdin "$ECR_NAMESPACE"
 
+# Compute the cache tag for the dependencies image as the hash of the contents.
+# This is because dependencies don't change often, so most PRs will have the same hash.
+DEP_FILES="pyproject.toml setup.py requirements/*.txt"
+CACHE_KEY=$(cat ${DEP_FILES} | sha256sum | cut -c1-16)
+CACHE_TAG="deps-cache-${CACHE_KEY}"
+echo "Cache key: ${CACHE_TAG}"
+
 # Set up buildx with docker-container driver; we need to do this
-# since cache export is not supported for the default docker driver.
+# since cache export is not supported for the default docker driver
+# that is running in the CI.
 docker buildx create --name vllm-omni-builder --driver docker-container --use
 
-echo "--- :docker: Building CI image"
-echo "Image tag: ${REGISTRY}:${BUILDKITE_COMMIT}"
+echo "Building image tag: ${REGISTRY}:${BUILDKITE_COMMIT}"
 
-# Build + push the image to the registry, using content-hashed cache.
-# Cache is shared across all branches/PRs with the same dependencies.
+# Build + push the image to the registry, using the hash from the dependencies.
+# Note that the caching here is layerwise, so we're just making sure we always
+# can cache hit on everything but the last copy at the moment.
 docker buildx build --push --progress=plain \
     --cache-from "type=registry,ref=${REGISTRY}:${CACHE_TAG}" \
     --cache-to "type=registry,ref=${REGISTRY}:${CACHE_TAG},mode=max,compression=zstd" \
