@@ -33,7 +33,9 @@ echo "Cache key: ${CACHE_TAG}"
 # Set up buildx with docker-container driver; we need to do this
 # since cache export is not supported for the default docker driver
 # that is running in the CI.
-docker buildx create --name vllm-omni-builder --driver docker-container --use
+docker buildx inspect $BUILDER_NAME >/dev/null 2>&1 \
+|| docker buildx create --name $BUILDER_NAME --driver docker-container
+docker buildx use $BUILDER_NAME
 
 echo "Building image tag: ${REGISTRY}:${BUILDKITE_COMMIT}"
 
