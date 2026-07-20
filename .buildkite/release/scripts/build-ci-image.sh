@@ -11,6 +11,7 @@ ECR_NAMESPACE="public.ecr.aws/q9t5s3a7"
 REGISTRY="${ECR_NAMESPACE}/vllm-ci-test-repo"
 REGION="us-east-1"
 DOCKERFILE="docker/Dockerfile.ci"
+BUILDER_NAME="vllm-omni-builder"
 
 # Ensure that the env vars are actually set, otherwise exit early
 if [ -z "${BUILDKITE_COMMIT:-}" ]; then
