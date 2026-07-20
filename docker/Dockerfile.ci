@@ -2,7 +2,7 @@
 # The pinned VLLM_PRECOMPILED_WHEEL_COMMIT and VLLM_BASE_TAG below must
 # be updated on every rebase to match the new upstream vllm commit/tag.
 ARG VLLM_BASE_IMAGE=vllm/vllm-openai
-ARG VLLM_BASE_TAG=v0.24.0
+ARG VLLM_BASE_TAG=v0.25.0
 
 # We use registry-based layer caching for the dependencies,
 # where the tag is determined based on the hash of the contents
