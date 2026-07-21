@@ -47,6 +47,9 @@ FROM deps
 ARG APP_DIR=/workspace/vllm-omni
 # Add APP_DIR to the pythonpath, since the entrypoint stub
 # that was installed in the earlier step must point at the copied code.
+#
+# NOTE: this will probably warn about undefined vars, but is expected.
+# See: https://github.com/docker/buildx/issues/2751
 ENV PYTHONPATH=${APP_DIR}${PYTHONPATH:+:${PYTHONPATH}}
 WORKDIR ${APP_DIR}
 
