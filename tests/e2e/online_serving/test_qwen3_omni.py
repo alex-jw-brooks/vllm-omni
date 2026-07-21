@@ -250,3 +250,23 @@ def test_completions_rejected_for_thinker_talker(omni_server, openai_client) -> 
         err_code=400,
     )
     assert not responses[0].success
+
+
+@pytest.mark.advanced_model
+@pytest.mark.core_model
+@pytest.mark.omni
+@hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+def test_batched_completions(omni_server, openai_client) -> None:
+    """Ensure batched completions does not crash the server."""
+    responses = openai_client.send_batched_chat_completions_http_request(
+        {
+            "json": {
+                "model": omni_server.model,
+                "messages": [[{"role": "user", "content": "Hi"}]],
+                "max_tokens": 10,
+            },
+        },
+    )
+    assert responses
+    assert not any(response.status_code == 500 for response in responses)
