@@ -257,16 +257,71 @@ def test_completions_rejected_for_thinker_talker(omni_server, openai_client) -> 
 @pytest.mark.omni
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
-def test_batched_completions(omni_server, openai_client) -> None:
-    """Ensure batched completions does not crash the server."""
+def test_batched_completions_text(omni_server, openai_client) -> None:
+    """Ensure that we can make a batch chat completions request (text only)."""
     responses = openai_client.send_batched_chat_completions_http_request(
         {
             "json": {
                 "model": omni_server.model,
-                "messages": [[{"role": "user", "content": "Hi"}]],
-                "max_tokens": 10,
+                "messages": [
+                    [{"role": "user", "content": "What color is the sky? Answer in one word."}],
+                    [{"role": "user", "content": "What is 2+2? Answer in one word."}],
+                ],
+                "modalities": ["text"],
+                "max_tokens": 20,
             },
         },
     )
     assert responses
-    assert not any(response.status_code == 500 for response in responses)
+    resp = responses[0]
+    assert resp.success, f"Batch request failed: {resp.error_message}"
+    body = resp.json_body
+    choices = body["choices"]
+    assert len(choices) == 2, f"Expected 2 choices, got {len(choices)}"
+    for choice in choices:
+        assert choice["message"]["content"]
+
+
+@pytest.mark.advanced_model
+@pytest.mark.core_model
+@pytest.mark.omni
+@hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+def test_batched_completions_audio_out(omni_server, openai_client) -> None:
+    """Ensure that we can make a batch chat completions request (audio + text)."""
+    messages = [
+        [{"role": "user", "content": "Say hello."}],
+        [{"role": "user", "content": "Say goodbye."}],
+    ]
+    num_messages = len(messages)
+    responses = openai_client.send_batched_chat_completions_http_request(
+        {
+            "json": {
+                "model": omni_server.model,
+                "messages": messages,
+                "modalities": ["text", "audio"],
+                "max_tokens": 200,
+            },
+        },
+    )
+    assert responses and len(responses) == 1 and responses[0].success
+    resp = responses[0]
+    choices = resp.json_body["choices"]
+
+    # FIXME (Alex): The text and audio are currently yielded as separate choices per
+    # conversation, which is why we have 4 choices here. This should be collapsed
+    # properly in chat completions, and this test should be updated to 2 choices.
+    assert len(choices) == (num_messages * 2)
+    audio_choices = [c for c in choices if c["message"].get("audio") is not None]
+    text_choices = [c for c in choices if c["message"].get("audio") is None]
+
+    assert len(audio_choices) == num_messages
+    assert len(text_choices) == num_messages
+
+    # Audio choices should have nonempty audio
+    for choice in audio_choices:
+        assert choice["message"]["audio"]["data"]
+
+    # Text choices should have nonempty content
+    for choice in text_choices:
+        assert choice["message"]["content"]
