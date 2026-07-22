@@ -47,15 +47,19 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
             logger.warning("Streaming is not supported for batched chat completions; ignoring stream=True.")
 
         # Submit each chat completion request as a task, then gather results.
-        # TODO (Alex): This can probably be done more optimally
+        # TODO (Alex): optimize this
         tasks = [asyncio.create_task(self.create_chat_completion(c, raw_request)) for c in chat_requests]
-        results = await asyncio.gather(*tasks)
+        try:
+            results = await asyncio.gather(*tasks)
+        finally:
+            # Ensure we cancel remaining tasks if needed, e.g., early exit due to bad behavior
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
 
         for i, resp in enumerate(results):
             if isinstance(resp, ErrorResponse):
                 return resp
-            if not isinstance(resp, ChatCompletionResponse):
-                return self.create_error_response(f"Unexpected response type for conversation {i}")
             completion: ChatCompletionResponse = resp
             model = completion.model
             for choice in completion.choices:
@@ -71,10 +75,10 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
             total_tokens=total_prompt_tokens + total_completion_tokens,
         )
 
-        curr_time = int(time.time())
+        request_id = f"chatcmpl-batch-{self._base_request_id(raw_request, request.request_id)}"
         return ChatCompletionResponse(
-            id=f"chatcmpl-batch-{curr_time}",
-            created=curr_time,
+            id=request_id,
+            created=int(time.time()),
             model=model,
             choices=choices,
             usage=usage,
