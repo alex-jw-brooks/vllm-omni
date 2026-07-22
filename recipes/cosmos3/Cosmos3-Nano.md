@@ -6,7 +6,7 @@
 
 - Vendor: NVIDIA
 - Model: `nvidia/Cosmos3-Nano`
-- Task: Text-to-image (T2I), text-to-video (T2V), image-to-video (I2V), and video-to-video (V2V) generation, with optional synchronized audio (video + sound), action policy
+- Task: Text-to-image (T2I), text-to-video (T2V), image-to-video (I2V), and video-to-video (V2V) generation, with optional transfer controls, synchronized audio (video + sound), action policy
 - Mode: Online serving with the OpenAI-compatible image/video APIs, plus offline generation via the `Omni` API
 - Maintainer: Community
 
@@ -25,6 +25,9 @@ mode is selected per request:
   reference-video latent frames; use `extra_params.condition_frame_indexes_vision`
   and `extra_params.condition_video_keep` to choose which prefix/tail frames guide
   generation.
+- **Transfer V2V** — pass one or more transfer hints in `extra_params`
+  (`edge`, `blur`, `depth`, `seg`, `wsm`) to guide generation with control
+  frames. Transfer mode is video-only and cannot be combined with sound or action.
 - **T2VS / I2VS** — add `generate_sound=true` (and optional `sound_duration`) to a
   T2V/I2V `/v1/videos/sync` request to also generate synchronized audio, muxed into
   the mp4 as AAC 48 kHz stereo. See the official model card's "Video + Audio" examples.
@@ -190,6 +193,18 @@ curl -sS -X POST http://localhost:8000/v1/videos/sync \
   -F 'video_reference={"video_url":"https://example.com/reference.mp4"}' \
   -o cosmos3_v2v_from_url.mp4
 
+# Transfer V2V with a precomputed depth control video. `control_path` can point
+# to a local image/video; edge and blur can also be computed from `input_reference`
+# by passing `"edge":true` or `"blur":true`.
+curl -sS -X POST http://localhost:8000/v1/videos/sync \
+  -H "Accept: video/mp4" \
+  -F "model=nvidia/Cosmos3-Nano" \
+  -F "prompt=Generate a realistic scene following the provided control video." \
+  -F "size=1280x720" -F "num_frames=121" \
+  -F "num_inference_steps=50" -F "seed=125" \
+  -F 'extra_params={"depth":{"control_path":"/path/to/depth_control.mp4"},"max_frames":121,"resolution":"720","num_video_frames_per_chunk":121}' \
+  -o cosmos3_transfer_depth.mp4
+
 # Text-to-video-with-sound
 curl -sS -X POST http://localhost:8000/v1/videos/sync \
   -H "Accept: video/mp4" \
@@ -312,6 +327,17 @@ vllm serve nvidia/Cosmos3-Nano-Policy-DROID \
   For V2V, `condition_frame_indexes_vision` selects the clean conditioned latent
   frame indexes (default `[0, 1]`), and `condition_video_keep` selects whether the
   API decodes the first or last needed reference frames (`"first"` by default).
+- **Transfer controls:** `extra_params` may include `edge`, `blur`, `depth`,
+  `seg`, or `wsm`. Each hint accepts `true`, a path string, or an object such as
+  `{"control_path": "/path/to/control.mp4"}`; `edge` also accepts
+  `preset_edge_threshold` and `blur` accepts `preset_blur_strength`.
+  Transfer-level options include `control_guidance`,
+  `control_guidance_interval`, `num_video_frames_per_chunk` (default `93`,
+  `101` for WSM), `num_conditional_frames` (default `1`),
+  `num_first_chunk_conditional_frames`, `max_frames`,
+  `show_control_condition`, `show_input`, and
+  `share_vision_temporal_positions`. Non-WSM transfer preserves the input video
+  fps when available; WSM defaults to 10 fps unless `fps` is supplied.
 - **DROID OpenPI observations:** include a string `prompt`, either
   `observation/image` or the three-view DROID camera keys
   (`observation/wrist_image_left`, `observation/exterior_image_1_left`,
@@ -341,60 +367,240 @@ vllm serve nvidia/Cosmos3-Nano-Policy-DROID \
 
 #### Command
 
-```python
-# cosmos3_offline.py  —  run with:  python cosmos3_offline.py
-import torch
-from vllm_omni.entrypoints.omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+Cosmos3 runs through the standard task examples; pass model-specific knobs via
+`--extra-body`. Guardrails are on by default — pass `"guardrails": false` for a
+quick local run (install `cosmos-guardrail` + accept the gated repo to enable them).
 
+```bash
+# Text-to-image -> examples/offline_inference/text_to_image
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model nvidia/Cosmos3-Nano \
+  --prompt "A photorealistic red sports car at golden hour, cinematic lighting." \
+  --negative-prompt "blurry, distorted, low quality" \
+  --height 1024 --width 1024 --num-inference-steps 50 --guidance-scale 7.0 \
+  --extra-body '{"flow_shift": 3.0, "guardrails": false}' \
+  --output cosmos3_t2i.png
 
-def main():
-    omni = Omni(
-        model="nvidia/Cosmos3-Nano",
-        model_class_name="Cosmos3OmniDiffusersPipeline",
-        trust_remote_code=True,
-        enforce_eager=True,
-        # Guardrails are disabled here for a quick local run; install
-        # cosmos-guardrail + gated-repo access and drop this to enable them.
-        model_config={"guardrails": False},
-    )
-    gen = torch.Generator(device="cpu").manual_seed(42)
+# Text-to-video -> examples/offline_inference/text_to_video
+python examples/offline_inference/text_to_video/text_to_video.py \
+  --model nvidia/Cosmos3-Nano \
+  --prompt "A robot arm is cleaning a plate in the kitchen." \
+  --negative-prompt "blurry, distorted, low quality, jittery, deformed" \
+  --height 720 --width 1280 --num-frames 189 --fps 24 \
+  --num-inference-steps 35 --guidance-scale 6.0 \
+  --extra-body '{"flow_shift": 10.0, "max_sequence_length": 4096, "guardrails": false,
+                 "use_resolution_template": false, "use_duration_template": false}' \
+  --output cosmos3_t2v.mp4
 
-    # Text-to-image (modalities=["image"]). For T2V use modalities=["video"]
-    # plus num_frames/fps; for I2V add multi_modal_data={"image": <PIL.Image>}.
-    outputs = omni.generate(
-        {
-            "prompt": "A photorealistic red sports car at golden hour, cinematic lighting.",
-            "negative_prompt": "blurry, distorted, low quality",
-            "modalities": ["image"],
-        },
-        OmniDiffusionSamplingParams(
-            height=1024, width=1024, generator=gen,
-            guidance_scale=7.0, num_inference_steps=50, num_outputs_per_prompt=1,
-        ),
-    )
-    outputs[0].request_output.images[0].save("cosmos3_t2i.png")
-    omni.close()
-
-
-if __name__ == "__main__":
-    main()
+# Image-to-video -> examples/offline_inference/image_to_video
+# (Cosmos3 bundles example frames under assets/; any RGB image works too.)
+python examples/offline_inference/image_to_video/image_to_video.py \
+  --model nvidia/Cosmos3-Nano \
+  --image /path/to/Cosmos3-Nano/assets/example_i2v_input.jpg \
+  --prompt "The scene comes to life with smooth, natural motion." \
+  --height 720 --width 1280 --num-frames 189 --fps 24 \
+  --num-inference-steps 35 --guidance-scale 6.0 \
+  --extra-body '{"flow_shift": 10.0, "max_sequence_length": 4096, "guardrails": false}' \
+  --output cosmos3_i2v.mp4
 ```
 
 #### Verification
 
 ```bash
-python cosmos3_offline.py
 python -c "from PIL import Image; im=Image.open('cosmos3_t2i.png'); print('image', im.size, im.mode)"
+ffprobe -v error -show_entries stream=codec_type,nb_frames,width,height cosmos3_t2v.mp4
 ```
 
 #### Notes
 
-- Same `Cosmos3OmniDiffusersPipeline` as online; mode is chosen by
-  `prompt["modalities"]` (`["image"]` → T2I, `["video"]` → T2V) plus
-  `num_frames`/`fps`, `multi_modal_data={"image": ...}` for I2V, and
-  `multi_modal_data={"video": [<PIL frames>]}` or a video tensor/array for V2V.
-  For video, frames are returned in `outputs[0].request_output.images` as an
-  `(B, F, H, W, 3)` array.
-- The offline entry must be guarded by `if __name__ == "__main__":` — the engine
-  spawns workers with the `spawn` start method.
+- A single `Cosmos3OmniDiffusersPipeline` serves every mode; the standard examples
+  select it automatically from `model_index.json`. T2I is chosen by the
+  `text_to_image` prompt builder (which marks `modalities=["image"]`); `text_to_video`
+  defaults to T2V; `image_to_video` adds `multi_modal_data={"image": ...}` (I2V).
+  V2V is served online (`/v1/videos/sync`).
+- Model-specific knobs (`flow_shift`, `max_sequence_length`, `condition_*`,
+  `generate_sound`/`sound_duration`, `guardrails`, `action_*`, ...) are declared
+  once in `vllm_omni/model_extras/cosmos3.py` and forwarded through `--extra-body`;
+  unknown keys for the model are dropped.
+
+## NPU
+
+### 1x Ascend 910B / 910C (Atlas A2 / A3) — Online serving
+
+#### Environment
+
+- OS: Linux (aarch64)
+- Python: 3.12+
+- Driver / runtime: CANN 8.5.1 + NNAL + Ascend 910B / 910C
+- vLLM version: match the repository requirements from your current checkout
+- vLLM-Ascend version: match the repository requirements from your current checkout
+- vLLM-Omni version or commit: use the commit you are deploying from
+
+#### Command
+
+Requires the `vllm-omni` package (or the `quay.io/atlas-ci/vllm-ascend` A2 / A3 container),
+which provides the `vllm serve … --omni` entrypoint used below.
+
+Safety guardrails are **on by default** (NVIDIA Open Model License). They load
+the **gated** `nvidia/Cosmos-1.0-Guardrail` model, so to keep them on you must:
+
+1. `pip install cosmos-guardrail`
+2. Accept the license at <https://huggingface.co/nvidia/Cosmos-1.0-Guardrail>
+3. Export a token with access: `export HF_TOKEN=hf_...`
+
+Then launch the recommended server:
+
+```bash
+vllm serve nvidia/Cosmos3-Nano \
+  --omni \
+  --host 0.0.0.0 --port 8000 \
+  --init-timeout 1800
+```
+
+To run **without** guardrails (you are responsible for license compliance),
+add `--no-guardrails` (no token/`cosmos-guardrail` needed). For tensor parallel
+add `--tensor-parallel-size 8`. `--quantization fp8` and
+`--enable-layerwise-offload` are not supported on NPU.
+The pipeline auto-resolves from `model_index.json`; pass
+`--model-class-name Cosmos3OmniDiffusersPipeline` to force it explicitly.
+
+#### Verification
+
+Best quality uses the JSON-upsampled prompts from `assets/` (download with
+`hf download nvidia/Cosmos3-Nano assets/ --local-dir Cosmos3-Nano`). Minimal
+self-contained examples:
+
+```bash
+curl http://localhost:8000/v1/models
+
+# Text-to-image -> /v1/images/generations  (1024x1024, 10 steps; base64 PNG)
+curl -sS -X POST http://localhost:8000/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia/Cosmos3-Nano",
+    "prompt": "A photorealistic red sports car on a city street at golden hour, cinematic lighting.",
+    "negative_prompt": "blurry, distorted, low quality",
+    "size": "1024x1024", "n": 1, "response_format": "b64_json",
+    "num_inference_steps": 10, "guidance_scale": 7.0, "seed": 42
+  }' | python -c "import sys,json,base64; open('cosmos3_t2i.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
+
+# Text-to-video -> /v1/videos/sync  (720p, 49 frames @ 24fps)
+curl -sS -X POST http://localhost:8000/v1/videos/sync \
+  -H "Accept: video/mp4" \
+  -F "model=nvidia/Cosmos3-Nano" \
+  -F "prompt=A robot arm is cleaning a plate in the kitchen" \
+  -F "negative_prompt=blurry, distorted, low quality, jittery, deformed" \
+  -F "size=1280x720" -F "num_frames=49" -F "fps=24" \
+  -F "num_inference_steps=20" -F "guidance_scale=6.0" \
+  -F "max_sequence_length=4096" -F "flow_shift=10.0" \
+  -F "seed=123" \
+  -o cosmos3_t2v.mp4
+
+# Image-to-video -> /v1/videos/sync with an uploaded reference image
+curl -sS -X POST http://localhost:8000/v1/videos/sync \
+  -H "Accept: video/mp4" \
+  -F "model=nvidia/Cosmos3-Nano" \
+  -F "prompt=The scene comes to life with smooth, natural motion." \
+  -F "size=1280x720" -F "num_frames=25" -F "fps=8" \
+  -F "num_inference_steps=10" -F "guidance_scale=6.0" \
+  -F "seed=42" \
+  -F "input_reference=@reference.jpg;type=image/jpeg" \
+  -o cosmos3_i2v.mp4
+
+# Video-to-video -> /v1/videos/sync with an uploaded reference video
+curl -sS -X POST http://localhost:8000/v1/videos/sync \
+  -H "Accept: video/mp4" \
+  -F "model=nvidia/Cosmos3-Nano" \
+  -F "prompt=Continue the same scene with smooth natural motion and consistent subjects." \
+  -F "size=1280x720" -F "num_frames=17" -F "fps=5" \
+  -F "num_inference_steps=10" -F "guidance_scale=6.0" \
+  -F "seed=42" \
+  -F "input_reference=@reference.mp4;type=video/mp4" \
+  -o cosmos3_v2v.mp4
+```
+
+#### Notes
+
+- **Measured latency (1x Ascend 910B / 910C, bf16, guardrails off):**
+  - T2I 1024² — 10 steps → ~8 s
+  - T2V 1280×720 @ 20 steps — 49 frames → ~55 s
+  - I2V 1280×720 @ 10 steps — 25 frames → ~25 s
+  - V2V 480×320 @ 10 steps — 17 frames → ~12 s
+- **Memory:** transformer ~17 GiB (bf16); peak ~46 GiB for 720p video on 1 NPU;
+  full repo (transformer + Wan VAE + Qwen3-VL vision encoder + audio tokenizer)
+  ~33 GB on disk.
+- **Determinism:** identical seed reproduces identical output on the same
+  hardware; outputs are not bit-identical across different GPU/NPU types.
+- **Supported sizes (per model card):** 256p / 480p / 720p at 16:9, 4:3, 1:1,
+  3:4, 9:16. Defaults: T2I 1024², 50 steps, guidance 7.0; T2V/I2V/V2V
+  1280×720, 35 steps, guidance 6.0, `flow_shift=10.0`.
+- **Key flags / params:** `--no-guardrails` (optional, to disable guardrails), `--init-timeout 1800`
+  (for model loading), `--tensor-parallel-size 8` for multi-NPU, and
+  `--model-class-name Cosmos3OmniDiffusersPipeline` to force the pipeline class.
+- **Known limitations:**
+  - Transfer V2V with `extra_params` (`edge`/`blur`/`depth`/`seg`/`wsm`) hits a
+    resolution-parsing bug; basic V2V without transfer hints works.
+  - FP8 online quantization and layerwise offload are not supported on NPU.
+
+### 1x Ascend 910B / 910C (Atlas A2 / A3) — Offline generation
+
+#### Environment
+
+- OS: Linux (aarch64)
+- Python: 3.12+
+- Driver / runtime: CANN 8.5.1 + NNAL + Ascend 910B / 910C
+- vLLM-Omni version or commit: use the commit you are deploying from
+
+#### Command
+
+The same offline task examples run on NPU; pass model-specific knobs via
+`--extra-body`. Guardrails are on by default — pass `"guardrails": false` for a
+quick local run (install `cosmos-guardrail` + accept the gated repo to enable them).
+
+```bash
+# Text-to-image -> examples/offline_inference/text_to_image
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model nvidia/Cosmos3-Nano \
+  --prompt "A photorealistic red sports car at golden hour, cinematic lighting." \
+  --negative-prompt "blurry, distorted, low quality" \
+  --height 1024 --width 1024 --num-inference-steps 50 --guidance-scale 7.0 \
+  --extra-body '{"flow_shift": 3.0, "guardrails": false}' \
+  --output cosmos3_t2i.png
+
+# Text-to-video -> examples/offline_inference/text_to_video
+python examples/offline_inference/text_to_video/text_to_video.py \
+  --model nvidia/Cosmos3-Nano \
+  --prompt "A robot arm is cleaning a plate in the kitchen." \
+  --negative-prompt "blurry, distorted, low quality, jittery, deformed" \
+  --height 720 --width 1280 --num-frames 189 --fps 24 \
+  --num-inference-steps 35 --guidance-scale 6.0 \
+  --extra-body '{"flow_shift": 10.0, "max_sequence_length": 4096, "guardrails": false,
+                 "use_resolution_template": false, "use_duration_template": false}' \
+  --output cosmos3_t2v.mp4
+
+# Image-to-video -> examples/offline_inference/image_to_video
+# (Cosmos3 bundles example frames under assets/; any RGB image works too.)
+python examples/offline_inference/image_to_video/image_to_video.py \
+  --model nvidia/Cosmos3-Nano \
+  --image /path/to/Cosmos3-Nano/assets/example_i2v_input.jpg \
+  --prompt "The scene comes to life with smooth, natural motion." \
+  --height 720 --width 1280 --num-frames 189 --fps 24 \
+  --num-inference-steps 35 --guidance-scale 6.0 \
+  --extra-body '{"flow_shift": 10.0, "max_sequence_length": 4096, "guardrails": false}' \
+  --output cosmos3_i2v.mp4
+```
+
+#### Verification
+
+```bash
+python -c "from PIL import Image; im=Image.open('cosmos3_t2i.png'); print('image', im.size, im.mode)"
+ffprobe -v error -show_entries stream=codec_type,nb_frames,width,height cosmos3_t2v.mp4
+```
+
+#### Notes
+
+- Guardrails are on by default on NPU with `cosmos-guardrail` installed. Pass
+  `"guardrails": false` in `--extra-body` to disable them (there is no
+  `--no-guardrails` flag for the offline scripts).
+- Video at the 189-frame default takes ~15 min/clip on 1 NPU; reduce
+  `--num-frames` for faster iteration.

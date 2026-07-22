@@ -39,6 +39,8 @@ from vllm_omni.entrypoints.openai.serving_speech import (
     OmniOpenAIServingSpeech,
     _create_wav_header,
 )
+from vllm_omni.entrypoints.openai.tts_adapters.base import PreparedRequest, SpeechServingContext
+from vllm_omni.entrypoints.openai.tts_adapters.ming_tts import MingTTSAdapter
 from vllm_omni.model_executor.models.fish_speech.prompt_utils import (
     FISH_TEXT_ONLY_SYSTEM_PROMPT,
     build_fish_voice_clone_prompt_ids,
@@ -972,6 +974,29 @@ class TestTTSMethods:
                 )
             )
 
+    def test_upload_ming_voice_embedding_wrong_dims_rejected_without_replacing_existing(self, speech_server):
+        """Ming embedding uploads must be 192-dim before replacing stored voices."""
+        speech_server._tts_model_type = "ming_tts"
+        existing = {
+            "name": "bad_emb_voice",
+            "file_path": "/tmp/voice_samples/bad_emb_voice.safetensors",
+            "mime_type": "application/x-safetensors",
+            "embedding_source": "direct",
+            "embedding_dim": 192,
+        }
+        speech_server.uploaded_speakers = {"bad_emb_voice": existing.copy()}
+
+        with pytest.raises(ValueError, match="Ming speaker embedding must have 192 dims, got 191"):
+            asyncio.run(
+                speech_server.upload_voice_embedding(
+                    embedding_json=json.dumps([0.0] * 191),
+                    consent="consent",
+                    name="bad_emb_voice",
+                )
+            )
+
+        assert speech_server.uploaded_speakers["bad_emb_voice"] == existing
+
     def test_base_task_requires_ref_audio_or_speaker_embedding(self, speech_server):
         """Base task without ref_audio or speaker_embedding is rejected."""
         req = OpenAICreateSpeechRequest(input="Hello", task_type="Base")
@@ -1524,7 +1549,7 @@ class TestTTSMethods:
         req = OpenAICreateSpeechRequest.model_validate({"input": "Hello", "speaker": "UTESF", "task_type": "Base"})
         assert req.voice == "UTESF"
         mocker.patch("pathlib.Path.exists", return_value=True)
-        result = speech_server._validate_qwen_tts_request(req)
+        result = speech_server._validate_tts_request(req)
         assert result is None
 
     # ── uploaded voice with embedding ──
@@ -1556,6 +1581,86 @@ class TestTTSMethods:
         assert params["x_vector_only_mode"] == [True]
         assert "ref_audio" not in params
 
+    def test_ming_adapter_uploaded_direct_embedding_uses_embedding_not_audio(
+        self, speech_server, mocker: MockerFixture
+    ):
+        """Ming uploaded direct embeddings are loaded into prompt construction."""
+        speech_server.uploaded_speakers = {
+            "emb_voice": {
+                "name": "emb_voice",
+                "file_path": "/tmp/voice_samples/emb_voice.safetensors",
+                "mime_type": "application/x-safetensors",
+                "embedding_source": "direct",
+                "embedding_dim": 192,
+            }
+        }
+        fake_embedding = [0.1] * 192
+        mock_get_emb = mocker.patch.object(
+            speech_server, "_get_uploaded_speaker_embedding", return_value=fake_embedding
+        )
+        mock_get_audio = mocker.patch.object(speech_server, "_get_uploaded_audio_data")
+        mock_prompt = mocker.patch.object(
+            speech_server,
+            "_build_ming_dense_prompt",
+            return_value={"additional_information": {"speaker_count": 1}},
+        )
+
+        adapter = MingTTSAdapter(SpeechServingContext(server=speech_server))
+        req = OpenAICreateSpeechRequest(input="Hello", voice="emb_voice")
+        prepared = asyncio.run(adapter.build(req, [], False))
+
+        mock_get_emb.assert_called_once_with("emb_voice")
+        mock_get_audio.assert_not_called()
+        mock_prompt.assert_called_once_with(req, ref_audio_data=None)
+        prompt_request = mock_prompt.call_args.args[0]
+        assert prompt_request.speaker_embedding == fake_embedding
+        assert len(prompt_request.speaker_embedding) == 192
+        assert prepared.prompt["additional_information"]["speaker_count"] == 1
+        assert prepared.model_type == "ming_tts"
+
+    def test_ming_adapter_uploaded_audio_path_preserves_ref_text(self, speech_server, mocker: MockerFixture):
+        """Ming uploaded audio voices still resolve audio and stored ref_text."""
+        speech_server.uploaded_speakers = {
+            "audio_voice": {
+                "name": "audio_voice",
+                "file_path": "/tmp/voice_samples/audio_voice.wav",
+                "mime_type": "audio/wav",
+                "ref_text": "Reference transcript.",
+            }
+        }
+        ref_audio_source = "data:audio/wav;base64,ZmFrZWF1ZGlv"
+        ref_audio_data = ([0.0, 0.1], 16000)
+        fake_embedding = [0.2] * 192
+        mock_get_audio = mocker.patch.object(speech_server, "_get_uploaded_audio_data", return_value=ref_audio_source)
+        mock_get_emb = mocker.patch.object(speech_server, "_get_uploaded_speaker_embedding")
+        mocker.patch.object(
+            speech_server,
+            "_resolve_ref_audio",
+            new=mocker.AsyncMock(return_value=ref_audio_data),
+        )
+        mock_extract = mocker.patch.object(
+            speech_server,
+            "_extract_ming_speaker_embeddings_from_ref_audio",
+            return_value=[fake_embedding],
+        )
+        mock_prompt = mocker.patch.object(
+            speech_server,
+            "_build_ming_dense_prompt",
+            return_value={"additional_information": {"speaker_count": 1}},
+        )
+
+        adapter = MingTTSAdapter(SpeechServingContext(server=speech_server))
+        req = OpenAICreateSpeechRequest(input="Hello", voice="audio_voice")
+        prepared = asyncio.run(adapter.build(req, [], False))
+
+        mock_get_audio.assert_called_once_with("audio_voice")
+        mock_get_emb.assert_not_called()
+        mock_extract.assert_called_once_with([ref_audio_data])
+        mock_prompt.assert_called_once_with(req, ref_audio_data=ref_audio_data)
+        assert req.ref_text == "Reference transcript."
+        assert req.speaker_embedding == fake_embedding
+        assert prepared.model_type == "ming_tts"
+
     # ── regression: full flow from issue #1603 ──
 
     def test_regression_1603_speaker_key_with_uploaded_audio_voice(self, speech_server, mocker: MockerFixture):
@@ -1579,7 +1684,7 @@ class TestTTSMethods:
 
         # Validation should pass (file exists)
         mocker.patch("pathlib.Path.exists", return_value=True)
-        err = speech_server._validate_qwen_tts_request(req)
+        err = speech_server._validate_tts_request(req)
         assert err is None, f"Validation failed: {err}"
 
         # Build params should auto-set ref_audio from stored file
@@ -1617,7 +1722,7 @@ class TestTTSMethods:
 
         # Validation should pass
         mocker.patch("pathlib.Path.exists", return_value=True)
-        err = speech_server._validate_qwen_tts_request(req)
+        err = speech_server._validate_tts_request(req)
         assert err is None, f"Validation failed: {err}"
 
         # Build params should use embedding, NOT audio
@@ -1761,6 +1866,35 @@ class TestTTSMethods:
         assert error is not None
         assert "max 10 characters" in error
 
+    def test_batch_voice_not_treated_as_inline_ref_audio(
+        self,
+        speech_server,
+        mocker: MockerFixture,
+    ):
+        speech_server._check_model = mocker.AsyncMock(return_value=None)
+        speech_server._batch_max_items = 32
+
+        def validate_and_resolve_uploaded_voice(request):
+            assert request.voice == "alice"
+            assert request.ref_audio is None
+
+            request.ref_audio = "data:audio/wav;base64,dGVzdA=="
+            request.ref_text = "reference text"
+            return None
+
+        speech_server._validate_tts_request = mocker.Mock(side_effect=validate_and_resolve_uploaded_voice)
+        speech_server._generate_audio_bytes = mocker.AsyncMock(return_value=("YWJj", "audio/wav"))
+
+        batch = BatchSpeechRequest(voice="alice", items=[SpeechBatchItem(input="hello")])
+
+        response = asyncio.run(speech_server.create_speech_batch(batch))
+        call = speech_server._generate_audio_bytes.await_args
+        request = call.args[0]
+
+        assert response.results[0].status == "success"
+        assert request.ref_audio is not None
+        assert call.kwargs["has_inline_ref_audio"] is False
+
 
 class TestFileValidationFunctions:
     """Unit tests for file validation helper functions."""
@@ -1827,27 +1961,52 @@ class TestFileValidationFunctions:
 
 
 class TestStreamingProtocolValidation:
-    """Unit tests for the stream field validators in OpenAICreateSpeechRequest."""
+    """Unit tests for streaming validators in OpenAICreateSpeechRequest."""
+
+    def test_default_is_non_streaming(self):
+        req = OpenAICreateSpeechRequest(input="Hello")
+        assert req.stream is False
+        assert req.stream_format is None
+        assert req.is_streaming() is False
 
     def test_stream_validation_errors(self):
-        """stream=True requires response_format not in ('pcm', 'wav') and speed=1.0."""
+        """stream=True requires response_format in ('pcm', 'wav') and speed=1.0."""
         with pytest.raises(ValidationError, match="requires response_format='pcm' or 'wav'"):
             OpenAICreateSpeechRequest(input="Hello", stream=True, response_format="mp3")
         with pytest.raises(ValidationError, match="Speed adjustment is not supported"):
             OpenAICreateSpeechRequest(input="Hello", stream=True, response_format="pcm", speed=2.0)
 
+    def test_stream_format_audio_validation_errors(self):
+        with pytest.raises(ValidationError, match="requires response_format='pcm' or 'wav'"):
+            OpenAICreateSpeechRequest(input="Hello", stream_format="audio", response_format="mp3")
+        with pytest.raises(ValidationError, match="Speed adjustment is not supported"):
+            OpenAICreateSpeechRequest(input="Hello", stream_format="audio", response_format="pcm", speed=2.0)
+
     def test_stream_valid(self):
-        """stream=True + response_format in ('pcm', 'wav') + speed=1.0 is accepted."""
+        """stream=True + response_format in ('pcm', 'wav') + speed=1.0 is accepted as SSE."""
         req = OpenAICreateSpeechRequest(input="Hello", stream=True, response_format="pcm")
         assert req.stream is True
+        assert req.is_sse_stream() is True
+        assert req.is_raw_audio_stream() is False
 
         req = OpenAICreateSpeechRequest(input="Hello", stream=True, response_format="wav")
         assert req.stream is True
+        assert req.is_sse_stream() is True
+        assert req.is_raw_audio_stream() is False
 
-    def test_sse_stream_format_is_blocked(self):
-        """stream_format='sse' is blocked."""
-        with pytest.raises(ValidationError, match="sse"):
-            OpenAICreateSpeechRequest(input="Hello", stream_format="sse")
+    def test_stream_format_audio_is_valid(self):
+        req = OpenAICreateSpeechRequest(input="Hello", stream_format="audio", response_format="pcm")
+        assert req.stream_format == "audio"
+        assert req.is_raw_audio_stream() is True
+        assert req.is_sse_stream() is False
+
+    def test_sse_stream_format_is_valid(self):
+        """stream_format='sse' is accepted for /audio/speech."""
+        req = OpenAICreateSpeechRequest(input="Hello", stream_format="sse")
+
+        assert req.stream_format == "sse"
+        assert req.is_sse_stream() is True
+        assert req.is_raw_audio_stream() is False
 
 
 class TestStreamingResponse:
@@ -1920,13 +2079,165 @@ class TestStreamingResponse:
         app.add_api_route("/v1/audio/speech", speech_server.create_speech, methods=["POST"], response_model=None)
         return app
 
+    @staticmethod
+    def _assert_sse_audio_response(response, response_format: str = "pcm"):
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        body = response.text
+        assert "event: speech.audio.delta" in body
+        assert "event: speech.audio.done" in body
+        data_line = next(line for line in body.splitlines() if line.startswith("data: "))
+        payload = json.loads(data_line.removeprefix("data: "))
+        assert payload["type"] == "speech.audio.delta"
+        assert payload["response_format"] == response_format
+        assert base64.b64decode(payload["audio"])
+
     def test_streaming(self, streaming_app):
-        """stream=True must return audio/pcm with non-empty body."""
+        """stream=True defaults to OpenAI speech.audio.* SSE events."""
         client = TestClient(streaming_app)
         response = client.post("/v1/audio/speech", json={"input": "Hello", "stream": True, "response_format": "pcm"})
+        self._assert_sse_audio_response(response)
+
+    def test_stream_format_audio_streaming(self, streaming_app):
+        """stream_format=audio without stream=True returns raw audio/pcm chunks."""
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream_format": "audio", "response_format": "pcm"},
+        )
         assert response.status_code == 200
         assert "audio/pcm" in response.headers["content-type"]
+        assert "text/event-stream" not in response.headers["content-type"]
         assert len(response.content) > 0
+
+    def test_sse_streaming(self, streaming_app):
+        """stream_format=sse without stream=True returns audio deltas as SSE."""
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream_format": "sse", "response_format": "pcm"},
+        )
+
+        self._assert_sse_audio_response(response)
+
+    def test_stream_true_with_stream_format_sse_uses_sse(self, streaming_app):
+        """stream=True and stream_format=sse both select SSE streaming."""
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream": True, "stream_format": "sse", "response_format": "pcm"},
+        )
+
+        self._assert_sse_audio_response(response)
+
+    def test_stream_format_audio_with_stream_true_opts_into_raw_audio(self, streaming_app):
+        """stream_format=audio remains an explicit raw audio opt-in."""
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream": True, "stream_format": "audio", "response_format": "pcm"},
+        )
+
+        assert response.status_code == 200
+        assert "audio/pcm" in response.headers["content-type"]
+        assert "text/event-stream" not in response.headers["content-type"]
+        assert len(response.content) > 0
+
+    def test_sse_rejects_unsupported_response_format(self, streaming_app):
+        """stream_format=sse with a non-pcm/wav format must fail before streaming starts."""
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream_format": "sse", "response_format": "mp3"},
+        )
+
+        assert response.status_code in (400, 422)
+        assert "text/event-stream" not in response.headers.get("content-type", "")
+
+    def test_sse_rejects_speed_adjustment(self, streaming_app):
+        """stream_format=sse with speed != 1.0 must fail before streaming starts."""
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream_format": "sse", "response_format": "pcm", "speed": 2.0},
+        )
+
+        assert response.status_code in (400, 422)
+        assert "text/event-stream" not in response.headers.get("content-type", "")
+
+    def test_stream_format_audio_rejects_unsupported_response_format(self, streaming_app):
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream_format": "audio", "response_format": "mp3"},
+        )
+
+        assert response.status_code in (400, 422)
+        assert "audio/" not in response.headers.get("content-type", "")
+
+    def test_stream_format_audio_rejects_speed_adjustment(self, streaming_app):
+        client = TestClient(streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream_format": "audio", "response_format": "pcm", "speed": 2.0},
+        )
+
+        assert response.status_code in (400, 422)
+        assert "audio/" not in response.headers.get("content-type", "")
+
+    @pytest.fixture
+    def erroring_streaming_app(self, mocker: MockerFixture):
+        """Test app whose mock engine raises mid-stream, to exercise the SSE error event."""
+
+        async def mock_generate_streaming(*args, **kwargs):
+            raise RuntimeError("boom: simulated engine failure")
+            yield  # pragma: no cover - generator marker, unreachable
+
+        mock_engine_client = mocker.MagicMock()
+        mock_engine_client.errored = False
+        mock_engine_client.generate = mocker.MagicMock(side_effect=mock_generate_streaming)
+        mock_engine_client.default_sampling_params_list = [{}]
+        mock_models = mocker.MagicMock()
+        mock_models.is_base_model.return_value = True
+
+        speech_server = OmniOpenAIServingSpeech(
+            engine_client=mock_engine_client,
+            models=mock_models,
+            request_logger=mocker.MagicMock(),
+        )
+
+        original_create_speech = speech_server.create_speech
+        sig = signature(original_create_speech)
+        new_parameters = [p for name, p in sig.parameters.items() if name != "raw_request"]
+        new_sig = Signature(parameters=new_parameters, return_annotation=sig.return_annotation)
+
+        async def awaitable_create_speech(*args, **kwargs):
+            return await original_create_speech(*args, **kwargs)
+
+        awaitable_create_speech.__signature__ = new_sig
+        speech_server.create_speech = awaitable_create_speech
+
+        app = FastAPI()
+        app.add_api_route("/v1/audio/speech", speech_server.create_speech, methods=["POST"], response_model=None)
+        return app
+
+    def test_sse_emits_error_event_on_generator_failure(self, erroring_streaming_app):
+        """An exception inside the SSE generator must surface as a speech.audio.error event."""
+        client = TestClient(erroring_streaming_app)
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream_format": "sse", "response_format": "pcm"},
+        )
+
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        body = response.text
+        assert "event: speech.audio.error" in body
+        error_line = next(line for line in body.splitlines() if line.startswith("data: "))
+        payload = json.loads(error_line.removeprefix("data: "))
+        assert payload["type"] == "speech.audio.error"
+        assert "error" in payload
+        assert payload["error"]["message"]
 
     def test_non_streaming_unchanged(self, streaming_app):
         """Non-streaming path must still return audio/wav."""
@@ -2353,7 +2664,7 @@ def test_api_server_delete_voice_exception_returns_500(mocker: MockerFixture):
 def test_api_server_create_speech_without_handler_returns_404(mocker: MockerFixture):
     fake_base = _patch_api_server_base(mocker)
     raw_request = _make_api_server_request(None, path="/v1/audio/speech")
-    raw_request.app.state.openai_serving_tokenization = fake_base
+    raw_request.app.state.serving_tokenization = fake_base
     request = OpenAICreateSpeechRequest(input="Hello")
 
     response = asyncio.run(api_server_module.create_speech(request, raw_request))
@@ -2366,7 +2677,7 @@ def test_api_server_create_speech_without_handler_returns_404(mocker: MockerFixt
 def test_api_server_create_speech_batch_without_handler_returns_404(mocker: MockerFixture):
     fake_base = _patch_api_server_base(mocker)
     raw_request = _make_api_server_request(None, path="/v1/audio/speech/batch")
-    raw_request.app.state.openai_serving_tokenization = fake_base
+    raw_request.app.state.serving_tokenization = fake_base
     request = BatchSpeechRequest(items=[SpeechBatchItem(input="hi")])
 
     response = asyncio.run(api_server_module.create_speech_batch(request, raw_request))
@@ -2376,11 +2687,66 @@ def test_api_server_create_speech_batch_without_handler_returns_404(mocker: Mock
     )
 
 
+def test_api_server_create_speech_batch_omits_null_fields(mocker: MockerFixture):
+    # The batch response must omit optional null fields rather than serialize them
+    # as null (issue #4646 follow-up): errored items drop usage/audio_data/media_type,
+    # successful items drop error. This is the shape documented in speech_api.md.
+    from vllm_omni.entrypoints.openai.protocol.audio import (
+        BatchSpeechResponse,
+        SpeechBatchItemResult,
+        SpeechInputTokenDetails,
+        SpeechTokenUsage,
+    )
+
+    handler = mocker.MagicMock()
+    handler.create_speech_batch = mocker.AsyncMock(
+        return_value=BatchSpeechResponse(
+            id="speech-batch-test",
+            results=[
+                SpeechBatchItemResult(
+                    index=0,
+                    status="success",
+                    audio_data="YWJj",
+                    media_type="audio/wav",
+                    usage=SpeechTokenUsage(
+                        input_tokens=119,
+                        output_tokens=77,
+                        total_tokens=196,
+                        input_token_details=SpeechInputTokenDetails(text_tokens=18, audio_tokens=101),
+                    ),
+                ),
+                SpeechBatchItemResult(index=1, status="error", error="Input text cannot be empty"),
+            ],
+            total=2,
+            succeeded=1,
+            failed=1,
+        )
+    )
+    raw_request = _make_api_server_request(handler, path="/v1/audio/speech/batch")
+    request = BatchSpeechRequest(items=[SpeechBatchItem(input="hi"), SpeechBatchItem(input="")])
+
+    response = asyncio.run(api_server_module.create_speech_batch(request, raw_request))
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    success, errored = body["results"][0], body["results"][1]
+    # Successful item carries usage and drops the null `error`.
+    assert success["usage"]["total_tokens"] == 196
+    assert success["usage"]["input_token_details"] == {"text_tokens": 18, "audio_tokens": 101}
+    assert "error" not in success
+    # Errored item drops usage/audio_data/media_type instead of serializing null.
+    assert "usage" not in errored
+    assert "audio_data" not in errored
+    assert "media_type" not in errored
+    assert errored["error"] == "Input text cannot be empty"
+
+
 def test_api_server_create_audio_generate_without_handler_returns_404(mocker: MockerFixture):
     fake_base = _patch_api_server_base(mocker)
     raw_request = _make_api_server_request(None, path="/v1/audio/generate")
     raw_request.app.state.openai_serving_audio_generate = None
-    raw_request.app.state.openai_serving_tokenization = fake_base
+    raw_request.app.state.serving_tokenization = fake_base
     request = OpenAICreateAudioGenerateRequest(input="a bird singing")
 
     response = asyncio.run(api_server_module.create_audio_generate(request, raw_request))
@@ -2807,7 +3173,10 @@ class TestWAVStreaming:
     def test_wav_streaming_success(self, wav_streaming_app):
         """Test WAV format streaming returns correct content type and includes WAV header."""
         client = TestClient(wav_streaming_app)
-        response = client.post("/v1/audio/speech", json={"input": "Hello", "stream": True, "response_format": "wav"})
+        response = client.post(
+            "/v1/audio/speech",
+            json={"input": "Hello", "stream": True, "stream_format": "audio", "response_format": "wav"},
+        )
 
         assert response.status_code == 200
         assert "audio/wav" in response.headers["content-type"]
@@ -2826,7 +3195,10 @@ class TestWAVStreaming:
 
         unsupported_formats = ["mp3"]
         for fmt in unsupported_formats:
-            response = client.post("/v1/audio/speech", json={"input": "Hello", "stream": True, "response_format": fmt})
+            response = client.post(
+                "/v1/audio/speech",
+                json={"input": "Hello", "stream": True, "stream_format": "audio", "response_format": fmt},
+            )
             assert response.status_code == 422
 
 
@@ -2878,25 +3250,25 @@ class TestCosyVoice3Serving:
 
     def test_validate_cosyvoice3_empty_input(self, cosyvoice3_server):
         request = OpenAICreateSpeechRequest(input="", ref_audio="data:audio/wav;base64,abc", ref_text="hello")
-        error = cosyvoice3_server._validate_cosyvoice3_request(request)
+        error = cosyvoice3_server._validate_tts_request(request)
         assert error is not None
         assert "empty" in error.lower()
 
     def test_validate_cosyvoice3_missing_ref_audio(self, cosyvoice3_server):
         request = OpenAICreateSpeechRequest(input="Hello", ref_text="hello")
-        error = cosyvoice3_server._validate_cosyvoice3_request(request)
+        error = cosyvoice3_server._validate_tts_request(request)
         assert error is not None
         assert "ref_audio" in error.lower()
 
     def test_validate_cosyvoice3_missing_ref_text(self, cosyvoice3_server):
         request = OpenAICreateSpeechRequest(input="Hello", ref_audio="data:audio/wav;base64,abc")
-        error = cosyvoice3_server._validate_cosyvoice3_request(request)
+        error = cosyvoice3_server._validate_tts_request(request)
         assert error is not None
         assert "ref_text" in error.lower()
 
     def test_validate_cosyvoice3_invalid_ref_audio_format(self, cosyvoice3_server):
         request = OpenAICreateSpeechRequest(input="Hello", ref_audio="/local/path.wav", ref_text="hello")
-        error = cosyvoice3_server._validate_cosyvoice3_request(request)
+        error = cosyvoice3_server._validate_tts_request(request)
         assert error is not None
         assert "url" in error.lower() or "format" in error.lower()
 
@@ -2906,7 +3278,7 @@ class TestCosyVoice3Serving:
             ref_audio="data:audio/wav;base64,abc123",
             ref_text="Reference transcript",
         )
-        error = cosyvoice3_server._validate_cosyvoice3_request(request)
+        error = cosyvoice3_server._validate_tts_request(request)
         assert error is None
 
     def test_validate_cosyvoice3_max_new_tokens_range(self, cosyvoice3_server):
@@ -2916,7 +3288,7 @@ class TestCosyVoice3Serving:
             ref_text="hello",
             max_new_tokens=0,
         )
-        error = cosyvoice3_server._validate_cosyvoice3_request(request)
+        error = cosyvoice3_server._validate_tts_request(request)
         assert error is not None
         assert "max_new_tokens" in error
 
@@ -2982,13 +3354,13 @@ def glm_tts_server(mocker: MockerFixture):
 class TestGLMTTSServing:
     def test_validate_glm_tts_requires_ref_audio(self, glm_tts_server):
         request = OpenAICreateSpeechRequest(input="Hello", ref_text="Reference transcript")
-        error = glm_tts_server._validate_glm_tts_request(request)
+        error = glm_tts_server._validate_tts_request(request)
         assert error is not None
         assert "ref_audio" in error
 
     def test_validate_glm_tts_requires_ref_text(self, glm_tts_server):
         request = OpenAICreateSpeechRequest(input="Hello", ref_audio="data:audio/wav;base64,abc")
-        error = glm_tts_server._validate_glm_tts_request(request)
+        error = glm_tts_server._validate_tts_request(request)
         assert error is not None
         assert "ref_text" in error
 
@@ -3095,7 +3467,7 @@ class TestTTSAsyncOffloading:
 
     def test_prepare_speech_generation_awaits_qwen3_tts_async(self, qwen3_tts_server, mocker: MockerFixture):
         """Qwen3 TTS path should call _estimate_prompt_len_async."""
-        qwen3_tts_server._validate_tts_request = mocker.MagicMock(return_value=None)
+        qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
         qwen3_tts_server._build_tts_params = mocker.MagicMock(
             return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}
         )
@@ -3104,6 +3476,154 @@ class TestTTSAsyncOffloading:
         asyncio.run(qwen3_tts_server._prepare_speech_generation(request))
         qwen3_tts_server._build_tts_params.assert_called_once()
         qwen3_tts_server._estimate_prompt_len_async.assert_awaited_once()
+
+    def test_prepare_speech_generation_qwen3_default_seed_sets_tts_local_seed(
+        self, qwen3_tts_server, mocker: MockerFixture
+    ):
+        """Deploy default seed should seed Qwen3 TTS residual MTP sampling."""
+        qwen3_tts_server.engine_client.default_sampling_params_list = [
+            SimpleNamespace(max_tokens=2048, seed=42, extra_args=None)
+        ]
+        qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
+        qwen3_tts_server._build_tts_params = mocker.MagicMock(
+            return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}
+        )
+        qwen3_tts_server._estimate_prompt_len_async = mocker.AsyncMock(return_value=512)
+        request = OpenAICreateSpeechRequest(input="hello")
+
+        asyncio.run(qwen3_tts_server._prepare_speech_generation(request))
+
+        stage0_params = qwen3_tts_server.engine_client.generate.call_args.kwargs["sampling_params_list"][0]
+        assert stage0_params.seed == 42
+        assert stage0_params.extra_args["tts_local_seed"] == 42
+        assert qwen3_tts_server.engine_client.default_sampling_params_list[0].extra_args is None
+
+    def test_prepare_speech_generation_uses_adapter_model_type_label(
+        self,
+        voxtral_server,
+        mocker: MockerFixture,
+    ):
+        """Adapter model_type should replace the legacy _tts_model_type label ladder."""
+        legacy_tts_model_type = "dummy_tts"
+        adapter_model_type = "adapter_dummy_tts"
+
+        class FakeAdapter:
+            def validate(self, request):
+                return None
+
+            async def build(self, request, sampling_params_list, has_inline_ref_audio):
+                return PreparedRequest(
+                    prompt={"prompt": request.input},
+                    tts_params={},
+                    model_type=adapter_model_type,
+                )
+
+        voxtral_server._tts_model_type = legacy_tts_model_type
+        mocker.patch.object(voxtral_server, "_get_tts_adapter", return_value=FakeAdapter())
+        log_info = mocker.patch("vllm_omni.entrypoints.openai.serving_speech.logger.info")
+
+        asyncio.run(voxtral_server._prepare_speech_generation(OpenAICreateSpeechRequest(input="hello")))
+
+        assert adapter_model_type != legacy_tts_model_type
+        assert any(
+            call.args
+            and call.args[0] == "TTS speech request %s: text=%r, model=%s"
+            and call.args[3] == adapter_model_type
+            for call in log_info.call_args_list
+        )
+
+    def test_prepare_speech_generation_treats_sse_as_streaming(self, qwen3_tts_server, mocker: MockerFixture):
+        """stream_format=sse should request delta-style multimodal outputs."""
+        qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
+        qwen3_tts_server._build_tts_params = mocker.MagicMock(
+            return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}
+        )
+        qwen3_tts_server._estimate_prompt_len_async = mocker.AsyncMock(return_value=512)
+        mock_coerce = mocker.patch(
+            "vllm_omni.entrypoints.openai.serving_speech.coerce_param_message_types",
+            return_value=qwen3_tts_server.engine_client.default_sampling_params_list,
+        )
+        request = OpenAICreateSpeechRequest(input="hello", stream_format="sse")
+
+        asyncio.run(qwen3_tts_server._prepare_speech_generation(request))
+
+        mock_coerce.assert_called_once_with(qwen3_tts_server.engine_client.default_sampling_params_list, True)
+
+    def test_prepare_speech_generation_treats_stream_true_as_streaming(self, qwen3_tts_server, mocker: MockerFixture):
+        """stream=True should request delta-style multimodal outputs for SSE streaming."""
+        qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
+        qwen3_tts_server._build_tts_params = mocker.MagicMock(
+            return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}
+        )
+        qwen3_tts_server._estimate_prompt_len_async = mocker.AsyncMock(return_value=512)
+        mock_coerce = mocker.patch(
+            "vllm_omni.entrypoints.openai.serving_speech.coerce_param_message_types",
+            return_value=qwen3_tts_server.engine_client.default_sampling_params_list,
+        )
+        request = OpenAICreateSpeechRequest(input="hello", stream=True, response_format="pcm")
+
+        asyncio.run(qwen3_tts_server._prepare_speech_generation(request))
+
+        mock_coerce.assert_called_once_with(qwen3_tts_server.engine_client.default_sampling_params_list, True)
+
+    def test_prepare_speech_generation_treats_audio_as_streaming(self, qwen3_tts_server, mocker: MockerFixture):
+        """stream_format=audio should request delta-style multimodal outputs."""
+        qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
+        qwen3_tts_server._build_tts_params = mocker.MagicMock(
+            return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}
+        )
+        qwen3_tts_server._estimate_prompt_len_async = mocker.AsyncMock(return_value=512)
+        mock_coerce = mocker.patch(
+            "vllm_omni.entrypoints.openai.serving_speech.coerce_param_message_types",
+            return_value=qwen3_tts_server.engine_client.default_sampling_params_list,
+        )
+        request = OpenAICreateSpeechRequest(input="hello", stream_format="audio", response_format="pcm")
+
+        asyncio.run(qwen3_tts_server._prepare_speech_generation(request))
+
+        mock_coerce.assert_called_once_with(qwen3_tts_server.engine_client.default_sampling_params_list, True)
+
+    def test_prepare_speech_generation_no_async_chunk_stream_uses_final_only(
+        self, qwen3_tts_server, mocker: MockerFixture
+    ):
+        """Full-payload TTS streaming should not request delta multimodal outputs."""
+        qwen3_tts_server.engine_client.model_config.async_chunk = False
+        qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
+        qwen3_tts_server._build_tts_params = mocker.MagicMock(
+            return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}
+        )
+        qwen3_tts_server._estimate_prompt_len_async = mocker.AsyncMock(return_value=512)
+        mock_coerce = mocker.patch(
+            "vllm_omni.entrypoints.openai.serving_speech.coerce_param_message_types",
+            return_value=qwen3_tts_server.engine_client.default_sampling_params_list,
+        )
+        request = OpenAICreateSpeechRequest(input="hello", stream_format="audio", response_format="pcm")
+
+        asyncio.run(qwen3_tts_server._prepare_speech_generation(request))
+
+        mock_coerce.assert_called_once_with(qwen3_tts_server.engine_client.default_sampling_params_list, False)
+
+    def test_prepare_speech_generation_no_async_chunk_stream_keeps_delta_for_non_qwen3(
+        self, voxtral_server, mocker: MockerFixture
+    ):
+        """FINAL_ONLY streaming for async_chunk=False is scoped to qwen3_tts only."""
+        voxtral_server.engine_client.model_config.async_chunk = False
+        mocker.patch.object(voxtral_server._get_tts_adapter(), "validate", return_value=None)
+        voxtral_server._build_voxtral_prompt_async = mocker.AsyncMock(
+            return_value={
+                "prompt_token_ids": [1, 2, 3],
+                "additional_information": {"voice": ["test"]},
+            }
+        )
+        mock_coerce = mocker.patch(
+            "vllm_omni.entrypoints.openai.serving_speech.coerce_param_message_types",
+            return_value=voxtral_server.engine_client.default_sampling_params_list,
+        )
+        request = OpenAICreateSpeechRequest(input="hello", voice="test", stream_format="audio", response_format="pcm")
+
+        asyncio.run(voxtral_server._prepare_speech_generation(request))
+
+        mock_coerce.assert_called_once_with(voxtral_server.engine_client.default_sampling_params_list, True)
 
     def test_prepare_speech_generation_qwen3_voicedesign_non_streaming_mode_false(
         self, qwen3_tts_server, mocker: MockerFixture
@@ -3162,7 +3682,7 @@ class TestTTSAsyncOffloading:
             24000,
             artifact_key,
         )
-        qwen3_tts_server._ref_audio_model_artifact_ready.add(artifact_key)
+        qwen3_tts_server._ref_audio_model_artifact_ready.add((artifact_key, False))
         qwen3_tts_server._codec_frame_rate = 25.0
         qwen3_tts_server._tts_tokenizer = lambda _text, padding=False: {"input_ids": list(range(10))}
         qwen3_tts_server.engine_client.model_config.hf_config.talker_config = SimpleNamespace(
@@ -3192,10 +3712,10 @@ class TestTTSAsyncOffloading:
         qwen3_tts_server._ref_audio_resolve_cache_max_bytes = 1_000_000
 
         qwen3_tts_server._put_resolved_ref_audio("ref-a", [0.0] * 8, 24000, "artifact-a")
-        qwen3_tts_server._ref_audio_model_artifact_ready.add("artifact-a")
+        qwen3_tts_server._ref_audio_model_artifact_ready.add(("artifact-a", False))
         qwen3_tts_server._put_resolved_ref_audio("ref-b", [0.0] * 8, 24000, "artifact-b")
 
-        assert "artifact-a" not in qwen3_tts_server._ref_audio_model_artifact_ready
+        assert ("artifact-a", False) not in qwen3_tts_server._ref_audio_model_artifact_ready
         assert "artifact-b" in {entry[3] for entry in qwen3_tts_server._ref_audio_resolve_cache.values()}
 
     @pytest.mark.asyncio
@@ -3204,13 +3724,13 @@ class TestTTSAsyncOffloading:
             raise ValueError("boom")
             yield  # pragma: no cover
 
-        qwen3_tts_server._request_ref_audio_artifact_keys["req-fail"] = "artifact-fail"
+        qwen3_tts_server._request_ref_audio_artifact_keys["req-fail"] = ("artifact-fail", False)
 
         with pytest.raises(ValueError, match="boom"):
             await anext(qwen3_tts_server._generate_audio_chunks(failing_generator(), "req-fail"))
 
         assert "req-fail" not in qwen3_tts_server._request_ref_audio_artifact_keys
-        assert "artifact-fail" not in qwen3_tts_server._ref_audio_model_artifact_ready
+        assert ("artifact-fail", False) not in qwen3_tts_server._ref_audio_model_artifact_ready
 
     @pytest.mark.asyncio
     async def test_generate_audio_chunks_discards_ref_audio_artifact_warmup_on_close(self, qwen3_tts_server):
@@ -3223,22 +3743,48 @@ class TestTTSAsyncOffloading:
             )
             await asyncio.sleep(0)
 
-        qwen3_tts_server._request_ref_audio_artifact_keys["req-close"] = "artifact-close"
+        qwen3_tts_server._request_ref_audio_artifact_keys["req-close"] = ("artifact-close", False)
 
         stream = qwen3_tts_server._generate_audio_chunks(pcm_generator(), "req-close")
         assert await anext(stream)
         await stream.aclose()
 
         assert "req-close" not in qwen3_tts_server._request_ref_audio_artifact_keys
-        assert "artifact-close" not in qwen3_tts_server._ref_audio_model_artifact_ready
+        assert ("artifact-close", False) not in qwen3_tts_server._ref_audio_model_artifact_ready
 
     def test_qwen3_ref_audio_artifact_ready_requires_live_resolve_cache_entry(self, qwen3_tts_server):
-        qwen3_tts_server._request_ref_audio_artifact_keys["req-evicted"] = "artifact-evicted"
+        qwen3_tts_server._request_ref_audio_artifact_keys["req-evicted"] = ("artifact-evicted", False)
 
         qwen3_tts_server._mark_ref_audio_artifact_ready_for_request("req-evicted")
 
         assert "req-evicted" not in qwen3_tts_server._request_ref_audio_artifact_keys
-        assert "artifact-evicted" not in qwen3_tts_server._ref_audio_model_artifact_ready
+        assert ("artifact-evicted", False) not in qwen3_tts_server._ref_audio_model_artifact_ready
+
+    def test_qwen3_xvector_ready_artifact_does_not_enable_icl_artifact_only(self, qwen3_tts_server):
+        # An x-vector-only artifact (speaker embedding, no ref_code) must not enable
+        # the artifact-only path for a later ICL request with the same ref_audio (#5049).
+        qwen3_tts_server._put_resolved_ref_audio("ref-a", [0.0] * 8, 24000, "artifact-a")
+        qwen3_tts_server._track_ref_audio_artifact_warmup("req-xvec", "artifact-a", x_vector_only=True)
+        qwen3_tts_server._mark_ref_audio_artifact_ready_for_request("req-xvec")
+
+        icl_params = {"task_type": ["Base"], "x_vector_only_mode": [False]}
+        assert qwen3_tts_server._qwen3_tts_can_use_ref_audio_artifact_only(icl_params, "artifact-a") is False
+
+    def test_qwen3_xvector_ready_artifact_still_reusable_by_xvector_request(self, qwen3_tts_server):
+        qwen3_tts_server._put_resolved_ref_audio("ref-a", [0.0] * 8, 24000, "artifact-a")
+        qwen3_tts_server._track_ref_audio_artifact_warmup("req-xvec", "artifact-a", x_vector_only=True)
+        qwen3_tts_server._mark_ref_audio_artifact_ready_for_request("req-xvec")
+
+        xvec_params = {"task_type": ["Base"], "x_vector_only_mode": [True]}
+        assert qwen3_tts_server._qwen3_tts_can_use_ref_audio_artifact_only(xvec_params, "artifact-a") is True
+
+    def test_qwen3_icl_ready_artifact_enables_icl_artifact_only(self, qwen3_tts_server):
+        qwen3_tts_server._put_resolved_ref_audio("ref-a", [0.0] * 8, 24000, "artifact-a")
+        qwen3_tts_server._track_ref_audio_artifact_warmup("req-icl", "artifact-a", x_vector_only=False)
+        qwen3_tts_server._mark_ref_audio_artifact_ready_for_request("req-icl")
+
+        icl_params = {"task_type": ["Base"], "x_vector_only_mode": [False]}
+        assert qwen3_tts_server._qwen3_tts_can_use_ref_audio_artifact_only(icl_params, "artifact-a") is True
 
     def test_shutdown_is_idempotent(self, mocker: MockerFixture):
         """Calling shutdown() twice should not raise."""

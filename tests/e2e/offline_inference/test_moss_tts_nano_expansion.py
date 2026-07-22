@@ -29,11 +29,11 @@ STAGE_CONFIG = get_deploy_config_path("moss_tts_nano.yaml")
 _OMNI_RUNNER_PARAM = (
     MODEL_NAME,
     STAGE_CONFIG,
+    {"trust_remote_code": True},
 )
 
 pytestmark = [
-    pytest.mark.skip(reason="issue#4361"),
-    pytest.mark.full_model,
+    pytest.mark.slow,
     pytest.mark.tts,
     pytest.mark.parametrize("omni_runner", [_OMNI_RUNNER_PARAM], indirect=True),
 ]

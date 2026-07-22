@@ -104,6 +104,10 @@ class TTSModelAdapter(ABC):
     #: Serving backend: ``"ar"`` (engine_client) or ``"diffusion"``.
     backend: ClassVar[str] = "ar"
 
+    max_new_tokens_min = 1
+
+    max_new_tokens_max = 4096
+
     def __init__(self, ctx: SpeechServingContext) -> None:
         self.ctx = ctx
 
@@ -194,6 +198,3 @@ __all__ = [
     "SpeechServingContext",
     "TTSModelAdapter",
 ]
-
-# Type alias kept for readability in adapter signatures.
-NormalizeFn = Callable[["OpenAICreateSpeechRequest"], None]
