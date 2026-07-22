@@ -19,7 +19,7 @@ steps:
     key: image-build
     if: __IMAGE_BUILD_IF__
     commands:
-      - "bash .buildkite/release/scripts/build-ci-image.sh"
+      - "bash .buildkite/cuda/scripts/build-ci-image.sh"
     agents:
       queue: "cpu_queue_premerge"
 

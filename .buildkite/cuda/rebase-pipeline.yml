@@ -2,7 +2,7 @@ steps:
   - label: ":docker: Build image"
     key: image-build
     commands:
-      - "bash .buildkite/release/scripts/build-ci-image.sh"
+      - "bash .buildkite/cuda/scripts/build-ci-image.sh"
     agents:
       queue: "cpu_queue_premerge"
 
