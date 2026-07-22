@@ -6,7 +6,7 @@ import time
 from fastapi import Request
 from vllm.entrypoints.openai.chat_completion.protocol import (
     BatchChatCompletionRequest,
-    ChatCompletionMessageParam,
+    ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionResponseChoice,
 )
@@ -14,8 +14,11 @@ from vllm.entrypoints.openai.engine.protocol import (
     ErrorResponse,
     UsageInfo,
 )
+from vllm.logger import init_logger
 
 from vllm_omni.entrypoints.openai.serving_chat import OmniOpenAIServingChat
+
+logger = init_logger(__name__)
 
 
 class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
@@ -26,14 +29,22 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
     ) -> ChatCompletionResponse | ErrorResponse:
         """Given a request, submit each request to chat completions & collect the results."""
         model = ""
-        chat_requests: list[ChatCompletionMessageParam] = []
+        enabled_streaming = False
+        chat_requests: list[ChatCompletionRequest] = []
         choices: list[ChatCompletionResponseChoice] = []
         total_prompt_tokens = 0
         total_completion_tokens = 0
 
         for msg in request.messages:
             chat_cmp_request = request.to_chat_completion_request(msg)
+            # Streaming isn't supported for batch chat completions,
+            # so always set to False & warn if it was requested.
+            enabled_streaming |= chat_cmp_request.stream
+            chat_cmp_request.stream = False
             chat_requests.append(chat_cmp_request)
+
+        if enabled_streaming:
+            logger.warning("Streaming is not supported for batched chat completions; ignoring stream=True.")
 
         # Submit each chat completion request as a task, then gather results.
         # TODO (Alex): This can probably be done more optimally
@@ -60,9 +71,10 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
             total_tokens=total_prompt_tokens + total_completion_tokens,
         )
 
+        curr_time = int(time.time())
         return ChatCompletionResponse(
-            id=f"chatcmpl-batch-{int(time.time())}",
-            created=int(time.time()),
+            id=f"chatcmpl-batch-{curr_time}",
+            created=curr_time,
             model=model,
             choices=choices,
             usage=usage,
