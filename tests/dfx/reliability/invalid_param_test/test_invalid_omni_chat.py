@@ -15,7 +15,6 @@ from tests.helpers.stage_config import get_deploy_config_path
 
 pytestmark = [pytest.mark.slow, pytest.mark.omni]
 
-
 def _minimal_chat_json(omni_server: OmniServer) -> dict[str, object]:
     """Minimal valid chat body; individual tests override one offending field."""
     return {
