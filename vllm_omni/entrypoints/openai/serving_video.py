@@ -29,6 +29,11 @@ from vllm_omni.entrypoints.openai.stage_params import (
 from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_request
 from vllm_omni.entrypoints.openai.video_api_utils import _encode_video_bytes, encode_video_base64
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
+from vllm_omni.outputs.output_metadata import (
+    DiffusionMetadataMapping,
+    DiffusionMultimodalOutput,
+    DiffusionPayloadValue,
+)
 
 logger = init_logger(__name__)
 
@@ -58,8 +63,8 @@ class ReferenceAudio:
 class VideoGenerationArtifacts:
     """Normalized outputs and profiler metadata extracted from one request."""
 
-    videos: list[Any]
-    audios: list[Any | None]
+    videos: list[DiffusionPayloadValue]
+    audios: list[DiffusionPayloadValue | None]
     actions: list[VideoAction | None]
     audio_sample_rate: int
     output_fps: int
@@ -128,6 +133,8 @@ class OmniOpenAIServingVideo:
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail="Provide either an image reference or a video reference, not both.",
             )
+        provided_fields = request.model_fields_set
+        fps_provided = self._request_fps_provided(request)
         vp = request.resolve_video_params()
         if input_image is not None and vp.width is not None and vp.height is not None:
             target_size = (vp.width, vp.height)
@@ -147,10 +154,10 @@ class OmniOpenAIServingVideo:
             gen_params.height = vp.height
         if vp.num_frames is not None:
             gen_params.num_frames = vp.num_frames
-        if vp.fps is not None:
+        # Leave fps/frame_rate as None when the user did not provide fps.
+        if fps_provided and vp.fps is not None:
             gen_params.fps = vp.fps
             gen_params.frame_rate = float(vp.fps)
-        provided_fields = request.model_fields_set
         if "enable_frame_interpolation" in provided_fields:
             gen_params.enable_frame_interpolation = request.enable_frame_interpolation
         if "frame_interpolation_exp" in provided_fields:
@@ -223,13 +230,17 @@ class OmniOpenAIServingVideo:
         )
 
         result = await self._run_generation(prompt, gen_params, reference_id)
-        custom_output = self._extract_custom_output(result)
-        action_only = isinstance(custom_output, dict) and bool(custom_output.get("action_only_output"))
+        multimodal_output = self._extract_multimodal_output(result)
+        metadata = multimodal_output.get("metadata") if isinstance(multimodal_output, dict) else {}
+        common_metadata = metadata.get("common") if isinstance(metadata, dict) else {}
+        action_only = bool(isinstance(common_metadata, dict) and common_metadata.get("action_only_output"))
         videos = [{"action_only_output": True}] if action_only else self._extract_video_outputs(result)
         audios = self._extract_audio_outputs(result, expected_count=len(videos))
         actions = self._extract_action_outputs(result, expected_count=len(videos))
         audio_sample_rate = self._resolve_audio_sample_rate(result)
-        output_fps = (vp.fps or self._resolve_fps(result) or 24) * self._resolve_video_fps_multiplier(result)
+        model_fps = self._resolve_fps(result)
+        output_fps_base = (vp.fps if fps_provided else None) or model_fps or vp.fps or 24
+        output_fps = output_fps_base * self._resolve_video_fps_multiplier(result)
         return VideoGenerationArtifacts(
             videos=videos,
             audios=audios,
@@ -336,13 +347,24 @@ class OmniOpenAIServingVideo:
         return video_bytes, artifacts.stage_durations, artifacts.peak_memory_mb, artifacts.actions[0]
 
     @staticmethod
-    def _resolve_video_fps_multiplier(result: Any) -> int:
-        custom_output = OmniOpenAIServingVideo._extract_custom_output(result)
-        if isinstance(custom_output, dict):
-            multiplier = custom_output.get("video_fps_multiplier")
+    def _resolve_video_fps_multiplier(result: object) -> int:
+        multimodal_output = OmniOpenAIServingVideo._extract_multimodal_output(result)
+        metadata = multimodal_output.get("metadata")
+        video_metadata = metadata.get("video") if isinstance(metadata, Mapping) else None
+        if isinstance(video_metadata, Mapping):
+            multiplier = video_metadata.get("video_fps_multiplier")
             if multiplier is not None:
                 return int(multiplier)
         return 1
+
+    @staticmethod
+    def _request_fps_provided(request: VideoGenerationRequest) -> bool:
+        if "fps" in request.model_fields_set and request.fps is not None:
+            return True
+        video_params = request.video_params
+        if video_params is None or "video_params" not in request.model_fields_set:
+            return False
+        return "fps" in video_params.model_fields_set and video_params.fps is not None
 
     def _resolve_default_sampling_params(self) -> OmniDiffusionSamplingParams:
         default_sampling_params_list = getattr(self._engine_client, "default_sampling_params_list", None)
@@ -377,7 +399,7 @@ class OmniOpenAIServingVideo:
         prompt: OmniTextPrompt,
         gen_params: OmniDiffusionSamplingParams,
         request_id: str,
-    ) -> Any:
+    ) -> object:
         stage_configs = self._stage_configs or getattr(self._engine_client, "stage_configs", None)
 
         if not stage_configs:
@@ -420,7 +442,7 @@ class OmniOpenAIServingVideo:
         return result
 
     @staticmethod
-    def _normalize_video_outputs(videos: Any) -> list[Any]:
+    def _normalize_video_outputs(videos: DiffusionPayloadValue | None) -> list[DiffusionPayloadValue]:
         if videos is None:
             return []
         if hasattr(videos, "ndim") and videos.ndim == 5:
@@ -430,7 +452,7 @@ class OmniOpenAIServingVideo:
                 return []
             first = videos[0]
             if hasattr(first, "ndim") and first.ndim == 5:
-                flattened: list[Any] = []
+                flattened: list[DiffusionPayloadValue] = []
                 for item in videos:
                     if hasattr(item, "ndim") and item.ndim == 5:
                         flattened.extend([item[i] for i in range(item.shape[0])])
@@ -446,7 +468,7 @@ class OmniOpenAIServingVideo:
             return videos
         return [videos]
 
-    def _extract_video_outputs(self, result: Any) -> list[Any]:
+    def _extract_video_outputs(self, result: object) -> list[DiffusionPayloadValue]:
         videos = None
         if hasattr(result, "images") and result.images:
             videos = result.images
@@ -456,10 +478,14 @@ class OmniOpenAIServingVideo:
                 videos = request_output["images"]
             elif hasattr(request_output, "images") and request_output.images:
                 videos = request_output.images
-            elif hasattr(request_output, "multimodal_output") and request_output.multimodal_output:
-                videos = request_output.multimodal_output.get("video")
-        if videos is None and hasattr(result, "multimodal_output") and result.multimodal_output:
-            videos = result.multimodal_output.get("video")
+            else:
+                request_multimodal_output = getattr(request_output, "multimodal_output", None)
+                if isinstance(request_multimodal_output, Mapping):
+                    videos = request_multimodal_output.get("video")
+        if videos is None:
+            multimodal_output = getattr(result, "multimodal_output", None)
+            if isinstance(multimodal_output, Mapping):
+                videos = multimodal_output.get("video")
 
         normalized = self._normalize_video_outputs(videos)
         if not normalized:
@@ -470,17 +496,21 @@ class OmniOpenAIServingVideo:
         return normalized
 
     @staticmethod
-    def _extract_audio_outputs(result: Any, expected_count: int) -> list[Any | None]:
+    def _extract_audio_outputs(result: object, expected_count: int) -> list[DiffusionPayloadValue | None]:
         audio = None
-        if hasattr(result, "multimodal_output") and result.multimodal_output:
-            audio = result.multimodal_output.get("audio")
+        multimodal_output = getattr(result, "multimodal_output", None)
+        if isinstance(multimodal_output, Mapping):
+            audio = multimodal_output.get("audio")
         elif hasattr(result, "request_output"):
             request_output = result.request_output
             if isinstance(request_output, dict) and request_output.get("multimodal_output"):
                 mm_output = request_output.get("multimodal_output") or {}
-                audio = mm_output.get("audio")
-            elif hasattr(request_output, "multimodal_output") and request_output.multimodal_output:
-                audio = request_output.multimodal_output.get("audio")
+                if isinstance(mm_output, Mapping):
+                    audio = mm_output.get("audio")
+            else:
+                request_multimodal_output = getattr(request_output, "multimodal_output", None)
+                if isinstance(request_multimodal_output, Mapping):
+                    audio = request_multimodal_output.get("audio")
 
         if audio is None:
             return [None] * expected_count
@@ -501,7 +531,7 @@ class OmniOpenAIServingVideo:
 
         return [audio] + [None] * max(expected_count - 1, 0)
 
-    def _resolve_audio_sample_rate(self, result: Any) -> int:
+    def _resolve_audio_sample_rate(self, result: object) -> int:
         result_sample_rate = self._extract_audio_sample_rate_from_result(result)
         if result_sample_rate is not None:
             return result_sample_rate
@@ -515,38 +545,45 @@ class OmniOpenAIServingVideo:
         return 24000
 
     @classmethod
-    def _extract_action_outputs(cls, result: Any, expected_count: int) -> list[VideoAction | None]:
-        custom_output = cls._extract_custom_output(result)
-        if not custom_output or "action" not in custom_output:
-            return [None] * expected_count
+    def _extract_action_outputs(cls, result: object, expected_count: int) -> list[VideoAction | None]:
+        multimodal_output = cls._extract_multimodal_output(result)
+        if "actions" in multimodal_output:
+            action_payload = multimodal_output["actions"]
+            metadata = multimodal_output.get("metadata")
+            action_metadata = metadata.get("actions") if isinstance(metadata, Mapping) else {}
+            action_metadata = action_metadata if isinstance(action_metadata, Mapping) else {}
+            action_items = cls._split_action_payload(action_payload, expected_count)
+            return [
+                cls._make_video_action(action_item, action_metadata) if action_item is not None else None
+                for action_item in action_items
+            ]
 
-        action_payload = custom_output.get("actions", custom_output["action"])
-        action_items = cls._split_action_payload(action_payload, expected_count)
-        return [
-            cls._make_video_action(action_item, custom_output) if action_item is not None else None
-            for action_item in action_items
-        ]
+        return [None] * expected_count
 
     @staticmethod
-    def _extract_custom_output(result: Any) -> dict[str, Any]:
-        custom_output = getattr(result, "custom_output", None)
-        if isinstance(custom_output, dict):
-            return custom_output
+    def _extract_multimodal_output(result: object) -> DiffusionMultimodalOutput:
+        multimodal_output = getattr(result, "multimodal_output", None)
+        if isinstance(multimodal_output, Mapping):
+            return dict(multimodal_output)
 
         request_output = getattr(result, "request_output", None)
         if isinstance(request_output, dict):
-            custom_output = request_output.get("custom_output")
-            if custom_output is None:
-                custom_output = request_output.get("_custom_output")
+            multimodal_output = request_output.get("multimodal_output")
+            if multimodal_output is None:
+                multimodal_output = request_output.get("_multimodal_output")
         elif request_output is not None:
-            custom_output = getattr(request_output, "custom_output", None)
-            if custom_output is None:
-                custom_output = getattr(request_output, "_custom_output", None)
+            multimodal_output = getattr(request_output, "multimodal_output", None)
+            if multimodal_output is None:
+                multimodal_output = getattr(request_output, "_multimodal_output", None)
 
-        return custom_output if isinstance(custom_output, dict) else {}
+        return dict(multimodal_output) if isinstance(multimodal_output, Mapping) else {}
 
     @classmethod
-    def _split_action_payload(cls, action: Any, expected_count: int) -> list[Any | None]:
+    def _split_action_payload(
+        cls,
+        action: DiffusionPayloadValue,
+        expected_count: int,
+    ) -> list[DiffusionPayloadValue | None]:
         if expected_count <= 0:
             return []
 
@@ -560,30 +597,34 @@ class OmniOpenAIServingVideo:
         return [action] + [None] * (expected_count - 1)
 
     @classmethod
-    def _make_video_action(cls, action: Any, custom_output: dict[str, Any]) -> VideoAction:
+    def _make_video_action(
+        cls,
+        action: DiffusionPayloadValue,
+        action_metadata: DiffusionMetadataMapping,
+    ) -> VideoAction:
         data = cls._to_jsonable(action)
         if not isinstance(data, list):
             data = [data]
 
-        action_mode = custom_output.get("action_mode")
+        action_mode = action_metadata.get("action_mode")
         return VideoAction(
             data=data,
             shape=cls._shape_of(action),
             dtype=cls._dtype_of(action),
-            raw_action_dim=cls._coerce_optional_int(custom_output.get("raw_action_dim")),
+            raw_action_dim=cls._coerce_optional_int(action_metadata.get("raw_action_dim")),
             action_mode=str(action_mode) if action_mode is not None else None,
-            domain_id=cls._coerce_optional_int(custom_output.get("domain_id")),
+            domain_id=cls._coerce_optional_int(action_metadata.get("domain_id")),
         )
 
     @staticmethod
-    def _index_action(action: Any, index: int) -> Any:
+    def _index_action(action: DiffusionPayloadValue, index: int) -> DiffusionPayloadValue | None:
         try:
             return action[index]
         except (IndexError, KeyError, TypeError):
             return None
 
     @classmethod
-    def _to_jsonable(cls, value: Any) -> Any:
+    def _to_jsonable(cls, value: DiffusionPayloadValue) -> DiffusionPayloadValue:
         if hasattr(value, "detach"):
             value = value.detach()
         if hasattr(value, "cpu"):
@@ -600,7 +641,7 @@ class OmniOpenAIServingVideo:
         return value
 
     @classmethod
-    def _shape_of(cls, value: Any) -> list[int]:
+    def _shape_of(cls, value: DiffusionPayloadValue) -> list[int]:
         shape = getattr(value, "shape", None)
         if shape is not None:
             try:
@@ -614,12 +655,12 @@ class OmniOpenAIServingVideo:
         return []
 
     @staticmethod
-    def _dtype_of(value: Any) -> str | None:
+    def _dtype_of(value: DiffusionPayloadValue) -> str | None:
         dtype = getattr(value, "dtype", None)
         return str(dtype) if dtype is not None else None
 
     @staticmethod
-    def _coerce_optional_int(value: Any) -> int | None:
+    def _coerce_optional_int(value: object) -> int | None:
         if value is None:
             return None
         try:
@@ -629,7 +670,7 @@ class OmniOpenAIServingVideo:
             return None
 
     @staticmethod
-    def _resolve_fps(result: Any) -> int | None:
+    def _resolve_fps(result: object) -> int | None:
         """Extract fps from multimodal_output if the model reported it."""
         multimodal_output = getattr(result, "multimodal_output", None)
         if isinstance(multimodal_output, Mapping):
@@ -669,7 +710,7 @@ class OmniOpenAIServingVideo:
         return None
 
     @classmethod
-    def _extract_audio_sample_rate_from_result(cls, result: Any) -> int | None:
+    def _extract_audio_sample_rate_from_result(cls, result: object) -> int | None:
         multimodal_output = getattr(result, "multimodal_output", None)
         if isinstance(multimodal_output, Mapping):
             sample_rate = cls._coerce_audio_sample_rate(
@@ -704,7 +745,7 @@ class OmniOpenAIServingVideo:
         return None
 
     @classmethod
-    def _extract_audio_sample_rate_from_config(cls, config: Any) -> int | None:
+    def _extract_audio_sample_rate_from_config(cls, config: object) -> int | None:
         if config is None:
             return None
 
@@ -735,7 +776,7 @@ class OmniOpenAIServingVideo:
         return None
 
     @staticmethod
-    def _coerce_audio_sample_rate(value: Any) -> int | None:
+    def _coerce_audio_sample_rate(value: object) -> int | None:
         if value is None:
             return None
 
@@ -748,12 +789,12 @@ class OmniOpenAIServingVideo:
         return sample_rate if sample_rate > 0 else None
 
     @staticmethod
-    def _extract_stage_durations(result: Any) -> dict[str, float]:
+    def _extract_stage_durations(result: object) -> dict[str, float]:
         stage_durations = getattr(result, "stage_durations", None)
         return stage_durations if isinstance(stage_durations, dict) else {}
 
     @staticmethod
-    def _extract_peak_memory_mb(result: Any) -> float:
+    def _extract_peak_memory_mb(result: object) -> float:
         peak_memory_mb = getattr(result, "peak_memory_mb", 0.0)
         try:
             return float(peak_memory_mb or 0.0)

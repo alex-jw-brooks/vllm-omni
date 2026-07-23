@@ -32,7 +32,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.anthropic.serving import AnthropicServingMessages
-from vllm.entrypoints.chat_utils import load_chat_template
+from vllm.entrypoints.chat_utils import ChatTemplateConfig, load_chat_template
 from vllm.entrypoints.launcher import serve_http, terminate_if_errored
 from vllm.entrypoints.mcp.tool_server import DemoToolServer, MCPToolServer, ToolServer
 from vllm.entrypoints.openai.api_server import build_app as build_openai_app
@@ -60,13 +60,12 @@ from vllm.entrypoints.pooling.classify.serving import ServingClassification
 from vllm.entrypoints.pooling.embed.serving import ServingEmbedding as OpenAIServingEmbedding
 from vllm.entrypoints.pooling.pooling.serving import ServingPooling
 from vllm.entrypoints.pooling.scoring.serving import ServingScores
-from vllm.entrypoints.serve.disagg.serving import ServingTokens
+from vllm.entrypoints.scale_out.token_in_token_out.serving import ServingTokens
 
 # vLLM moved `base` from openai.basic.api_router to serve.instrumentator.basic.
 # Keep a fallback for older/newer upstream layouts during rebase windows.
 from vllm.entrypoints.serve.instrumentator.basic import base
-from vllm.entrypoints.serve.render.serving import OpenAIServingRender
-from vllm.entrypoints.serve.tokenize.serving import OpenAIServingTokenization
+from vllm.entrypoints.serve.tokenize.serving import ServingTokenization
 from vllm.entrypoints.serve.utils.api_utils import (
     load_aware_call,
     process_lora_modules,
@@ -85,6 +84,7 @@ from vllm.entrypoints.speech_to_text.translation.serving import (
     OpenAIServingTranslation,
 )
 from vllm.logger import init_logger
+from vllm.renderers.online_renderer import OnlineRenderer
 from vllm.tasks import POOLING_TASKS
 from vllm.tool_parsers import ToolParserManager
 from vllm.utils import random_uuid
@@ -111,6 +111,7 @@ from vllm_omni.entrypoints.openai.protocol.images import (
     ImageData,
     ImageGenerationRequest,
     ImageGenerationResponse,
+    ResponseFormat,
 )
 from vllm_omni.entrypoints.openai.protocol.videos import (
     SecondStr,
@@ -133,18 +134,20 @@ from vllm_omni.entrypoints.openai.serving_video import (
     ReferenceImage,
     ReferenceVideo,
 )
-from vllm_omni.entrypoints.openai.serving_video_stream import OmniStreamingVideoHandler
+from vllm_omni.entrypoints.openai.serving_video_output_stream import OmniStreamingVideoOutputHandler
+from vllm_omni.entrypoints.openai.serving_video_stream import create_streaming_video_handler
 from vllm_omni.entrypoints.openai.stage_params import (
     build_stage_sampling_params_list,
     get_default_sampling_params_list,
 )
-from vllm_omni.entrypoints.openai.storage import STORAGE_MANAGER
+from vllm_omni.entrypoints.openai.storage import STORAGE_MANAGER, FileStorageHandle
 from vllm_omni.entrypoints.openai.stores import VIDEO_STORE, VIDEO_TASKS
 from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_request
 from vllm_omni.entrypoints.openai.video_api_utils import decode_audio_url, decode_input_reference
 from vllm_omni.entrypoints.openpi.serving import ServingRealtimeRobotOpenPI
 from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
+from vllm_omni.utils.forced_aligner import build_forced_aligner_config
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 logger = init_logger(__name__)
@@ -448,7 +451,7 @@ async def omni_run_server(args, **uvicorn_kwargs) -> None:
     # Add process-specific prefix to stdout and stderr.
     decorate_logs("APIServer", skip_if_decorated=True)
 
-    listen_address, sock = setup_openai_server(args)
+    listen_address, sock = setup_openai_server(args, reuse_port=False)
 
     # Unified use of omni_run_server_worker, AsyncOmni automatically handles LLM and Diffusion models
     await omni_run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
@@ -513,6 +516,9 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
         else:
             logger.warning("engine client has no endpoint restrictions attribute")
 
+        # Start background processes
+        await STORAGE_MANAGER.start()
+
         # Conditionally register profiler endpoints based on stage YAML configs
         stage_configs = engine_client.stage_configs if hasattr(engine_client, "stage_configs") else None
         if _should_enable_profiler_endpoints(stage_configs):
@@ -576,15 +582,14 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
             **uvicorn_kwargs,
         )
 
-    # NB: Await server shutdown only after the backend context is exited
-    try:
-        await shutdown_task
-    finally:
-        state = getattr(app, "state", None)
-        serving_speech = getattr(state, "openai_serving_speech", None) if state is not None else None
-        if serving_speech is not None:
-            serving_speech.shutdown()
-        sock.close()
+        try:
+            await shutdown_task
+        finally:
+            state = getattr(app, "state", None)
+            serving_speech = getattr(state, "openai_serving_speech", None) if state is not None else None
+            if serving_speech is not None:
+                serving_speech.shutdown()
+            sock.close()
 
 
 @asynccontextmanager
@@ -685,6 +690,7 @@ async def build_async_omni_from_stage_config(
     try:
         kwargs = args.get_explicit_kwargs_dict()
         model = kwargs.pop("model", None) or args.model
+        kwargs.setdefault("log_stats", not args.disable_log_stats)
         async_omni = AsyncOmni(model=model, **kwargs)
 
         # # Don't keep the dummy data in memory
@@ -752,7 +758,7 @@ async def omni_init_app_state(
         state.diffusion_engine = engine_client
         state.openai_serving_models = _DiffusionServingModels(base_model_paths)
         # OMNI: tokenization endpoints are not supported in pure diffusion mode.
-        state.openai_serving_tokenization = None
+        state.serving_tokenization = None
 
         # Use for_diffusion method to create chat handler
         state.openai_serving_chat = OmniOpenAIServingChat.for_diffusion(
@@ -773,6 +779,11 @@ async def omni_init_app_state(
         diffusion_stage_configs = engine_client.stage_configs if hasattr(engine_client, "stage_configs") else None
         state.openai_serving_video = OmniOpenAIServingVideo.for_diffusion(
             diffusion_engine=engine_client,  # type: ignore
+            model_name=model_name,
+            stage_configs=diffusion_stage_configs,
+        )
+        state.openai_streaming_video_output = OmniStreamingVideoOutputHandler(
+            engine_client=engine_client,
             model_name=model_name,
             stage_configs=diffusion_stage_configs,
         )
@@ -803,19 +814,6 @@ async def omni_init_app_state(
 
     state.vllm_config = vllm_config
 
-    # Propagate enable_in_reasoning to the API-server process. The engine core
-    # runs in a separate process, so the contextvar that backs
-    # `get_current_vllm_config_or_none()` is None on this stack. Tool parsers
-    # call `get_enable_structured_outputs_in_reasoning()` during request
-    # handling and need to see the real flag, otherwise they silently fall
-    # back to False and mismatch the engine-side bitmask gating.
-    if vllm_config is not None:
-        from vllm.tool_parsers.structural_tag_registry import (
-            set_enable_structured_outputs_in_reasoning,
-        )
-
-        set_enable_structured_outputs_in_reasoning(vllm_config.structured_outputs_config.enable_in_reasoning)
-
     # Get supported tasks
     supported_tasks: set[str] = {"generate"}
     if hasattr(engine_client, "get_supported_tasks"):
@@ -831,6 +829,12 @@ async def omni_init_app_state(
             tokenizer = None
         if tokenizer is None or getattr(tokenizer, "chat_template", None) is None:
             resolved_chat_template = _load_model_chat_template_json(args.model)
+
+    chat_template_config = ChatTemplateConfig(
+        chat_template=resolved_chat_template,
+        chat_template_content_format=args.chat_template_content_format,
+        trust_request_chat_template=args.trust_request_chat_template,
+    )
 
     if args.tool_server == "demo":
         tool_server: ToolServer | None = DemoToolServer()
@@ -896,16 +900,11 @@ async def omni_init_app_state(
     )
     await state.openai_serving_models.init_static_loras()
 
-    # NOTE: kept aligned with vllm 0.20 `init_app_state`:
-    # - dropped the `io_processor` kwarg (no longer accepted by 0.20);
-    #   io_processor stays on `engine_client` and downstream serving classes
-    #   read it from there.
-    # - pass `reasoning_parser` so render-time `adjust_request` runs for
-    #   reasoning models (matches `vllm.entrypoints.openai.api_server`).
-    state.openai_serving_render = OpenAIServingRender(
+    # NOTE: kept aligned with upstream `init_app_state`:
+    # Use OnlineRenderer (replaced OpenAIServingRender which was removed upstream).
+    state.online_renderer = OnlineRenderer(
         model_config=engine_client.model_config,
         renderer=engine_client.renderer,
-        model_registry=state.openai_serving_models.registry,
         request_logger=request_logger,
         chat_template=resolved_chat_template,
         chat_template_content_format=args.chat_template_content_format,
@@ -922,7 +921,7 @@ async def omni_init_app_state(
         OpenAIServingResponses(
             engine_client,
             state.openai_serving_models,
-            openai_serving_render=state.openai_serving_render,
+            state.online_renderer,
             request_logger=request_logger,
             chat_template=resolved_chat_template,
             chat_template_content_format=args.chat_template_content_format,
@@ -943,7 +942,7 @@ async def omni_init_app_state(
             engine_client,
             state.openai_serving_models,
             args.response_role,
-            openai_serving_render=state.openai_serving_render,
+            online_renderer=state.online_renderer,
             request_logger=request_logger,
             chat_template=resolved_chat_template,
             chat_template_content_format=args.chat_template_content_format,
@@ -970,7 +969,7 @@ async def omni_init_app_state(
         OpenAIServingCompletion(
             engine_client,
             state.openai_serving_models,
-            openai_serving_render=state.openai_serving_render,
+            online_renderer=state.online_renderer,
             request_logger=request_logger,
             return_tokens_as_token_ids=args.return_tokens_as_token_ids,
             enable_prompt_tokens_details=args.enable_prompt_tokens_details,
@@ -985,9 +984,7 @@ async def omni_init_app_state(
             state.openai_serving_models,
             supported_tasks=tuple(supported_tasks),
             request_logger=request_logger,
-            chat_template=resolved_chat_template,
-            chat_template_content_format=args.chat_template_content_format,
-            trust_request_chat_template=args.trust_request_chat_template,
+            chat_template_config=chat_template_config,
         )
         if any(task in POOLING_TASKS for task in supported_tasks)
         else None
@@ -997,9 +994,7 @@ async def omni_init_app_state(
             engine_client,
             state.openai_serving_models,
             request_logger=request_logger,
-            chat_template=resolved_chat_template,
-            chat_template_content_format=args.chat_template_content_format,
-            trust_request_chat_template=args.trust_request_chat_template,
+            chat_template_config=chat_template_config,
         )
         if "embed" in supported_tasks
         else None
@@ -1009,9 +1004,7 @@ async def omni_init_app_state(
             engine_client,
             state.openai_serving_models,
             request_logger=request_logger,
-            chat_template=resolved_chat_template,
-            chat_template_content_format=args.chat_template_content_format,
-            trust_request_chat_template=args.trust_request_chat_template,
+            chat_template_config=chat_template_config,
         )
         if "classify" in supported_tasks
         else None
@@ -1020,17 +1013,17 @@ async def omni_init_app_state(
         ServingScores(
             engine_client,
             state.openai_serving_models,
+            supported_tasks=tuple(supported_tasks),
             request_logger=request_logger,
-            score_template=resolved_chat_template,
+            chat_template_config=chat_template_config,
             log_error_stack=args.log_error_stack,
         )
         if any(t in supported_tasks for t in ("embed", "score", "token_embed"))
         else None
     )
-    state.openai_serving_tokenization = OpenAIServingTokenization(
-        engine_client,
+    state.serving_tokenization = ServingTokenization(
         state.openai_serving_models,
-        state.openai_serving_render,
+        state.online_renderer,
         request_logger=request_logger,
         chat_template=resolved_chat_template,
         chat_template_content_format=args.chat_template_content_format,
@@ -1062,7 +1055,7 @@ async def omni_init_app_state(
             engine_client,
             state.openai_serving_models,
             args.response_role,
-            openai_serving_render=state.openai_serving_render,
+            online_renderer=state.online_renderer,
             request_logger=request_logger,
             chat_template=resolved_chat_template,
             chat_template_content_format=args.chat_template_content_format,
@@ -1081,7 +1074,7 @@ async def omni_init_app_state(
         ServingTokens(
             engine_client,
             state.openai_serving_models,
-            state.openai_serving_render,
+            state.online_renderer,
             request_logger=request_logger,
             return_tokens_as_token_ids=args.return_tokens_as_token_ids,
             enable_prompt_tokens_details=args.enable_prompt_tokens_details,
@@ -1093,7 +1086,11 @@ async def omni_init_app_state(
     )
 
     state.openai_serving_speech = OmniOpenAIServingSpeech(
-        engine_client, state.openai_serving_models, request_logger=request_logger, model_name=model_name
+        engine_client,
+        state.openai_serving_models,
+        request_logger=request_logger,
+        model_name=model_name,
+        forced_aligner_config=build_forced_aligner_config(args),
     )
 
     # Warm up speech pipeline (CUDA Graph capture, torch.compile) so the first
@@ -1108,7 +1105,7 @@ async def omni_init_app_state(
         speech_service=state.openai_serving_speech,
     )
     state.openai_streaming_video = (
-        OmniStreamingVideoHandler(
+        create_streaming_video_handler(
             chat_service=state.openai_serving_chat,
             engine_client=engine_client,
         )
@@ -1167,7 +1164,8 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
         if not isinstance(modalities, list) or not all(isinstance(m, str) for m in modalities):
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
-                detail='modalities must be a list of strings, e.g. ["text", "audio", "image"]',
+                detail="modalities must be a list of strings, e.g. "
+                '[\"text\", \"audio\", \"image\"]',
             )
     if "logprobs" in raw_body and not isinstance(raw_body["logprobs"], bool):
         raise HTTPException(
@@ -1177,7 +1175,7 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
     metrics_header_format = raw_request.headers.get(ENDPOINT_LOAD_METRICS_FORMAT_HEADER_LABEL, "")
     handler = Omnichat(raw_request)
     if handler is None:
-        base_server = getattr(raw_request.app.state, "openai_serving_tokenization", None)
+        base_server = getattr(raw_request.app.state, "serving_tokenization", None)
         if base_server is None:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND.value,
@@ -1243,7 +1241,7 @@ _remove_route_from_router(router, "/v1/audio/speech", {"POST"})
     "/v1/audio/speech",
     dependencies=[Depends(validate_json_request)],
     responses={
-        HTTPStatus.OK.value: {"content": {"audio/*": {}}},
+        HTTPStatus.OK.value: {"content": {"audio/*": {}, "text/event-stream": {}}},
         HTTPStatus.BAD_REQUEST.value: {"model": ErrorResponse},
         HTTPStatus.NOT_FOUND.value: {"model": ErrorResponse},
         HTTPStatus.INTERNAL_SERVER_ERROR.value: {"model": ErrorResponse},
@@ -1268,7 +1266,7 @@ async def create_speech(request: OpenAICreateSpeechRequest, raw_request: Request
     """
     handler = Omnispeech(raw_request)
     if handler is None:
-        base_server = getattr(raw_request.app.state, "openai_serving_tokenization", None)
+        base_server = getattr(raw_request.app.state, "serving_tokenization", None)
         if base_server is None:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND.value,
@@ -1306,7 +1304,7 @@ async def create_speech(request: OpenAICreateSpeechRequest, raw_request: Request
 async def create_speech_batch(request: BatchSpeechRequest, raw_request: Request):
     handler = Omnispeech(raw_request)
     if handler is None:
-        base_server = getattr(raw_request.app.state, "openai_serving_tokenization", None)
+        base_server = getattr(raw_request.app.state, "serving_tokenization", None)
         if base_server is None:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND.value,
@@ -1322,7 +1320,10 @@ async def create_speech_batch(request: BatchSpeechRequest, raw_request: Request)
         result = await handler.create_speech_batch(request)
         if isinstance(result, ErrorResponse):
             return _error_response_to_json_response(result)
-        return JSONResponse(content=result.model_dump())
+        # exclude_none so optional per-item fields are omitted rather than
+        # serialized as null: errored items drop `usage`/`audio_data`/`media_type`,
+        # successful items drop `error`. Matches the documented batch response shape.
+        return JSONResponse(content=result.model_dump(exclude_none=True))
     except (EngineGenerateError, EngineDeadError) as exc:
         return _create_engine_error_json_response(raw_request, exc)
     except ValueError as e:
@@ -1346,7 +1347,7 @@ async def create_speech_batch(request: BatchSpeechRequest, raw_request: Request)
 async def create_audio_generate(request: OpenAICreateAudioGenerateRequest, raw_request: Request):
     handler = OmniAudioGenerate(raw_request)
     if handler is None:
-        base_server = getattr(raw_request.app.state, "openai_serving_tokenization", None)
+        base_server = getattr(raw_request.app.state, "serving_tokenization", None)
         if base_server is None:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND.value,
@@ -1605,6 +1606,23 @@ async def streaming_video_chat(websocket: WebSocket):
     await handler.handle_session(websocket)
 
 
+@router.websocket("/v1/realtime/video")
+async def streaming_video_output(websocket: WebSocket):
+    """WebSocket endpoint for streaming generated video output chunks."""
+    handler = getattr(websocket.app.state, "openai_streaming_video_output", None)
+    if handler is None:
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Streaming video generation is not available",
+            }
+        )
+        await websocket.close()
+        return
+    await handler.handle_session(websocket)
+
+
 @router.websocket("/v1/realtime")
 async def realtime_websocket(websocket: WebSocket):
     """WebSocket endpoint for OpenAI-style realtime interactions."""
@@ -1694,6 +1712,7 @@ async def show_available_models(raw_request: Request) -> JSONResponse:
 @router.post(
     "/v1/images/generations",
     dependencies=[Depends(validate_json_request)],
+    response_model=None,
     responses={
         HTTPStatus.OK.value: {"model": ImageGenerationResponse},
         HTTPStatus.BAD_REQUEST.value: {"model": ErrorResponse},
@@ -1702,7 +1721,9 @@ async def show_available_models(raw_request: Request) -> JSONResponse:
     },
 )
 @with_cancellation
-async def generate_images(request: ImageGenerationRequest, raw_request: Request):
+async def generate_images(
+    request: ImageGenerationRequest, raw_request: Request
+) -> ImageGenerationResponse | StreamingResponse:
     """Generate images from text prompts using diffusion models.
 
     OpenAI DALL-E compatible endpoint for text-to-image generation.
@@ -1894,7 +1915,10 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
         }
         if request.size:
             response_kwargs["size"] = size_str
-        return ImageGenerationResponse(**response_kwargs)
+        response = ImageGenerationResponse(**response_kwargs)
+        if request.response_format != ResponseFormat.FILE:
+            return response
+        return response.stream_response()
 
     except (EngineGenerateError, EngineDeadError) as exc:
         return _create_engine_error_json_response(raw_request, exc)
@@ -2420,7 +2444,8 @@ def _check_max_generated_image_size(
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail=f"Requested image size {width}x{height} exceeds the maximum allowed "
-                f"size of {max_generated_image_size} pixels.",
+                f"size of {max_generated_image_size} pixels. You can reduce the requested size "
+                f"or increase the server's --max-generated-image-size limit.",
             )
     elif resolution is not None:
         # When resolution is set, the output size is resolution * resolution
@@ -2428,7 +2453,8 @@ def _check_max_generated_image_size(
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail=f"Requested resolution {resolution} (max {resolution}x{resolution} pixels) "
-                f"exceeds the maximum allowed size of {max_generated_image_size} pixels.",
+                f"exceeds the maximum allowed size of {max_generated_image_size} pixels. "
+                f"You can reduce the requested size or increase the server's --max-generated-image-size limit.",
             )
 
 
@@ -2774,12 +2800,11 @@ def _video_error_from_exception(exc: Exception) -> VideoError:
     )
 
 
-def _cleanup_video(video_id: str, output_path: str | None):
+async def _cleanup_video(video_id: str):
     try:
-        if output_path is not None:
-            os.remove(output_path)
-    except OSError:
-        logger.warning("Failed to cleanup partial video file '%s' for id=%s", output_path, video_id)
+        await STORAGE_MANAGER.delete(video_id)
+    except Exception:
+        logger.warning("Failed to cleanup partial video file '%s'", video_id)
 
 
 async def _run_video_generation_job(
@@ -2798,7 +2823,6 @@ async def _run_video_generation_job(
 
     await VIDEO_STORE.update_fields(video_id, {"status": VideoGenerationStatus.IN_PROGRESS})
     started_at = time.perf_counter()
-    output_path = None
     try:
         video_bytes, stage_durations, peak_memory_mb, action = await handler.generate_video_bytes(
             request,
@@ -2808,27 +2832,27 @@ async def _run_video_generation_job(
             reference_audio=reference_audio,
         )
 
-        file_name = f"{video_id}.{job.file_extension}"
-        output_path = await STORAGE_MANAGER.save(video_bytes, file_name)
-        logger.info("Video request %s persisted %s output file.", video_id, output_path)
+        save_context = await STORAGE_MANAGER.save(video_bytes, video_id)
+        logger.info("Video request %s persisted %s output file.", video_id, save_context.key)
 
-        await VIDEO_STORE.update_fields(
-            video_id,
-            {
-                "status": VideoGenerationStatus.COMPLETED,
-                "progress": 100,
-                "file_name": file_name,
-                "completed_at": int(time.time()),
-                "inference_time_s": time.perf_counter() - started_at,
-                "stage_durations": stage_durations,
-                "peak_memory_mb": peak_memory_mb,
-                "action": action,
-            },
-        )
+        updated_fields = {
+            "status": VideoGenerationStatus.COMPLETED,
+            "progress": 100,
+            "file_name": f"{video_id}.{job.file_extension}",
+            "completed_at": save_context.created_at,
+            "inference_time_s": time.perf_counter() - started_at,
+            "stage_durations": stage_durations,
+            "peak_memory_mb": peak_memory_mb,
+            "action": action,
+        }
+        if save_context.expires_at is not None:
+            updated_fields["expires_at"] = save_context.expires_at
+
+        await VIDEO_STORE.update_fields(video_id, updated_fields)
     except (EngineGenerateError, EngineDeadError) as exc:
         logger.exception("Video generation failed (engine error) for id=%s", video_id)
 
-        _cleanup_video(video_id, output_path)
+        await _cleanup_video(video_id)
         await VIDEO_STORE.update_fields(
             video_id,
             {
@@ -2848,7 +2872,7 @@ async def _run_video_generation_job(
     except Exception as exc:
         logger.exception("Video generation failed for id=%s", video_id)
 
-        _cleanup_video(video_id, output_path)
+        await _cleanup_video(video_id)
         await VIDEO_STORE.update_fields(
             video_id,
             {
@@ -2859,7 +2883,7 @@ async def _run_video_generation_job(
             },
         )
     except asyncio.CancelledError:
-        _cleanup_video(video_id, output_path)
+        await _cleanup_video(video_id)
         await VIDEO_STORE.pop(video_id)
         raise
     finally:
@@ -3247,7 +3271,7 @@ async def delete_video(video_id: str) -> VideoDeleteResponse:
     elif job.status is VideoGenerationStatus.FAILED:
         if job.file_name is not None:
             try:
-                await STORAGE_MANAGER.delete(job.file_name)
+                await STORAGE_MANAGER.delete(video_id)
             except Exception:
                 logger.warning("Failed to delete stored artifact for failed video job %s", video_id, exc_info=True)
 
@@ -3257,13 +3281,13 @@ async def delete_video(video_id: str) -> VideoDeleteResponse:
     if job.file_name is None:
         raise HTTPException(status_code=409, detail="Video output not yet available. Please try again later.")
 
-    await STORAGE_MANAGER.delete(job.file_name)
+    await STORAGE_MANAGER.delete(video_id)
     await VIDEO_STORE.pop(video_id)
     return VideoDeleteResponse(id=job.id, deleted=True)
 
 
 @router.get("/v1/videos/{video_id}/content")
-async def download_video(video_id: str) -> FileResponse:
+async def download_video(video_id: str) -> Response:
     """Download the generated file for a completed video job.
 
     Args:
@@ -3286,11 +3310,19 @@ async def download_video(video_id: str) -> FileResponse:
     if not job.file_name:
         raise HTTPException(status_code=404, detail="Generation is still in-progress")
 
-    full_path = STORAGE_MANAGER.get_full_file_path(job.file_name)
-    if not os.path.exists(full_path):
+    file_handle = await STORAGE_MANAGER.open(video_id)
+    if file_handle is None:
         raise HTTPException(status_code=404, detail="Generated video file not found on disk")
 
-    return FileResponse(path=full_path, media_type=job.media_type, filename=job.file_name)
+    file_name = job.file_name or f"{video_id}.{job.file_extension}"
+    if isinstance(file_handle, FileStorageHandle):
+        response = FileResponse(path=file_handle.path, media_type=job.media_type, filename=file_name)
+    else:
+        raise HTTPException(
+            status_code=500, detail=f"Server generated an unsupported file storage handle for file id {video_id}"
+        )
+
+    return response
 
 
 @profiler_router.post("/start_profile")
@@ -3309,9 +3341,9 @@ async def start_profile(raw_request: Request, request: ProfileRequest | None = N
         stages = request.stages if request else None
         logger.info("Starting profiler for stages: %s", stages if stages else "all")
         engine_client = raw_request.app.state.engine_client
-        result = await engine_client.start_profile(stages=stages)
+        await engine_client.start_profile(stages=stages)
         logger.info("Profiler started.")
-        return JSONResponse(content=result)
+        return JSONResponse(content={"status": "SUCCESS"})
     except Exception as e:
         logger.exception("Failed to start profiler: %s", e)
         raise HTTPException(
@@ -3335,9 +3367,9 @@ async def stop_profile(raw_request: Request, request: ProfileRequest | None = No
         stages = request.stages if request else None
         logger.info("Stopping profiler for stages: %s", stages if stages else "all")
         engine_client = raw_request.app.state.engine_client
-        result = await engine_client.stop_profile(stages=stages)
+        await engine_client.stop_profile(stages=stages)
         logger.info("Profiler stopped.")
-        return JSONResponse(content=result)
+        return JSONResponse(content={"status": "SUCCESS"})
     except Exception as e:
         logger.exception("Failed to stop profiler: %s", e)
         raise HTTPException(

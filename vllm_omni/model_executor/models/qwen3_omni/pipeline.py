@@ -7,17 +7,21 @@ Stage 1: Talker  — text embeddings → RVQ codec codes
 Stage 2: Code2Wav — RVQ codes → audio waveform
 """
 
+from transformers import Qwen3OmniMoeConfig
+
 from vllm_omni.config.endpoint_policy import EndpointRestriction, OmniServingCapability
 from vllm_omni.config.stage_config import (
     PipelineConfig,
     StageExecutionType,
     StagePipelineConfig,
+    pipeline_cfg_resolver,
 )
 
 _PROC = "vllm_omni.model_executor.stage_input_processors.qwen3_omni"
 
 QWEN3_OMNI_PIPELINE = PipelineConfig(
     model_type="qwen3_omni_moe",
+    default_deploy_config_name="qwen3_omni_moe.yaml",
     model_arch="Qwen3OmniMoeForConditionalGeneration",
     endpoint_restrictions=(
         EndpointRestriction(
@@ -48,7 +52,6 @@ QWEN3_OMNI_PIPELINE = PipelineConfig(
             input_sources=(0,),
             hf_config_name="talker_config",
             engine_output_type="latent",
-            custom_process_input_func=f"{_PROC}.thinker2talker",
             sync_process_input_func=f"{_PROC}.thinker2talker_token_only",
             custom_process_next_stage_input_func=(f"{_PROC}.talker2code2wav_full_payload"),
             async_chunk_process_next_stage_input_func=(f"{_PROC}.talker2code2wav_async_chunk"),
@@ -66,7 +69,6 @@ QWEN3_OMNI_PIPELINE = PipelineConfig(
             final_output_type="audio",
             hf_config_name="thinker_config",
             engine_output_type="audio",
-            custom_process_input_func=f"{_PROC}.talker2code2wav",
             sampling_constraints={"detokenize": True},
         ),
     ),
@@ -91,3 +93,18 @@ QWEN3_OMNI_THINKER_ONLY_PIPELINE = PipelineConfig(
         ),
     ),
 )
+
+
+@pipeline_cfg_resolver(config_type=Qwen3OmniMoeConfig)
+def resolve_qwen3_omni_pipeline(
+    hf_config: Qwen3OmniMoeConfig,
+) -> PipelineConfig:
+    """Select the right pipeline variant based on the HF config, since some variants,
+    e.g., Qwen3-Omni-30B-A3B-Captioner, are thinker only.
+
+    By default, we load the full pipeline, as this is the common case.
+    """
+    # If we have a config and it explicitly disabled audio input, load thinker only
+    if not hf_config.enable_audio_output:
+        return QWEN3_OMNI_THINKER_ONLY_PIPELINE
+    return QWEN3_OMNI_PIPELINE
