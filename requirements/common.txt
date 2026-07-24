@@ -10,7 +10,7 @@
 # MossTTSNanoForGeneration wraps weight loading in
 # transformers_keys_to_ignore_compat (vllm_omni/model_executor/models/utils.py).
 transformers >= 5.5.3
-av>=14.0.0
+av>=13.1.0
 omegaconf>=2.3.0
 diffusers==0.38.0
 safetensors>=0.8.0
