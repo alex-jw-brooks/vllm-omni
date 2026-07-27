@@ -14,7 +14,6 @@ class ModelTasks(StrEnum):
 
     TEXT_TO_TEXT = auto()
     MM_TO_TEXT = auto()  # Text + Other Modalities
-    TEXT_TO_SPEECH = auto()
     TEXT_TO_IMAGE = auto()
     IMAGE_TO_IMAGE = auto()
     TEXT_TO_VIDEO = auto()

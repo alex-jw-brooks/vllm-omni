@@ -5,7 +5,7 @@ Utilities for resolving real models to their tiny model equivalents.
 import logging
 
 from tests.model_tests.config_types import DiffusionAccs
-from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
+from tests.model_tests.model_settings import DIFFUSION_TEST_SETTINGS
 from vllm_omni.diffusion.data import DiffusionParallelConfig, resolve_model_class_name
 from vllm_omni.entrypoints.omni import Omni
 
