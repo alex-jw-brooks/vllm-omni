@@ -17,7 +17,8 @@ import itertools
 import pytest
 
 from tests.helpers.mark import hardware_marks
-from tests.model_tests.diffusion.config_types import DiffusionAccs, DiffusionModelTestOpts, get_required_device_count
+from tests.model_tests.config_types import DiffusionAccs, DiffusionModelTestOpts
+from tests.model_tests.utils import get_required_device_count
 from vllm_omni.platforms import current_omni_platform
 
 # These tests are intended to run on L4 GPUs since they test parallelism (i.e., need GPUs),

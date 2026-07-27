@@ -1,9 +1,9 @@
-from tests.model_tests.diffusion import diff_model_builders
-from tests.model_tests.diffusion.config_types import (
+from tests.model_tests.config_types import (
     DiffusionAccs,
     DiffusionModelTestOpts,
-    DiffusionTasks,
+    ModelTasks,
 )
+from tests.model_tests.diffusion import diff_model_builders
 
 # This object defines the (tiny) model configurations for common tests.
 #
@@ -32,7 +32,7 @@ DIFFUSION_TEST_SETTINGS = {
     "Flux2KleinPipeline": DiffusionModelTestOpts(
         model="black-forest-labs/FLUX.2-klein-4B",
         builder=diff_model_builders.tiny_flux2_klein_builder,
-        supported_tasks=[DiffusionTasks.TEXT_TO_IMAGE, DiffusionTasks.IMAGE_TO_IMAGE],
+        supported_tasks=[ModelTasks.TEXT_TO_IMAGE, ModelTasks.IMAGE_TO_IMAGE],
         extra_test_groups=[
             [DiffusionAccs.HSDP, DiffusionAccs.TEA_CACHE],
             [DiffusionAccs.SEQUENCE_PARALLEL, DiffusionAccs.CACHE_DIT, DiffusionAccs.LAYERWISE_OFFLOAD],
@@ -42,7 +42,7 @@ DIFFUSION_TEST_SETTINGS = {
     "LTX2Pipeline": DiffusionModelTestOpts(
         model="Lightricks/LTX-2",
         builder=diff_model_builders.tiny_ltx2_builder,
-        supported_tasks=[DiffusionTasks.TEXT_TO_VIDEO],
+        supported_tasks=[ModelTasks.TEXT_TO_VIDEO],
         check_determinism=False,
         check_multi_output=False,
         extra_test_groups=[

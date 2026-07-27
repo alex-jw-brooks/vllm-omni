@@ -47,7 +47,7 @@ from tests.helpers.media import (
     _merge_base64_audio_to_segment,
     decode_b64_image,
 )
-from tests.model_tests.diffusion.utils import resolve_tiny_model_path
+from tests.model_tests.utils import resolve_tiny_model_path
 from vllm_omni.config.stage_config import resolve_deploy_yaml
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 from vllm_omni.outputs import OmniRequestOutput

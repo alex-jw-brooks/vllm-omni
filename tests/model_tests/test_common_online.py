@@ -7,20 +7,17 @@ encoding) using tiny models.
 import pytest
 
 from tests.helpers.runtime import OmniServer, OpenAIClientHandler
+from tests.model_tests.config_types import DiffusionAccs, ModelTasks
 from tests.model_tests.diffusion.case_filtering import get_parametrized_options
-from tests.model_tests.diffusion.config_types import (
-    DiffusionAccs,
-    DiffusionTasks,
-    build_server_args_from_diff_accelerations,
-)
 from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
-from tests.model_tests.diffusion.task_runners import (
+from tests.model_tests.task_runners import (
     run_and_validate_online_image_to_image_request,
     run_and_validate_online_text_to_image_determinism,
     run_and_validate_online_text_to_image_multi_output,
     run_and_validate_online_text_to_image_request,
     run_and_validate_online_text_to_video_request,
 )
+from tests.model_tests.utils import build_server_args_from_diff_accelerations
 
 # NOTE : Hardware marks are added dynamically based on test requirements
 pytestmark = [pytest.mark.diffusion]
@@ -33,7 +30,7 @@ pytestmark = [pytest.mark.diffusion]
 def test_online_on_supported_tasks(
     model_name: str,
     accelerations: list[DiffusionAccs] | None,
-    supported_tasks: list[DiffusionTasks],
+    supported_tasks: list[ModelTasks],
     check_multioutput: bool,
     check_determinism: bool,
     tiny_model_paths: dict[str, str],
@@ -58,11 +55,11 @@ def test_online_on_supported_tasks(
         )
         for task_type in supported_tasks:
             with subtests.test(msg=task_type):
-                if task_type == DiffusionTasks.TEXT_TO_IMAGE:
+                if task_type == ModelTasks.TEXT_TO_IMAGE:
                     run_and_validate_online_text_to_image_request(server, client)
-                elif task_type == DiffusionTasks.IMAGE_TO_IMAGE:
+                elif task_type == ModelTasks.IMAGE_TO_IMAGE:
                     run_and_validate_online_image_to_image_request(server, client)
-                elif task_type == DiffusionTasks.TEXT_TO_VIDEO:
+                elif task_type == ModelTasks.TEXT_TO_VIDEO:
                     run_and_validate_online_text_to_video_request(server, client)
                 else:
                     raise ValueError(f"Task type {task_type} is not yet supported")
