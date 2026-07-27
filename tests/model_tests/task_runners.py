@@ -10,12 +10,21 @@ from dataclasses import replace
 import numpy as np
 from PIL import Image
 
-from tests.helpers.runtime import DiffusionResponse, OmniServer, OpenAIClientHandler, dummy_messages_from_mix_data
+from tests.helpers.runtime import (
+    DiffusionResponse,
+    OmniResponse,
+    OmniServer,
+    OpenAIClientHandler,
+    dummy_messages_from_mix_data,
+)
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
-PROMPT = "Dummy prompt"
+OMNI_TEXT_PROMPT = "Hello, briefly describe yourself."
+OMNI_SPEECH_PROMPT = "Say: hello world"
+
+PROMPT = "A black cat sitting on a bed."
 IMAGE_DIMS = (512, 512)
 HEIGHT, WIDTH = IMAGE_DIMS
 INPUT_IMAGE = Image.new("RGB", IMAGE_DIMS)
@@ -71,6 +80,19 @@ def _validate_image_gen_determinism(images_a: list[Image.Image], images_b: list[
     _validate_images(images_a)
     _validate_images(images_b)
     assert np.array_equal(np.array(images_a[0]), np.array(images_b[0]))
+
+
+def _get_online_omni_response(responses: list[OmniResponse]) -> OmniResponse:
+    assert len(responses) == 1
+    return responses[0]
+
+
+def _validate_text(response: OmniResponse) -> None:
+    assert response.text_content
+
+
+def _validate_speech(response: OmniResponse) -> None:
+    assert response.audio_bytes
 
 
 ### Output extractor utils for offline / online paths respectively
@@ -237,3 +259,33 @@ def run_and_validate_online_text_to_image_multi_output(server: OmniServer, clien
 def run_and_validate_online_text_to_video_request(server: OmniServer, client: OpenAIClientHandler):
     """Run and validate a text to video request through the server."""
     _get_online_videos(_run_online_t2v(server, client))
+
+
+def run_and_validate_online_text_to_text_request(server: OmniServer, client: OpenAIClientHandler) -> None:
+    """Run and validate a text-in, text-out request."""
+    messages = dummy_messages_from_mix_data(content_text=OMNI_TEXT_PROMPT)
+    request_config = {
+        "model": server.model,
+        "messages": messages,
+        "modalities": ["text"],
+    }
+    _validate_text(_get_online_omni_response(client.send_omni_request(request_config)))
+
+
+def run_and_validate_online_text_to_speech_request(server: OmniServer, client: OpenAIClientHandler) -> None:
+    """Run and validate a text-in, speech-out request."""
+    messages = dummy_messages_from_mix_data(content_text=OMNI_SPEECH_PROMPT)
+    request_config = {
+        "model": server.model,
+        "messages": messages,
+        "modalities": ["audio"],
+    }
+    _validate_speech(_get_online_omni_response(client.send_omni_request(request_config)))
+
+
+# TODO: add offline AR task runners (run_and_validate_text_to_text_request,
+# run_and_validate_mm_to_text_request, run_and_validate_text_to_speech_request)
+# once the following are in place:
+#   - OmniModelTestOpts initialization and case-filtering infra (analogous to
+#     build_omni_from_diff_accelerations / get_parametrized_options for diffusion)
+#   - Confirmed API for Omni.generate() with AR prompts and modality params

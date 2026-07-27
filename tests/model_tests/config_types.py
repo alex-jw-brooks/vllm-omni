@@ -10,12 +10,15 @@ TinyModelBuilder: TypeAlias = Callable[[], str]
 
 
 class ModelTasks(StrEnum):
-    """Supported tasks for Diffusion Models."""
+    """Supported model tasks."""
 
+    TEXT_TO_TEXT = auto()
+    MM_TO_TEXT = auto()  # Text + Other Modalities
+    TEXT_TO_SPEECH = auto()
     TEXT_TO_IMAGE = auto()
     IMAGE_TO_IMAGE = auto()
     TEXT_TO_VIDEO = auto()
-    # Text to audio, etc should be added here as needed
+    TEXT_TO_AUDIO = auto()
 
 
 @dataclass

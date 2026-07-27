@@ -1,21 +1,18 @@
-import sys
+import os
+import tempfile
 from pathlib import Path
 
-sys.path.append("/home/alex-jw-brooks/vllm-omni")
+import torch
 from transformers import AutoConfig, AutoModelForMultimodalLM
 
 TINY_CONFIGS_DIR = Path(__file__).parent / "tiny_configs"
+TINY_MODEL_DIR = os.path.join(tempfile.gettempdir(), "vllm-omni-tiny-models")
 
 
-# def tiny_qwen3_omni_builder() -> str:
-#     """Build a tiny (3 stage) Qwen3Omni model from vendored configs."""
-def tiny_flux2_klein_builder() -> str:
-    """Build a tiny Flux2Klein model from vendored configs."""
-
-
-if __name__ == "__main__":
-    TINY_QWEN_DIR = TINY_CONFIGS_DIR / "qwen3_omni"
-
-    config = AutoConfig.from_pretrained(TINY_QWEN_DIR)
-    model = AutoModelForMultimodalLM.from_config(config)
-    print("OK")
+def tiny_qwen3_omni_builder() -> str:
+    """Build a tiny Qwen3Omni model (all 3 stages) & return saved path."""
+    config = AutoConfig.from_pretrained(TINY_CONFIGS_DIR / "qwen3_omni")
+    model = AutoModelForMultimodalLM.from_config(config).to(torch.bfloat16)
+    outdir = os.path.join(TINY_MODEL_DIR, "qwen3_omni")
+    model.save_pretrained(outdir)
+    return outdir
