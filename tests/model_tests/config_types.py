@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum, auto
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from pytest import MarkDecorator
 
@@ -90,3 +90,72 @@ class OmniModelTestOpts(ModelTestOpts):
     # Testing options for omni
     supports_prefix_caching: bool
     supports_async_chunking: bool
+
+
+@dataclass
+class AccelerationDescriptor:
+    """Describes how to enable an acceleration for both offline / online cases,
+    as well as how many devices will be leveraged."""
+
+    omni_kwargs: dict[str, Any]
+    omni_parallel_kwargs: dict[str, Any]
+    device_count_key: str | None
+    cli_args: list[str]
+
+
+ACC_DESCRIPTORS: dict[DiffusionAccs, AccelerationDescriptor] = {
+    DiffusionAccs.HSDP: AccelerationDescriptor(
+        omni_kwargs={},
+        omni_parallel_kwargs={"use_hsdp": True, "hsdp_shard_size": 2},
+        device_count_key="hsdp_shard_size",
+        cli_args=["--use-hsdp", "--hsdp-shard-size", "2"],
+    ),
+    DiffusionAccs.TEA_CACHE: AccelerationDescriptor(
+        omni_kwargs={"cache_backend": "tea_cache"},
+        omni_parallel_kwargs={},
+        device_count_key=None,
+        cli_args=["--cache-backend", "tea_cache"],
+    ),
+    DiffusionAccs.CACHE_DIT: AccelerationDescriptor(
+        omni_kwargs={"cache_backend": "cache_dit"},
+        omni_parallel_kwargs={},
+        device_count_key=None,
+        cli_args=["--cache-backend", "cache_dit"],
+    ),
+    DiffusionAccs.SEQUENCE_PARALLEL: AccelerationDescriptor(
+        omni_kwargs={},
+        omni_parallel_kwargs={"ulysses_degree": 2},
+        device_count_key="ulysses_degree",
+        cli_args=["--usp", "2"],
+    ),
+    DiffusionAccs.CFG_PARALLEL: AccelerationDescriptor(
+        omni_kwargs={},
+        omni_parallel_kwargs={"cfg_parallel_size": 2},
+        device_count_key="cfg_parallel_size",
+        cli_args=["--cfg-parallel-size", "2"],
+    ),
+    DiffusionAccs.TENSOR_PARALLEL: AccelerationDescriptor(
+        omni_kwargs={},
+        omni_parallel_kwargs={"tensor_parallel_size": 2},
+        device_count_key="tensor_parallel_size",
+        cli_args=["--tensor-parallel-size", "2"],
+    ),
+    DiffusionAccs.CPU_OFFLOAD: AccelerationDescriptor(
+        omni_kwargs={"enable_cpu_offload": True},
+        omni_parallel_kwargs={},
+        device_count_key=None,
+        cli_args=["--enable-cpu-offload"],
+    ),
+    DiffusionAccs.LAYERWISE_OFFLOAD: AccelerationDescriptor(
+        omni_kwargs={"enable_layerwise_offload": True},
+        omni_parallel_kwargs={},
+        device_count_key=None,
+        cli_args=["--enable-layerwise-offload"],
+    ),
+    DiffusionAccs.VAE_PATCH_PARALLEL: AccelerationDescriptor(
+        omni_kwargs={"vae_use_tiling": True},
+        omni_parallel_kwargs={"vae_patch_parallel_size": 2},
+        device_count_key="vae_patch_parallel_size",
+        cli_args=["--vae-use-tiling", "--vae-patch-parallel-size", "2"],
+    ),
+}

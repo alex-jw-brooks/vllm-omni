@@ -4,7 +4,7 @@ Utilities for resolving real models to their tiny model equivalents.
 
 import logging
 
-from tests.model_tests.config_types import DiffusionAccs
+from tests.model_tests.config_types import ACC_DESCRIPTORS, DiffusionAccs
 from tests.model_tests.model_settings import DIFFUSION_TEST_SETTINGS
 from vllm_omni.diffusion.data import DiffusionParallelConfig, resolve_model_class_name
 from vllm_omni.entrypoints.omni import Omni
@@ -36,53 +36,6 @@ def resolve_tiny_model_path(model: str) -> str:
 
 
 ### helpers for building Diffusion Models
-
-### Mappings & utils for building offline Omni() instances given a list of enabled accelerations
-ACC_OMNI_KWARGS = {
-    DiffusionAccs.VAE_PATCH_PARALLEL: {"vae_use_tiling": True},
-    DiffusionAccs.CPU_OFFLOAD: {"enable_cpu_offload": True},
-    DiffusionAccs.LAYERWISE_OFFLOAD: {"enable_layerwise_offload": True},
-    DiffusionAccs.CACHE_DIT: {"cache_backend": "cache_dit"},
-    DiffusionAccs.TEA_CACHE: {"cache_backend": "tea_cache"},
-}
-
-ACC_PARALLEL_KWARGS = {
-    DiffusionAccs.HSDP: {"use_hsdp": True, "hsdp_shard_size": 2},
-    DiffusionAccs.TENSOR_PARALLEL: {"tensor_parallel_size": 2},
-    DiffusionAccs.CFG_PARALLEL: {"cfg_parallel_size": 2},
-    DiffusionAccs.VAE_PATCH_PARALLEL: {"vae_patch_parallel_size": 2},
-    # For SP, we don't run ring here to conserve devices, since it is easy
-    # to blow up the number of needed devices fast. Compatibility for ring
-    # and ulysses together should be tested generically outside of these tests.
-    DiffusionAccs.SEQUENCE_PARALLEL: {"ulysses_degree": 2},
-}
-
-ACC_DEVICE_COUNT_KEYS = {
-    DiffusionAccs.TENSOR_PARALLEL: "tensor_parallel_size",
-    DiffusionAccs.CFG_PARALLEL: "cfg_parallel_size",
-    DiffusionAccs.SEQUENCE_PARALLEL: "ulysses_degree",
-    DiffusionAccs.VAE_PATCH_PARALLEL: "vae_patch_parallel_size",
-    DiffusionAccs.HSDP: "hsdp_shard_size",
-}
-
-### CLI args for launching an OmniServer subprocess per acceleration.
-# Follows the same pattern as e2e online serving tests, which hand-code
-# their server_args lists in OmniServerParams.
-ACC_SERVER_ARGS: dict[DiffusionAccs, list[str]] = {
-    DiffusionAccs.HSDP: ["--use-hsdp", "--hsdp-shard-size", "2"],
-    DiffusionAccs.TEA_CACHE: ["--cache-backend", "tea_cache"],
-    DiffusionAccs.CACHE_DIT: ["--cache-backend", "cache_dit"],
-    DiffusionAccs.SEQUENCE_PARALLEL: ["--usp", "2"],
-    DiffusionAccs.CFG_PARALLEL: ["--cfg-parallel-size", "2"],
-    DiffusionAccs.TENSOR_PARALLEL: ["--tensor-parallel-size", "2"],
-    DiffusionAccs.CPU_OFFLOAD: ["--enable-cpu-offload"],
-    DiffusionAccs.LAYERWISE_OFFLOAD: ["--enable-layerwise-offload"],
-    DiffusionAccs.VAE_PATCH_PARALLEL: ["--vae-use-tiling", "--vae-patch-parallel-size", "2"],
-}
-
-## TODO ^ These should be in the same object, it's getting messy.
-
-
 def get_required_device_count(accelerations: list[DiffusionAccs] | None) -> int:
     """Compute the minimum number of devices needed for a set of accelerations.
     The total is the product of all parallel dimensions (defaulting to 1).
@@ -94,9 +47,9 @@ def get_required_device_count(accelerations: list[DiffusionAccs] | None) -> int:
         return count
 
     for acc in accelerations:
-        key = ACC_DEVICE_COUNT_KEYS.get(acc)
-        if key is not None:
-            count *= ACC_PARALLEL_KWARGS[acc][key]
+        descriptor = ACC_DESCRIPTORS[acc]
+        if descriptor.device_count_key is not None:
+            count *= descriptor.omni_parallel_kwargs[descriptor.device_count_key]
     return count
 
 
@@ -105,7 +58,7 @@ def build_parallel_config_from_diff_accelerations(accelerations: list[DiffusionA
     build the parallel config needed for the Omni() object (if any)."""
     config_kwargs = {}
     for acc in accelerations:
-        update_dict = ACC_PARALLEL_KWARGS.get(acc, {})
+        update_dict = ACC_DESCRIPTORS[acc].omni_parallel_kwargs
         config_kwargs.update(update_dict)
     if config_kwargs:
         return DiffusionParallelConfig(**config_kwargs)
@@ -125,7 +78,7 @@ def build_omni_from_diff_accelerations(accelerations: list[DiffusionAccs] | None
     if parallel_config is not None:
         acc_kwargs["parallel_config"] = parallel_config
     for acc in accelerations:
-        update_dict = ACC_OMNI_KWARGS.get(acc, {})
+        update_dict = ACC_DESCRIPTORS[acc].omni_kwargs
         acc_kwargs.update(update_dict)
 
     # Keys passed through should mostly be things like enforce_eager;
@@ -145,5 +98,11 @@ def build_server_args_from_diff_accelerations(accelerations: list[DiffusionAccs]
         return []
     args = []
     for acc in accelerations:
-        args.extend(ACC_SERVER_ARGS.get(acc, []))
+        acc_cli_args = ACC_DESCRIPTORS[acc].cli_args
+        args.extend(acc_cli_args)
     return args
+
+
+### TODO - fix the qwen3omni preproc layer index
+#  - fix slow start
+#  - fix audio out
