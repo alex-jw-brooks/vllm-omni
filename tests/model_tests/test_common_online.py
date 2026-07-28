@@ -35,7 +35,9 @@ def test_online_on_supported_tasks(
     """Smoke test: start a tiny model server and run each supported task via the API."""
     model_path = tiny_model_paths[model_name]
     server_args = build_server_args_from_diff_accelerations(accelerations)
-    server_args.append("--enforce-eager")
+    # NOTE: We set enforce eager and disable prefix cache
+    # to skip compiling and encoder profiling where possible.
+    server_args.extend(["--enforce-eager", "--no-enable-prefix-caching"])
 
     with OmniServer(model_path, server_args) as server:
         # TODO: We may want to revisit run_level validation here,

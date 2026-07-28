@@ -33,10 +33,13 @@ def test_pipeline_on_supported_tasks(
     # since starting the server can take 10+ seconds, even for tiny models.
     #
     # NOTE: Be sure to install pytest-subtests if you're running on pytest < 9
+    # NOTE: We set enforce eager and disable prefix cache
+    # to skip compiling and encoder profiling where possible.
     omni = build_omni_from_diff_accelerations(
         accelerations=accelerations,
         model=tiny_model_paths[model_name],
         enforce_eager=True,
+        enable_prefix_caching=False,
     )
     try:
         for task_type in supported_tasks:
