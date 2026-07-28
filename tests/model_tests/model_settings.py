@@ -55,14 +55,22 @@ DIFFUSION_TEST_SETTINGS: dict[str, DiffusionModelTestOpts] = {
 }
 
 OMNI_MODEL_SETTINGS: dict[str, OmniModelTestOpts] = {
-    # TODO: Thinker only / resolution needs to be handled cleanly here
+    "qwen3_omni_thinker": OmniModelTestOpts(
+        model="Qwen/Qwen3-Omni-30B-A3B-Instruct",
+        builder=model_builders.tiny_qwen3_omni_thinker_builder,
+        supported_tasks=[ModelTasks.TEXT_TO_TEXT],
+        check_determinism=False,
+        check_multi_output=False,
+        num_devices_required=1,
+    ),
     "qwen3_omni_moe": OmniModelTestOpts(
         model="Qwen/Qwen3-Omni-30B-A3B-Instruct",
         builder=model_builders.tiny_qwen3_omni_builder,
-        supported_tasks=[ModelTasks.TEXT_TO_TEXT],  # ModelTasks.TEXT_TO_AUDIO],
+        supported_tasks=[ModelTasks.TEXT_TO_TEXT, ModelTasks.TEXT_TO_AUDIO],
         check_determinism=False,
         check_multi_output=False,
-    )
+        num_devices_required=2,
+    ),
 }
 
 # TODO: This is probably silly, as practically these are always disjoint,

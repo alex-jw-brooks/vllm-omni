@@ -65,10 +65,25 @@ def get_test_group_marks(model_name: str, test_group: list[DiffusionAccs] | None
     return marks
 
 
-def omni_parametrization(model_name: str, test_info: ModelTestOpts, online: bool):
-    # FIXME - This should also expand on accelerations, but it probably makes more
-    # sense to fully unify the test opt classes since we also have models in the
-    # middle like Bagel (multistage diffusion).
+def omni_parametrization(model_name: str, test_info: OmniModelTestOpts, online: bool):
+    # TODO - fix duplication with diffusion parametrization and clean this up
+    marks = list(test_info.marks) if test_info.marks is not None else []
+    required_devices = test_info.num_devices_required
+    if required_devices > MAX_CI_DEVICES:
+        raise ValueError(
+            f"Omni model {model_name} requires {required_devices} devices, "
+            f"but the max CI device count is {MAX_CI_DEVICES}. "
+        )
+
+    marks.extend(hardware_marks(res={"cuda": "L4"}, num_cards=required_devices))
+    assert current_omni_platform is not None and current_omni_platform.device_count is not None
+    device_count = current_omni_platform.device_count()
+    if current_omni_platform.is_cuda() and device_count < required_devices:
+        marks.append(pytest.mark.skip(reason=f"Need {required_devices} devices, got {device_count}"))
+    if required_devices > 1:
+        marks.append(pytest.mark.full_model)
+    else:
+        marks.append(pytest.mark.core_model)
     return [
         pytest.param(
             model_name,
@@ -77,7 +92,7 @@ def omni_parametrization(model_name: str, test_info: ModelTestOpts, online: bool
             test_info.check_multi_output,
             test_info.check_determinism,
             id=model_name,
-            marks=test_info.marks if test_info.marks is not None else [],
+            marks=marks,
         )
     ]
 

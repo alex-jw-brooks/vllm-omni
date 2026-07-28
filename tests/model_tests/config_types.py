@@ -79,6 +79,7 @@ class DiffusionModelTestOpts(ModelTestOpts):
     extra_test_groups: list[list[DiffusionAccs]] | None = None
 
 
+@dataclass
 class OmniModelTestOpts(ModelTestOpts):
     # The number of devices required to run these tests.
     # TODO (Alex): We need a clean way of handling things like TP
@@ -86,10 +87,6 @@ class OmniModelTestOpts(ModelTestOpts):
     # probably be moved into ModelTestOpts and implemented generically,
     # since it would also be useful in considering models like Bagel.
     num_devices_required: int = 1
-
-    # Testing options for omni
-    supports_prefix_caching: bool
-    supports_async_chunking: bool
 
 
 @dataclass

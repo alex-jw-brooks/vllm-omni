@@ -11,6 +11,7 @@ from typing import TypeAlias
 
 import numpy as np
 from PIL import Image
+from vllm.sampling_params import SamplingParams
 
 from tests.helpers.runtime import (
     DiffusionResponse,
@@ -26,6 +27,12 @@ from vllm_omni.outputs import OmniRequestOutput
 
 OMNI_TEXT_PROMPT = "Hello, briefly describe yourself."
 OMNI_SPEECH_PROMPT = "Say: hello world"
+
+_THINKER_SP = SamplingParams(max_tokens=32, temperature=0.0)
+_TALKER_SP = SamplingParams(max_tokens=64, temperature=0.9, top_k=50, repetition_penalty=1.05)
+_CODE2WAV_SP = SamplingParams(max_tokens=256, temperature=0.0)
+
+OMNI_SPEECH_SAMPLING_PARAMS = [_THINKER_SP, _TALKER_SP, _CODE2WAV_SP]
 
 _OMNI_SYSTEM_PROMPT = (
     "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, "
@@ -122,7 +129,7 @@ def _validate_offline_speech(outputs: list[OmniRequestOutput]) -> None:
     audio_stage = next((o for o in outputs if getattr(o, "final_output_type", None) == "audio"), None)
     assert audio_stage is not None
     assert audio_stage.request_output is not None
-    assert audio_stage.request_output.outputs[0].multimodal_output.get("audio") is not None
+    assert audio_stage.multimodal_output.get("audio") is not None
 
 
 ### Output extractor utils for offline / online paths respectively
@@ -158,11 +165,18 @@ def _validate_video(outputs: list[OmniRequestOutput], expected_n: int = 1):
 
 ### Offline helpers
 def _run_offline_t2t(omni: Omni):
-    return omni.generate({"prompt": _format_omni_chat_prompt(OMNI_TEXT_PROMPT), "modalities": ["text"]})
+    sp = [_THINKER_SP] * omni.num_stages
+    return omni.generate(
+        {"prompt": _format_omni_chat_prompt(OMNI_TEXT_PROMPT), "modalities": ["text"]},
+        sp,
+    )
 
 
 def _run_offline_t2s(omni: Omni):
-    return omni.generate({"prompt": _format_omni_chat_prompt(OMNI_SPEECH_PROMPT), "modalities": ["audio"]})
+    return omni.generate(
+        {"prompt": _format_omni_chat_prompt(OMNI_SPEECH_PROMPT), "modalities": ["audio"]},
+        OMNI_SPEECH_SAMPLING_PARAMS,
+    )
 
 
 def _run_offline_t2i(omni: Omni, params: OmniDiffusionSamplingParams = IMAGE_GEN_SAMPLING_PARAMS):
@@ -319,6 +333,7 @@ def run_and_validate_online_text_to_text_request(server: OmniServer, client: Ope
         "model": server.model,
         "messages": messages,
         "modalities": ["text"],
+        "max_completion_tokens": 32,
     }
     _validate_text(_get_online_omni_response(client.send_omni_request(request_config)))
 
@@ -330,6 +345,7 @@ def run_and_validate_online_text_to_speech_request(server: OmniServer, client: O
         "model": server.model,
         "messages": messages,
         "modalities": ["audio"],
+        "max_completion_tokens": 32,
     }
     _validate_speech(_get_online_omni_response(client.send_omni_request(request_config)))
 
