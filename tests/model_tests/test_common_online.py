@@ -37,7 +37,18 @@ def test_online_on_supported_tasks(
     server_args = build_server_args_from_diff_accelerations(accelerations)
     # NOTE: We set enforce eager and disable prefix cache
     # to skip compiling and encoder profiling where possible.
-    server_args.extend(["--enforce-eager", "--no-enable-prefix-caching"])
+    #
+    # We also lower gpu memory utilization for tiny models decrease
+    # the allocation time for the block pool in AR stages, otherwise
+    # it adds up quickly.
+    server_args.extend(
+        [
+            "--enforce-eager",
+            "--no-enable-prefix-caching",
+            "--gpu-memory-utilization",
+            "0.1",
+        ]
+    )
 
     with OmniServer(model_path, server_args) as server:
         # TODO: We may want to revisit run_level validation here,
