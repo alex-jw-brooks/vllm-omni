@@ -1,0 +1,47 @@
+{
+  "architectures": [
+    "BagelForConditionalGeneration"
+  ],
+  "model_type": "bagel",
+  "visual_gen": true,
+  "visual_und": true,
+  "llm_config": {
+    "model_type": "qwen2_mot",
+    "vocab_size": 152064,
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 4,
+    "max_position_embeddings": 32768,
+    "max_window_layers": 2,
+    "use_sliding_window": false,
+    "sliding_window": 32768,
+    "rms_norm_eps": 1e-06,
+    "rope_theta": 10000.0,
+    "hidden_act": "silu",
+    "qk_norm": true,
+    "tie_word_embeddings": false,
+    "layer_module": "Qwen2MoTDecoderLayer"
+  },
+  "vit_config": {
+    "model_type": "siglip_vision_model",
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 4,
+    "num_channels": 3,
+    "image_size": 56,
+    "patch_size": 14
+  },
+  "vae_config": {
+    "z_channels": 16,
+    "downsample": 8
+  },
+  "latent_patch_size": 2,
+  "max_latent_size": 32,
+  "vit_max_num_patch_per_side": 70,
+  "connector_act": "gelu_pytorch_tanh",
+  "interpolate_pos": false,
+  "timestep_shift": 1.0
+}

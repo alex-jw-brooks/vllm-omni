@@ -55,6 +55,18 @@ DIFFUSION_TEST_SETTINGS: dict[str, DiffusionModelTestOpts] = {
 }
 
 OMNI_MODEL_SETTINGS: dict[str, OmniModelTestOpts] = {
+    # FIXME - need to fix the sp / output parsing for bagel
+    # tests since it's multi-stage. We probably should just
+    # use default sample params since if the tiny model is
+    # small enough, the inference is fast
+    "bagel": OmniModelTestOpts(
+        model="ByteDance-Seed/BAGEL-7B-MoT",
+        builder=model_builders.build_tiny_bagel,
+        supported_tasks=[ModelTasks.TEXT_TO_IMAGE],
+        check_determinism=False,
+        check_multi_output=False,
+        num_devices_required=2,
+    ),
     "qwen3_omni_thinker": OmniModelTestOpts(
         model="Qwen/Qwen3-Omni-30B-A3B-Instruct",
         builder=model_builders.tiny_qwen3_omni_thinker_builder,

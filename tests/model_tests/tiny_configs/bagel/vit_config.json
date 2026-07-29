@@ -1,0 +1,10 @@
+{
+  "model_type": "siglip_vision_model",
+  "hidden_size": 64,
+  "intermediate_size": 128,
+  "num_hidden_layers": 2,
+  "num_attention_heads": 4,
+  "num_channels": 3,
+  "image_size": 56,
+  "patch_size": 14
+}
