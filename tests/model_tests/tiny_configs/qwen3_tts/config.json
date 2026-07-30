@@ -1,0 +1,103 @@
+{
+  "architectures": [
+    "Qwen3TTSForConditionalGeneration"
+  ],
+  "model_type": "qwen3_tts",
+  "tokenizer_type": "qwen3_tts_tokenizer_12hz",
+  "tts_model_size": "tiny",
+  "tts_model_type": "custom_voice",
+  "im_start_token_id": 151644,
+  "im_end_token_id": 151645,
+  "tts_pad_token_id": 151671,
+  "tts_bos_token_id": 151672,
+  "tts_eos_token_id": 151673,
+  "talker_config": {
+    "model_type": "qwen3_tts_talker",
+    "vocab_size": 3072,
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 4,
+    "head_dim": 16,
+    "hidden_act": "silu",
+    "max_position_embeddings": 4096,
+    "rms_norm_eps": 1e-06,
+    "rope_theta": 1000000,
+    "rope_scaling": {
+      "interleaved": true,
+      "mrope_section": [
+        2,
+        2,
+        4
+      ],
+      "rope_type": "default",
+      "type": "default"
+    },
+    "use_sliding_window": false,
+    "num_code_groups": 4,
+    "text_hidden_size": 64,
+    "text_vocab_size": 151936,
+    "position_id_per_seconds": 13,
+    "codec_eos_token_id": 2150,
+    "codec_think_id": 2154,
+    "codec_nothink_id": 2155,
+    "codec_think_bos_id": 2156,
+    "codec_think_eos_id": 2157,
+    "codec_pad_id": 2148,
+    "codec_bos_id": 2149,
+    "spk_id": {
+      "Vivian": 2900
+    },
+    "spk_is_dialect": {
+      "Vivian": false
+    },
+    "codec_language_id": {
+      "english": 2050
+    },
+    "code_predictor_config": {
+      "model_type": "qwen3_tts_talker_code_predictor",
+      "vocab_size": 2048,
+      "hidden_size": 64,
+      "intermediate_size": 128,
+      "num_hidden_layers": 2,
+      "num_attention_heads": 4,
+      "num_key_value_heads": 4,
+      "head_dim": 16,
+      "hidden_act": "silu",
+      "max_position_embeddings": 65536,
+      "rms_norm_eps": 1e-06,
+      "rope_theta": 1000000,
+      "num_code_groups": 4
+    }
+  },
+  "speaker_encoder_config": {
+    "mel_dim": 32,
+    "enc_dim": 64,
+    "enc_channels": [
+      32,
+      32,
+      32,
+      32,
+      96
+    ],
+    "enc_kernel_sizes": [
+      5,
+      3,
+      3,
+      3,
+      1
+    ],
+    "enc_dilations": [
+      1,
+      2,
+      3,
+      4,
+      1
+    ],
+    "enc_attention_channels": 32,
+    "enc_res2net_scale": 4,
+    "enc_se_channels": 32,
+    "sample_rate": 24000
+  }
+}

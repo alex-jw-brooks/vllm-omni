@@ -4,8 +4,8 @@ Utilities for resolving real models to their tiny model equivalents.
 
 import logging
 import os
-import shutil
 import tempfile
+from dataclasses import fields
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +16,7 @@ from diffusers.pipelines.pipeline_loading_utils import _get_pipeline_class, simp
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from transformers import AutoConfig, PreTrainedModel
 from vllm.config import ModelConfig, VllmConfig
+from vllm.model_executor.models.utils import WeightsMapper
 
 from tests.model_tests.config_types import ACC_DESCRIPTORS, DiffusionAccs
 from vllm_omni.diffusion.data import DiffusionParallelConfig, resolve_model_class_name
@@ -197,20 +198,6 @@ def build_tiny_from_configs(pipeline_name: str, model_id: str, configs_dir: str 
     return model_dir
 
 
-### Misc helpers for building more complex models that depend on external implementations
-def copy_configs_to_model_dir(cfg_dir: Path, model_dir: Path, config_names: list[str]):
-    """Ensure configs exist in the tiny config dir, then copy them to the model output dir
-    with tiny weights.."""
-
-    copy_paths = [cfg_dir / fname for fname in os.listdir(cfg_dir) if fname in config_names]
-    assert len(copy_paths) == len(config_names)
-    for cfg_name in config_names:
-        cfg_path = cfg_dir / cfg_name
-        out_path = model_dir / cfg_name
-        assert os.path.isfile(cfg_path)
-        shutil.copy(cfg_path, out_path)
-
-
 def get_vllm_config(model_path: str, trust_remote_code: bool):
     """Given a model path, create a vLLM config for it."""
     model_config = ModelConfig(
@@ -266,3 +253,28 @@ def unfuse_packed_state_dict(
     if missing:
         raise ValueError(f"packed_mapping entries had no matching keys: {missing}")
     return out
+
+
+def map_vllm_weights_to_hf(
+    sd: dict[str, torch.Tensor],
+    model_cls: type,
+) -> dict[str, torch.Tensor]:
+    """Invert orig_to_new_prefix on model mappers; this requires
+    that the weight mapper does not have any other truthy values
+    in the dataclass and that orig_to_new_prefix is bijective.
+    """
+
+    mapper = model_cls.hf_to_vllm_mapper
+    prefix_mapping = mapper.orig_to_new_prefix
+    # We need the actual mapping / to not drop the things that do not map here...
+    # We only handle inverting
+    is_unsupported = any(getattr(mapper, f.name) for f in fields(mapper) if f.name != "orig_to_new_prefix")
+    if is_unsupported:
+        raise NotImplementedError("weight remapping requires the mapper to only contain prefix mappings")
+
+    rev_map = {value: key for key, value in prefix_mapping.items()}
+    if len(rev_map) != len(prefix_mapping):
+        raise ValueError("weight remapping currently requires the prefix map to be bijective")
+    inverse_mapper = WeightsMapper(orig_to_new_prefix=rev_map)
+
+    return inverse_mapper.apply_dict(sd)

@@ -1,19 +1,24 @@
 import json
+import os
+import shutil
 from pathlib import Path
 
 import torch
 from huggingface_hub import snapshot_download
 from safetensors.torch import save_file
 from transformers import AutoConfig, AutoModelForMultimodalLM
+from transformers import AutoConfig as HfAutoConfig
 from vllm.config.vllm import set_current_vllm_config
+from vllm.model_executor.models.qwen3 import Qwen3ForCausalLM
+from vllm.model_executor.models.registry import ModelRegistry
 from vllm.transformers_utils.processors.bagel import BagelProcessor
 
 from tests.model_tests.utils import (
     TINY_CONFIGS_DIR,
     build_tiny_from_configs,
-    copy_configs_to_model_dir,
     get_tiny_model_path,
     get_vllm_config,
+    map_vllm_weights_to_hf,
     stub_vllm_parallel_state,
     unfuse_packed_state_dict,
 )
@@ -21,6 +26,18 @@ from vllm_omni.diffusion.models.bagel.autoencoder import AutoEncoder
 from vllm_omni.diffusion.models.bagel.pipeline_bagel import default_ae_params
 from vllm_omni.model_executor.models.bagel.bagel import (
     OmniBagelForConditionalGeneration,
+)
+from vllm_omni.model_executor.models.qwen3_tts.configuration_qwen3_tts import (
+    Qwen3TTSConfig,
+)
+from vllm_omni.model_executor.models.qwen3_tts.qwen3_tts_talker import (
+    Qwen3TTSTalkerForConditionalGeneration,
+)
+from vllm_omni.model_executor.models.qwen3_tts.tokenizer_12hz.configuration_qwen3_tts_tokenizer_v2 import (
+    Qwen3TTSTokenizerV2Config,
+)
+from vllm_omni.model_executor.models.qwen3_tts.tokenizer_12hz.modeling_qwen3_tts_tokenizer_v2 import (
+    Qwen3TTSTokenizerV2Model,
 )
 
 
@@ -79,11 +96,7 @@ def build_tiny_bagel() -> str:
         cfg = json.load(cfg_ptr)
 
     # Ensure each subconfig exists and copy it into the model dir
-    copy_configs_to_model_dir(
-        cfg_dir,
-        model_dir_path,
-        ["config.json", "llm_config.json", "vit_config.json"],
-    )
+    shutil.copytree(cfg_dir, model_dir_path, dirs_exist_ok=True)
 
     # Save the Bagel processor (uses a smaller image size)
     image_size = cfg["vit_config"]["image_size"]
@@ -131,3 +144,52 @@ def tiny_qwen3_omni_builder() -> str:
 def tiny_qwen3_omni_thinker_builder() -> str:
     """Build a tiny thinker-only Qwen3Omni model."""
     return _build_tiny_qwen3_omni(enable_audio_output=False)
+
+
+def tiny_qwen3_tts_builder() -> str:
+    """Build a tiny Qwen3-TTS model with random weights."""
+    ref_model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    model_dir = get_tiny_model_path("qwen3_tts")
+    model_dir_path = Path(model_dir)
+    prev_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.bfloat16)
+    # Copy configs out of the tiny configs dir
+    shutil.copytree(TINY_CONFIGS_DIR / "qwen3_tts", model_dir_path, dirs_exist_ok=True)
+
+    # Download unmodified artifacts / tokenizer, etc
+    snapshot_download(
+        ref_model,
+        allow_patterns=["tokenizer*", "merges.txt", "vocab.json"],
+        local_dir=model_dir,
+    )
+
+    # Build the speech tokenizer
+    tok_subdir = "speech_tokenizer"
+    tok_config = Qwen3TTSTokenizerV2Config.from_pretrained(model_dir, subfolder=tok_subdir)
+    tts_tok = Qwen3TTSTokenizerV2Model(tok_config)
+    save_file(tts_tok.state_dict(), os.path.join(model_dir, tok_subdir, "model.safetensors"))
+
+    # Build the model weights using the vLLM model definition
+    HfAutoConfig.register("qwen3_tts", Qwen3TTSConfig)
+    ModelRegistry.register_model(
+        "Qwen3TTSForConditionalGeneration",
+        Qwen3TTSTalkerForConditionalGeneration,
+    )
+    stub_vllm_parallel_state()
+    vllm_config = get_vllm_config(model_dir, trust_remote_code=True)
+    with set_current_vllm_config(vllm_config):
+        model = Qwen3TTSTalkerForConditionalGeneration(vllm_config=vllm_config, prefix="")
+    sd = model.state_dict()
+    talker_state_dict = unfuse_packed_state_dict(sd, Qwen3ForCausalLM.packed_modules_mapping)
+    # We need to reverse map the vLLM module mapping to get the original dict format back
+    talker_state_dict = map_vllm_weights_to_hf(
+        talker_state_dict,
+        Qwen3TTSTalkerForConditionalGeneration,
+    )
+
+    # Ensure that the checkpoint is valid by making sure it's reloadable
+    model.load_weights(talker_state_dict.items())
+    save_file(talker_state_dict, model_dir_path / "model.safetensors")
+
+    torch.set_default_dtype(prev_dtype)
+    return model_dir

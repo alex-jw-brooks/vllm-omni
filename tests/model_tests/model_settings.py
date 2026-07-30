@@ -83,6 +83,14 @@ OMNI_MODEL_SETTINGS: dict[str, OmniModelTestOpts] = {
         check_multi_output=False,
         num_devices_required=2,
     ),
+    "qwen3_tts": OmniModelTestOpts(
+        model="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+        builder=model_builders.tiny_qwen3_tts_builder,
+        supported_tasks=[ModelTasks.TEXT_TO_AUDIO],
+        check_determinism=False,
+        check_multi_output=False,
+        num_devices_required=2,
+    ),
 }
 
 # TODO: This is probably silly, as practically these are always disjoint,
