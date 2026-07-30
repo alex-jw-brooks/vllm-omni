@@ -274,10 +274,10 @@ def test_batched_completions_text(omni_server, openai_client) -> None:
     )
     assert responses
     resp = responses[0]
-    assert resp.success, f"Batch request failed: {resp.error_message}"
+    assert resp.success
     body = resp.json_body
     choices = body["choices"]
-    assert len(choices) == 2, f"Expected 2 choices, got {len(choices)}"
+    assert len(choices) == 2
     for choice in choices:
         assert choice["message"]["content"]
 
@@ -304,8 +304,9 @@ def test_batched_completions_audio_out(omni_server, openai_client) -> None:
             },
         },
     )
-    assert responses and len(responses) == 1 and responses[0].success
+    assert responses and len(responses) == 1
     resp = responses[0]
+    assert resp.success
     choices = resp.json_body["choices"]
 
     assert len(choices) == num_messages
@@ -314,3 +315,36 @@ def test_batched_completions_audio_out(omni_server, openai_client) -> None:
     for choice in choices:
         assert choice["message"]["audio"]["data"]
         assert choice["message"]["content"]
+
+
+@pytest.mark.advanced_model
+@pytest.mark.core_model
+@pytest.mark.omni
+@hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+@pytest.mark.parametrize(
+    "sad_opts",
+    [
+        {"stream": "not-a-bool"},  # Fails validation
+        {"n": 2},  # vLLM Batched endpoints doesn't support n > 1
+    ],
+)
+def test_batched_completions_with_bad_values(omni_server, openai_client, sad_opts) -> None:
+    """Ensure that a bad values are correctly handles as 400s."""
+    messages = [
+        [{"role": "user", "content": "Say hello."}],
+        [{"role": "user", "content": "Say goodbye."}],
+    ]
+    responses = openai_client.send_batched_chat_completions_http_request(
+        {
+            "json": {
+                "model": omni_server.model,
+                "messages": messages,
+                **sad_opts,
+            },
+        },
+    )
+    assert responses and len(responses) == 1
+    resp = responses[0]
+    assert not responses[0].success
+    assert resp.status_code == 400

@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from fastapi import Request
+from pydantic import ValidationError
 from vllm.entrypoints.openai.chat_completion.protocol import (
     BatchChatCompletionRequest,
     ChatCompletionRequest,
@@ -54,13 +55,13 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
             if choice.message.audio:
                 audio_choice = OmniOpenAIServingChatBatch.validate_content_choice(
                     choice,
-                    audio_choice is None,
+                    audio_choice is not None,
                     is_audio=True,
                 )
             elif choice.message.content:
                 text_choice = OmniOpenAIServingChatBatch.validate_content_choice(
                     choice,
-                    text_choice is None,
+                    text_choice is not None,
                     is_audio=False,
                 )
         # Ensure we have one of each, then combine the audio + text content
@@ -82,8 +83,13 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
         total_prompt_tokens = 0
         total_completion_tokens = 0
 
-        for msg in request.messages:
-            chat_cmp_request = request.to_chat_completion_request(msg)
+        for idx, msg in enumerate(request.messages):
+            try:
+                chat_cmp_request = request.to_chat_completion_request(msg)
+            except ValidationError as e:
+                return self._create_error_response(
+                    f"Message {idx} could not be converted to a chat completion request: {e}",
+                )
             # Streaming isn't supported for batch chat completions,
             # so always set to False & warn if it was requested.
             enabled_streaming |= chat_cmp_request.stream
