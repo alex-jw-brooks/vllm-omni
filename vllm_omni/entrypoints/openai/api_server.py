@@ -1291,7 +1291,7 @@ async def create_batch_chat_completion(request: BatchChatCompletionRequest, raw_
             content=result.model_dump(),
             status_code=result.error.code if result.error else 400,
         )
-    return JSONResponse(content=result.model_dump(mode="json"))
+    return JSONResponse(content=result.model_dump(mode="json", serialize_as_any=True, warnings="none"))
 
 
 _remove_route_from_router(router, "/v1/audio/speech", {"POST"})

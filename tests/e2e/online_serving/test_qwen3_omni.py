@@ -330,7 +330,7 @@ def test_batched_completions_audio_out(omni_server, openai_client) -> None:
     ],
 )
 def test_batched_completions_with_bad_values(omni_server, openai_client, sad_opts) -> None:
-    """Ensure that a bad values are correctly handles as 400s."""
+    """Ensure that a bad values are correctly handled as 400s."""
     messages = [
         [{"role": "user", "content": "Say hello."}],
         [{"role": "user", "content": "Say goodbye."}],
