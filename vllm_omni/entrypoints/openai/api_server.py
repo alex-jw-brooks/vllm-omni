@@ -1283,7 +1283,7 @@ async def create_batch_chat_completion(request: BatchChatCompletionRequest, raw_
     except (EngineGenerateError, EngineDeadError) as exc:
         return _create_engine_error_json_response(raw_request, exc)
     except Exception as e:
-        logger.exception("Chat completion failed: %s", e)
+        logger.exception("Batched chat completion failed: %s", e)
         raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value, detail=str(e)) from e
 
     if isinstance(result, ErrorResponse):

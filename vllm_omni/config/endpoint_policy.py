@@ -21,7 +21,6 @@ class RouteTarget(NamedTuple):
 class OmniServingCapability(Enum):
     """Serving capabilities that pipelines can shut down."""
 
-    CHAT_COMPLETIONS_BATCH = RouteTarget("/v1/chat/completions/batch", frozenset({"POST"}))
     COMPLETIONS = RouteTarget("/v1/completions", frozenset({"POST"}))
 
     @property

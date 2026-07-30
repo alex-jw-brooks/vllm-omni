@@ -308,20 +308,9 @@ def test_batched_completions_audio_out(omni_server, openai_client) -> None:
     resp = responses[0]
     choices = resp.json_body["choices"]
 
-    # FIXME (Alex): The text and audio are currently yielded as separate choices per
-    # conversation, which is why we have 4 choices here. This should be collapsed
-    # properly in chat completions, and this test should be updated to 2 choices.
-    assert len(choices) == (num_messages * 2)
-    audio_choices = [c for c in choices if c["message"].get("audio") is not None]
-    text_choices = [c for c in choices if c["message"].get("audio") is None]
+    assert len(choices) == num_messages
 
-    assert len(audio_choices) == num_messages
-    assert len(text_choices) == num_messages
-
-    # Audio choices should have nonempty audio
-    for choice in audio_choices:
+    # Every message in the batch should contain both the audio and text content
+    for choice in choices:
         assert choice["message"]["audio"]["data"]
-
-    # Text choices should have nonempty content
-    for choice in text_choices:
         assert choice["message"]["content"]
