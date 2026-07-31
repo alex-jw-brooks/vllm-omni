@@ -74,31 +74,42 @@ def test_enhance_prompt_uses_rank0_result_in_distributed(monkeypatch):
     assert broadcasts == [([None], 0)]
 
 
+def _make_batch(*requests):
+    return SimpleNamespace(
+        num_reqs=len(requests),
+        requests=list(requests),
+        request_id=requests[0].request_id if requests else "test",
+    )
+
+
+def _make_request(extra_args=None, *, request_id="real_req"):
+    return SimpleNamespace(
+        request_id=request_id,
+        sampling_params=SimpleNamespace(extra_args=extra_args or {}),
+    )
+
+
 def test_should_apply_pe_true_when_requested():
     """Ensure that use_prompt_upscaling forwards through."""
-    req = SimpleNamespace(
-        request_ids=["real_req"],
-        sampling_params=SimpleNamespace(extra_args={"use_prompt_upscaling": True}),
-    )
-    assert ErnieImagePipeline._should_apply_pe(req) is True
+    batch = _make_batch(_make_request({"use_prompt_upscaling": True}))
+    assert ErnieImagePipeline._should_apply_pe(batch) is True
 
 
 def test_should_apply_pe_false_when_not_requested():
     """Ensure that use_prompt_upscaling is False by default."""
-    req = SimpleNamespace(
-        request_ids=["real_req"],
-        sampling_params=SimpleNamespace(extra_args={}),
-    )
-    assert ErnieImagePipeline._should_apply_pe(req) is False
+    batch = _make_batch(_make_request({}))
+    assert ErnieImagePipeline._should_apply_pe(batch) is False
 
 
 def test_should_apply_pe_disables_dummy_warmup_request():
     """Ensure that use_prompt_upscaling is False during warmup."""
-    req = SimpleNamespace(
-        is_dummy_run=lambda: True,
-        sampling_params=SimpleNamespace(extra_args={"use_prompt_upscaling": True}),
+    batch = _make_batch(
+        _make_request(
+            {"use_prompt_upscaling": True},
+            request_id="dummy_req_id",
+        )
     )
-    assert ErnieImagePipeline._should_apply_pe(req) is False
+    assert ErnieImagePipeline._should_apply_pe(batch) is False
 
 
 def test_enhance_prompt_triggers_lazy_load(monkeypatch):
