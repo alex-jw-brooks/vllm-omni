@@ -3507,20 +3507,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             num_inference_steps = extra_body.get("num_inference_steps")
             quality = extra_body.get("quality")
             guidance_scale = extra_body.get("guidance_scale")
-<<<<<<< HEAD
             true_cfg_scale = extra_body.get("true_cfg_scale")
-=======
-            true_cfg_scale = extra_body.get("true_cfg_scale") or extra_body.get("cfg_scale")
-            cfg_text_scale = extra_body.get("cfg_text_scale")
-            cfg_img_scale = extra_body.get("cfg_img_scale")
-            use_prompt_upscaling = extra_body.get("use_prompt_upscaling")
-            # TODO (Alex): Make extra body validation common & validate all extra body params
-            if use_prompt_upscaling is not None and not isinstance(use_prompt_upscaling, bool):
-                return self._create_error_response(
-                    f"use_prompt_upscaling must be a bool, got {type(use_prompt_upscaling).__name__}",
-                    status_code=400,
-                )
->>>>>>> 0540cb1d (review comments)
             seed = extra_body.get("seed")
             if seed is None:
                 seed = getattr(request, "seed", None)

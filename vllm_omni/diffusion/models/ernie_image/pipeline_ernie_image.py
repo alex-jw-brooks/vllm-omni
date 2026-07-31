@@ -285,10 +285,16 @@ class ErnieImagePipeline(
         return OmniDiffusionRequest.is_dummy_run_request_id(getattr(req, "request_id", None))
 
     @staticmethod
-    def _should_apply_pe(req: OmniDiffusionRequest) -> bool:
+    def _should_apply_pe(req: DiffusionRequestBatch) -> bool:
         if ErnieImagePipeline._is_warmup_request(req):
             return False
-        return do_prompt_upscaling(req)
+        if req.num_reqs != 1:
+            logger.warning(
+                "ErnieImage prompt upscaling only supports single-request batches; skipping for batch of %d requests",
+                req.num_reqs,
+            )
+            return False
+        return do_prompt_upscaling(req.requests[0])
 
     def encode_prompt(
         self,

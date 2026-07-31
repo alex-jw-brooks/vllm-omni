@@ -522,7 +522,7 @@ class LongCatImagePipeline(nn.Module, CFGParallelMixin, DiffusionPipelineProfile
         extra_args = getattr(req.sampling_params, "extra_args", {}) or {}
         # Batch can be heterogeneous with prompt rewrite,
         # so consider each request individually
-        should_rewrite = [do_prompt_upscaling(req) for req in req.requests]
+        should_rewrite = [do_prompt_upscaling(sub_req) for sub_req in req.requests]
         enable_cfg_renorm: bool = extra_args.get("enable_cfg_renorm", True)
         cfg_renorm_min: float = extra_args.get("cfg_renorm_min", 0.0)
         joint_attention_kwargs: dict[str, Any] | None = None

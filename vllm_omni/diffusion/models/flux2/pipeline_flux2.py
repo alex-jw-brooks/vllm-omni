@@ -912,7 +912,12 @@ class Flux2Pipeline(
         )
         max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
         text_encoder_out_layers = req.sampling_params.extra_args.get("text_encoder_out_layers", text_encoder_out_layers)
-        should_upsample_prompt = do_prompt_upscaling(req)
+        if req.num_reqs != 1:
+            logger.warning(
+                "Flux2 prompt upscaling only supports single-request batches; skipping for batch of %d requests",
+                req.num_reqs,
+            )
+        should_upsample_prompt = do_prompt_upscaling(req.requests[0]) if req.num_reqs == 1 else False
 
         req_prompt_embeds = [p.get("prompt_embeds") if not isinstance(p, str) else None for p in req.prompts]
         if any(p is not None for p in req_prompt_embeds):
