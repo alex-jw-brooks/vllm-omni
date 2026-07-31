@@ -507,9 +507,6 @@ jobs:
           echo "before_ts=${BEFORE_TS}" >> "${GITHUB_OUTPUT}"
 
           BAKE_TARGETS="${{ needs.resolve.outputs.target_device }}"
-          if [[ "${BAKE_TARGETS}" == "cuda" ]]; then
-            BAKE_TARGETS="cuda cuda-develsdk cuda-test"
-          fi
 
           gh workflow run build-image.yml \
             --repo "${NM_CICD_REPO}" \
@@ -629,9 +626,9 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
-  # smoke-test — validate built images across models and CUDA variants
+  # smoke-test — validate the default cuda image across models
   # Triggers test-vllm-omni.yml on nm-cicd after docker-image completes.
-  # Bake builds both cuda + cuda-develsdk tags from one IMAGE_RUN_ID.
+  # Single cuda variant (flashinfer-jit-cache covers supported GPUs).
   # Polling matches on vllm_image input to avoid race with parallel matrix jobs.
   # ---------------------------------------------------------------------------
   smoke-test:
@@ -653,60 +650,28 @@ jobs:
             variant: cuda
             label_suffix: tts-cuda
             tts_voice: vivian
-          - model: Tongyi-MAI/Z-Image-Turbo
-            validation_type: image_gen
-            variant: cuda-develsdk
-            label_suffix: img-devsdk
-          - model: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
-            validation_type: tts
-            variant: cuda-develsdk
-            label_suffix: tts-devsdk
-            tts_voice: vivian
           - model: black-forest-labs/FLUX.1-schnell
             validation_type: image_gen
             variant: cuda
             label_suffix: flux1-cuda
-          - model: black-forest-labs/FLUX.1-schnell
-            validation_type: image_gen
-            variant: cuda-develsdk
-            label_suffix: flux1-devsdk
           - model: black-forest-labs/FLUX.2-klein-4B
             validation_type: image_gen
             variant: cuda
             label_suffix: flux2klein-cuda
-          - model: black-forest-labs/FLUX.2-klein-4B
-            validation_type: image_gen
-            variant: cuda-develsdk
-            label_suffix: flux2klein-devsdk
           - model: black-forest-labs/FLUX.2-dev
             validation_type: image_gen
             variant: cuda
             label_suffix: flux2dev-cuda
-            tensor_parallel_size: "2"
-          - model: black-forest-labs/FLUX.2-dev
-            validation_type: image_gen
-            variant: cuda-develsdk
-            label_suffix: flux2dev-devsdk
             tensor_parallel_size: "2"
           - model: mistralai/Voxtral-4B-TTS-2603
             validation_type: tts
             variant: cuda
             label_suffix: voxtral-cuda
             tts_voice: neutral_female
-          - model: mistralai/Voxtral-4B-TTS-2603
-            validation_type: tts
-            variant: cuda-develsdk
-            label_suffix: voxtral-devsdk
-            tts_voice: neutral_female
           - model: Qwen/Qwen3-Omni-30B-A3B-Instruct
             validation_type: omni
             variant: cuda
             label_suffix: qwen3omni-cuda
-            gpu_count: "2"
-          - model: Qwen/Qwen3-Omni-30B-A3B-Instruct
-            validation_type: omni
-            variant: cuda-develsdk
-            label_suffix: qwen3omni-devsdk
             gpu_count: "2"
     name: "smoke-test (${{ matrix.label_suffix }})"
 
