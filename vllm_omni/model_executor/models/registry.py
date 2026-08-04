@@ -267,6 +267,12 @@ _OMNI_MODELS = {
         "hunyuan_image3",
         "HunyuanImage3ForConditionalGeneration",
     ),
+    ## granite_prosody_lm (Granite ProsodyLM TTS)
+    "GraniteProsodyLMForConditionalGeneration": (
+        "granite_prosody_lm",
+        "granite_prosody_lm",
+        "GraniteProsodyLMForConditionalGeneration",
+    ),
     ## fish_speech (Fish Speech S2 Pro)
     "FishSpeechSlowARForConditionalGeneration": (
         "fish_speech",
