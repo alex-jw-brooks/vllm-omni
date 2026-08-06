@@ -4,6 +4,8 @@
 
 from transformers import AutoConfig, PretrainedConfig
 
+_SENSENOVA_U1_LLM_HIDDEN_DEFAULT = 4096
+
 
 class SenseNovaU1LLMConfig(PretrainedConfig):
     """Qwen3-based LLM backbone config with 3D RoPE and MoT extensions."""
@@ -12,7 +14,7 @@ class SenseNovaU1LLMConfig(PretrainedConfig):
 
     def __init__(
         self,
-        hidden_size: int = 4096,
+        hidden_size: int = _SENSENOVA_U1_LLM_HIDDEN_DEFAULT,
         intermediate_size: int = 11008,
         num_hidden_layers: int = 32,
         num_attention_heads: int = 32,
@@ -45,7 +47,8 @@ class SenseNovaU1LLMConfig(PretrainedConfig):
         self.max_position_embeddings_hw = max_position_embeddings_hw
         self.attention_bias = attention_bias
         self.layer_types = layer_types if layer_types is not None else ["full_attention"] * num_hidden_layers
-        super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+        kwargs["tie_word_embeddings"] = tie_word_embeddings
+        super().__init__(**kwargs)
 
 
 class SenseNovaU1VisionConfig(PretrainedConfig):
@@ -67,7 +70,7 @@ class SenseNovaU1VisionConfig(PretrainedConfig):
         self.num_channels = num_channels
         self.patch_size = patch_size
         self.hidden_size = hidden_size
-        self.llm_hidden_size = llm_hidden_size if llm_hidden_size is not None else [4096]
+        self.llm_hidden_size = llm_hidden_size if llm_hidden_size is not None else [_SENSENOVA_U1_LLM_HIDDEN_DEFAULT]
         self.downsample_ratio = downsample_ratio if downsample_ratio is not None else [0.5]
         self.rope_theta_vision = rope_theta_vision
         self.max_position_embeddings_vision = max_position_embeddings_vision
