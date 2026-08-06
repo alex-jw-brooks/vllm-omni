@@ -3557,6 +3557,28 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             if not artifact_ready:
                 self._discard_ref_audio_artifact_warmup(request_id)
 
+    def _get_normalized_voice(self, voice: str | None) -> str | None:
+        """Get the normalized voice to be used; currently this means that
+        the voice is:
+            - lowercased if it's a valid supported speaker
+            - None if the the model doesn't have any uploaded speakers
+
+        If a voice is passed and we do have uploaded speakers, but it's still
+        not supported, we raise an error.
+        """
+        if voice:
+            voice = voice.lower()
+            if self.uploaded_speakers:
+                if voice not in self.uploaded_speakers and voice not in self.supported_speakers:
+                    all_voices = sorted(self.uploaded_speakers.keys() | self.supported_speakers)
+                    raise ValueError(f"Invalid normalized voice '{voice}'. Supported: {', '.join(all_voices)}")
+            else:
+                logger.warning(
+                    "This model does not have any uploaded speakers, but one was provided; its value will be ignored."
+                )
+                return None
+        return voice
+
     async def _create_diffusion_speech(
         self,
         request: OpenAICreateSpeechRequest,
@@ -3573,11 +3595,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 if fmt_err:
                     return self._diffusion_error_response(fmt_err, status_code=400)
 
-            if request.voice:
-                voice_lower = request.voice.lower()
-                if voice_lower not in self.uploaded_speakers and voice_lower not in self.supported_speakers:
-                    all_voices = sorted(self.uploaded_speakers.keys() | self.supported_speakers)
-                    raise ValueError(f"Invalid voice '{request.voice}'. Supported: {', '.join(all_voices) or 'none'}")
+            request.voice = self._get_normalized_voice(request.voice)
 
             has_inline_ref_audio = request.ref_audio is not None
             err = self._apply_uploaded_speaker(request)
@@ -3592,10 +3610,9 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             if request.ref_text:
                 prompt["ref_text"] = request.ref_text
             if request.voice:
-                voice_lower = request.voice.lower()
-                if voice_lower in self.uploaded_speakers and not has_inline_ref_audio:
-                    prompt["voice_name"] = voice_lower
-                    prompt["voice_created_at"] = self._voice_created_at(voice_lower)
+                if request.voice in self.uploaded_speakers and not has_inline_ref_audio:
+                    prompt["voice_name"] = request.voice
+                    prompt["voice_created_at"] = self._voice_created_at(request.voice)
             if request.language:
                 prompt["lang"] = request.language
             if request.instructions:
