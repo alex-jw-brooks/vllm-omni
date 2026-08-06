@@ -661,6 +661,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
         t,
         z,
         image_token_num,
+        t_eps: float,
         image_size=None,
         cache_dit_skip=False,
         **_kw,
@@ -699,7 +700,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
         else:
             x_pred = self.fm_modules["fm_head"](last_hidden_state[:, -image_token_num:].view(B, L, -1)).view(B, L, -1)
 
-        v_pred = (x_pred - z) / (1 - t).clamp_min(self.model_cfg.t_eps)
+        v_pred = (x_pred - z) / (1 - t).clamp_min(t_eps)
         return v_pred
 
     def _apply_time_schedule(self, t, image_seq_len, timestep_shift):
@@ -1035,6 +1036,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
             z=z,
             image_token_num=ns.token_h * ns.token_w,
             image_size=p.image_size,
+            t_eps=p.t_eps,
         )
         if cache_dit_skip:
             kwargs["cache_dit_skip"] = True
@@ -1175,7 +1177,6 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
     @torch.inference_mode()
     def forward(self, req: DiffusionRequestBatch) -> DiffusionOutput:
         p = self._parse_request(req)
-        self.model_cfg.t_eps = p.t_eps
 
         input_images = self._extract_input_images(p.first_prompt)
         modalities = p.first_prompt.get("modalities", []) if isinstance(p.first_prompt, dict) else []
