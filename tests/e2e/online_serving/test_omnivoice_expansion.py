@@ -140,3 +140,22 @@ class TestOmniVoiceVoiceCloning:
             "min_audio_bytes": _DEFAULT_MIN_AUDIO_BYTES,
         }
         openai_client.send_audio_speech_request(request_config)
+
+
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_server", TEST_PARAMS, indirect=True)
+def test_speech_with_voice_param_accepted(omni_server, openai_client) -> None:
+    """Ensure that we can pass a voice string to OmniVoice without exploding;
+    this is because the OpenAI spec technically has this param as a required
+    string, so for models that don't have any uploaded speakers, passing a
+    voice doesn't do anything, and we log a warning instead of throwing.
+    """
+    request_config = {
+        "model": omni_server.model,
+        "input": get_prompt("text"),
+        "voice": "default",
+        "response_format": "wav",
+        "timeout": 180.0,
+        "min_audio_bytes": _DEFAULT_MIN_AUDIO_BYTES,
+    }
+    openai_client.send_audio_speech_request(request_config)
