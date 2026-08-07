@@ -780,6 +780,10 @@ async def omni_init_app_state(
             diffusion_engine=engine_client,  # type: ignore
             model_name=model_name,
         )
+        state.openai_serving_chat_batch = OmniOpenAIServingChatBatch.for_diffusion(
+            diffusion_engine=engine_client,  # type: ignore
+            model_name=model_name,
+        )
 
         # audio related
         state.openai_serving_speech = None

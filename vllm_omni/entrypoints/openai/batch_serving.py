@@ -24,51 +24,36 @@ logger = init_logger(__name__)
 
 class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
     @staticmethod
-    def validate_content_choice(
-        choice: ChatCompletionResponseChoice,
-        has_prev_content: bool,
-        is_audio: bool,
-    ):
-        """Ensure that a `choice` sets either content or audio, but not both."""
-        disallowed_content = choice.message.content if is_audio else choice.message.audio
-        if has_prev_content:
-            raise ValueError("Single response in the batch contained multiple audio or text choices")
-        if disallowed_content:
-            raise ValueError("Single response in the batch contained both text and audio")
-        return choice
-
-    @staticmethod
     def _maybe_collapse_choices(choices: list[ChatCompletionResponseChoice]):
-        """Given the choices corresponding to one request, collapse the audio
-        and text components into a single choice object with both."""
-        audio_choice, text_choice = None, None
+        """Collapse text + audio choices into one choice..
 
-        num_choices = len(choices)
-        if num_choices == 1:
+        NOTE: This is a hack for models that produce separate text and
+        audio choices to ensure we have 1:1 mapping between number of
+        inputs in the batch and responses.
+        """
+        content_choice, audio_choice = None, None
+        if len(choices) == 1:
             return choices[0]
-        # For now, we only expect 2 choices in the text + audio case
-        if num_choices != 2:
-            raise ValueError(f"Unable to consolidate choices; expected 1 or 2 choices, got {num_choices}")
+        if len(choices) != 2:
+            raise ValueError(f"Expected 1 or 2 choices to collapse, got {len(choices)}. ")
 
-        # Separate the audio and text choices
         for choice in choices:
             if choice.message.audio:
-                audio_choice = OmniOpenAIServingChatBatch.validate_content_choice(
-                    choice,
-                    audio_choice is not None,
-                    is_audio=True,
-                )
-            elif choice.message.content:
-                text_choice = OmniOpenAIServingChatBatch.validate_content_choice(
-                    choice,
-                    text_choice is not None,
-                    is_audio=False,
-                )
-        # Ensure we have one of each, then combine the audio + text content
-        if text_choice is None or audio_choice is None:
-            raise ValueError("Could not collapse choices; text choice or audio choice is None")
-        text_choice.message.audio = audio_choice.message.audio
-        return text_choice
+                if audio_choice is not None:
+                    raise ValueError("Multiple audio choices cannot be set in one completion message")
+                audio_choice = choice
+            else:
+                if content_choice is not None:
+                    raise ValueError("Multiple content choices cannot be set in one completion message")
+                content_choice = choice
+
+        if content_choice is None or audio_choice is None:
+            raise ValueError(
+                "Expected one content and one audio choice, but got: "
+                f"content={content_choice is not None}, audio={audio_choice is not None}"
+            )
+        content_choice.message.audio = audio_choice.message.audio
+        return content_choice
 
     async def create_batch_chat_completion(
         self,
