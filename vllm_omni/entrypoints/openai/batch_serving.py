@@ -25,7 +25,7 @@ logger = init_logger(__name__)
 class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
     @staticmethod
     def _maybe_collapse_choices(choices: list[ChatCompletionResponseChoice]):
-        """Collapse text + audio choices into one choice..
+        """Collapse content + audio choices into one choice.
 
         NOTE: This is a hack for models that produce separate text and
         audio choices to ensure we have 1:1 mapping between number of
@@ -55,6 +55,11 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
         content_choice.message.audio = audio_choice.message.audio
         return content_choice
 
+    @staticmethod
+    def _get_subrequest_ids(base_id, request: BatchChatCompletionRequest) -> list[str]:
+        """Get the request ID for each entry in the batch request to be resubmitted to chat completions."""
+        return [f"{base_id}-idx-{idx}" for idx in range(len(request.messages))]
+
     async def create_batch_chat_completion(
         self,
         request: BatchChatCompletionRequest,
@@ -68,7 +73,24 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
         total_prompt_tokens = 0
         total_completion_tokens = 0
 
+        # Get the base request from the raw_request before maybe mutating the header
+        base_id = OmniOpenAIServingChatBatch._base_request_id(
+            raw_request,
+            request.request_id,
+        )
+        batch_req_id = f"chatcmpl-batch-{base_id}"
+        sub_req_ids = self._get_subrequest_ids(base_id, request)
+
+        # Remove the raw request header if it exists now that we have subreq IDs,
+        # since this takes priority over the object request_ids
+        if raw_request.headers.get("X-Request-Id"):
+            copy_headers = raw_request.headers.mutablecopy()
+            del copy_headers["X-Request-Id"]
+            raw_request._headers = copy_headers
+
         for idx, msg in enumerate(request.messages):
+            # Update the current request ID to avoid subrequest collisions
+            request.request_id = sub_req_ids[idx]
             try:
                 chat_cmp_request = request.to_chat_completion_request(msg)
             except ValidationError as e:
@@ -120,9 +142,8 @@ class OmniOpenAIServingChatBatch(OmniOpenAIServingChat):
             total_tokens=total_prompt_tokens + total_completion_tokens,
         )
 
-        request_id = f"chatcmpl-batch-{self._base_request_id(raw_request, request.request_id)}"
         return ChatCompletionResponse(
-            id=request_id,
+            id=batch_req_id,
             created=int(time.time()),
             model=model,
             choices=choices,
