@@ -71,7 +71,7 @@ def enable_bagel_teacache(pipeline: Any, config: DiffusionCacheConfig) -> None:
 def enable_sensenova_u1_teacache(pipeline: Any, config: DiffusionCacheConfig) -> None:
     transformer = pipeline.denoising_transformer
     teacache_config = TeaCacheConfig(
-        transformer_type="SenseNovaU1ForCausalLM",
+        transformer_type="SenseNovaU1DenoisingAdapter",
         rel_l1_thresh=config.rel_l1_thresh,
         coefficients=_resolve_coefficients(transformer, config),
     )

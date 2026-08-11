@@ -34,7 +34,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig, SensenovaCachedAdapter
-from vllm_omni.diffusion.cache.teacache.protocol import ForwardState, SupportsTeaCache
+from vllm_omni.diffusion.cache.teacache.protocol import ForwardState
 
 logger = init_logger(__name__)
 
@@ -140,7 +140,7 @@ class SenseNovaU1State:
 
     exist_und: bool
     exist_gen: bool
-    past_key_values: DynamicCache
+    past_key_values: DynamicCache | None
     attention_mask: dict[str, torch.Tensor]
     indexes: torch.Tensor | None
     compute_logits: bool
@@ -735,7 +735,7 @@ class SenseNovaU1Model(nn.Module):
 # ---------------------------------------------------------------------------
 
 
-class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
+class SenseNovaU1ForCausalLM(nn.Module):
     def __init__(self, config, quant_config=None, prefix: str = ""):
         super().__init__()
         self.config = config
@@ -746,18 +746,18 @@ class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
         # outputs so callers see full-vocab logits regardless of tp_size.
         self.logits_processor = LogitsProcessor(config.vocab_size)
 
-    # SupportsTeaCache protocol stubs
+    # Decomposed forward helpers shared with SenseNovaU1DenoisingAdapter (TeaCache).
     def preprocess(
         self,
-        input_ids: torch.Tensor | None,
-        image_gen_indicators: torch.Tensor,
-        indexes: torch.Tensor | None,
-        attention_mask: dict[str, torch.Tensor] | torch.Tensor | None,
-        past_key_values: DynamicCache,
-        update_cache: bool,
-        inputs_embeds: torch.Tensor | None,
-        use_cache: bool,
-        compute_logits: bool,
+        input_ids: torch.Tensor | None = None,
+        image_gen_indicators: torch.Tensor | None = None,
+        indexes: torch.Tensor | None = None,
+        attention_mask: dict[str, torch.Tensor] | torch.Tensor | None = None,
+        past_key_values: DynamicCache | None = None,
+        update_cache: bool = True,
+        inputs_embeds: torch.Tensor | None = None,
+        use_cache: bool = False,
+        compute_logits: bool = True,
         *,
         skip_modulated_input: bool = False,
         cache_dit_skip: bool = False,
@@ -837,16 +837,13 @@ class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
             hidden_states=ctx.hidden_states,
         )
 
-    def get_teacache_coefficients(self) -> list[float]:
-        return [9.07281930e04, -2.17699186e04, 1.83940990e03, -6.30339273e01, 7.61309272e-01]
-
     def forward(
         self, *args, input_ids: torch.Tensor | None = None, embed_only: bool = False, **kwargs
     ) -> SenseNovaU1CausalLMOutput:
-        """Forward pass for the DiT, which is implemented using the methods outlined by SupportsTeaCache.
+        """Forward using the same preprocess / blocks / postprocess decomposition as TeaCache.
 
-        NOTE: this is the disabled cache path; the forward is overridden by the TeaCache hook when it is
-        enabled, which needs the modulated inputs for cache decision. Skipping modulated inputs is intentional.
+        TeaCache hooks ``SenseNovaU1DenoisingAdapter``, not this module, so prefix / think / AR
+        calls here stay uncached. Skipping modulated inputs on this path is intentional.
         """
         if embed_only:
             if input_ids is None:

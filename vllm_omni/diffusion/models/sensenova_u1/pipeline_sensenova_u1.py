@@ -32,6 +32,7 @@ from PIL import Image
 from transformers import AutoTokenizer
 from vllm.logger import init_logger
 
+from vllm_omni.diffusion.cache.teacache.protocol import ForwardState, SupportsTeaCache
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
@@ -490,13 +491,15 @@ def _optimized_scale(positive_flat, negative_flat):
 # ---------------------------------------------------------------------------
 
 
-class SenseNovaU1DenoisingAdapter(nn.Module):
+class SenseNovaU1DenoisingAdapter(nn.Module, SupportsTeaCache):
     """Denoising-only entry point used by cache backends."""
 
     def __init__(self, language_model: SenseNovaU1ForCausalLM):
         super().__init__()
         object.__setattr__(self, "language_model", language_model)
         self.do_true_cfg = True
+        # Set by the pipeline before each CFG branch forward (e.g. "cond").
+        self.teacache_branch: str | None = None
 
     @property
     def model(self):
@@ -509,6 +512,18 @@ class SenseNovaU1DenoisingAdapter(nn.Module):
     @property
     def logits_processor(self):
         return self.language_model.logits_processor
+
+    def preprocess(self, *args: Any, skip_modulated_input: bool = False, **kwargs: Any) -> ForwardState:
+        return self.language_model.preprocess(*args, skip_modulated_input=skip_modulated_input, **kwargs)
+
+    def run_transformer_blocks(self, ctx: ForwardState) -> ForwardState:
+        return self.language_model.run_transformer_blocks(ctx)
+
+    def postprocess(self, ctx: ForwardState) -> Any:
+        return self.language_model.postprocess(ctx)
+
+    def get_teacache_coefficients(self) -> list[float]:
+        return [9.07281930e04, -2.17699186e04, 1.83940990e03, -6.30339273e01, 7.61309272e-01]
 
     def forward(self, *args, **kwargs):
         return self.language_model(*args, **kwargs)
@@ -563,8 +578,8 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
         # Cache-DiT hooks pipeline.transformer(.blocks), so it must point at the
         # real decoder module (exposes .blocks and real parameters).
         self.transformer = self.language_model.model
-        # TeaCache intercepts the ForCausalLM-level denoising forward; route it
-        # through a dedicated adapter so it does not collide with Cache-DiT.
+        # TeaCache hooks the adapter (SupportsTeaCache), not language_model, so
+        # prefix / think / AR forwards stay uncached.
         self.denoising_transformer = SenseNovaU1DenoisingAdapter(self.language_model)
 
         # Vision model (understanding branch)
@@ -729,11 +744,12 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
         image_token_num,
         image_size=None,
         cache_dit_skip=False,
+        teacache_branch=None,
         **_kw,
     ):
         B, L = z.shape[0], z.shape[1]
-        denoising_model = self.language_model if cache_dit_skip else self.denoising_transformer
-        outputs = denoising_model(
+        self.denoising_transformer.teacache_branch = teacache_branch
+        outputs = self.denoising_transformer(
             inputs_embeds=input_embeds,
             image_gen_indicators=torch.ones(
                 (input_embeds.shape[0], input_embeds.shape[1]), dtype=torch.bool, device=input_embeds.device
@@ -1099,6 +1115,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
             z=z,
             image_token_num=ns.token_h * ns.token_w,
             image_size=p.image_size,
+            teacache_branch=branch,
         )
         if cache_dit_skip:
             kwargs["cache_dit_skip"] = True
