@@ -14,7 +14,7 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 import pytest
 
 from tests.helpers.mark import hardware_test
-from tests.helpers.media import load_test_audio_data_url
+from tests.helpers.media import get_asset_path, load_test_audio_data_url
 from tests.helpers.runtime import OmniServerParams
 from tests.helpers.stage_config import get_deploy_config_path
 
@@ -160,3 +160,33 @@ def test_speech_with_voice_param_accepted(omni_server, openai_client, voice) -> 
         "min_audio_bytes": _DEFAULT_MIN_AUDIO_BYTES,
     }
     openai_client.send_audio_speech_request(request_config)
+
+
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_server", TEST_PARAMS, indirect=True)
+def test_voice_request_before_and_after_clone_registration(omni_server, openai_client) -> None:
+    # FIXME - this is bad behavior and needs to be consistent.
+    speech_config = {
+        "model": omni_server.model,
+        "input": get_prompt("text"),
+        "voice": "foo",
+    }
+
+    # 1) Request with an unregistered voice name — should succeed (warning only)
+    openai_client.send_audio_speech_request(speech_config)
+
+    # 2) Register a different cloned voice via POST /v1/audio/voices
+    register_config = {
+        "data": {"name": "bar", "consent": "test-consent"},
+        "files": {
+            "audio_sample": (
+                "clone_2.wav",
+                get_asset_path("qwen3_tts/clone_2.wav").read_bytes(),
+                "audio/wav",
+            ),
+        },
+    }
+    openai_client.send_audio_voices_create_http_request(register_config)
+
+    # 3) Same request again — voice is now registered, should still succeed
+    openai_client.send_audio_speech_request(speech_config)
