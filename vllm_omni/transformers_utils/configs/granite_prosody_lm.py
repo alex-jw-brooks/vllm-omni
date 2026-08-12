@@ -62,6 +62,19 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
         nar_max_history: int = 1,
         nar_temperature: float = 0.2,
         nar_mask_schedule: str = "random",
+        # Speaker preamble (pre-tokenized by export script)
+        speaker_prefix_ids: list | None = None,
+        speaker_suffix_ids: list | None = None,
+        default_f0_bin: int = 0,
+        # NLE CTC text normalization (NAR text norm via CTC head)
+        ctc_text_norm: bool = False,
+        ctc_head_vocab_size: int = 0,
+        ctc_blank_index: int = 0,
+        ctc_editor_copy_op: bool = False,
+        ctc_copy_index: int | None = None,
+        blank_token_id: int = 0,
+        ctc_slots_per_gap: int = 3,
+        ctc_steps: int = 1,
         # Grammar processor (AR mode)
         emotion_control: int = 0,
         n_emo_bins: int = 0,
@@ -98,9 +111,22 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
         self.nar_temperature = nar_temperature
         self.nar_mask_schedule = nar_mask_schedule
 
+        self.speaker_prefix_ids = speaker_prefix_ids or []
+        self.speaker_suffix_ids = speaker_suffix_ids or []
+        self.default_f0_bin = default_f0_bin
+
         self.emotion_control = emotion_control
         self.n_emo_bins = n_emo_bins
         self.emo_start_id = emo_start_id
+
+        self.ctc_text_norm = ctc_text_norm
+        self.ctc_head_vocab_size = ctc_head_vocab_size
+        self.ctc_blank_index = ctc_blank_index
+        self.ctc_editor_copy_op = ctc_editor_copy_op
+        self.ctc_copy_index = ctc_copy_index
+        self.blank_token_id = blank_token_id
+        self.ctc_slots_per_gap = ctc_slots_per_gap
+        self.ctc_steps = ctc_steps
 
         self.expert_chain_mode = expert_chain_mode
         self.use_fractional_posids = use_fractional_posids

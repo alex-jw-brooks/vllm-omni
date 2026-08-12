@@ -65,6 +65,8 @@ _FULL_PAYLOAD_INPUT_STAGES: frozenset[tuple[str, str]] = frozenset(
         # custom_process_next_stage_input_func: *_full_payload in deploy yaml.
         ("DyninOmniForConditionalGeneration", "token2image"),
         ("DyninOmniForConditionalGeneration", "token2audio"),
+        # granite_prosody_lm: text_norm (Stage 0) -> prosody (Stage 1).
+        ("GraniteProsodyLMForConditionalGeneration", "prosody"),
     }
 )
 
@@ -285,11 +287,10 @@ class OmniSchedulingCoordinator:
     ) -> None:
         """Apply received scheduling metadata to request objects.
 
-        For AR mode: only scheduler-visible metadata is applied locally.
-        For Generation mode: updates ``request.prompt_token_ids``.
-
-        Additionally, if the payload contains ``next_stage_prompt_len``,
-        updates the request's ``prompt_token_ids`` to the correct length.
+        Updates ``request.prompt_token_ids`` from ``code_predictor_codes``
+        when present, regardless of model mode.  If the payload contains
+        ``next_stage_prompt_len``, the prompt is pre-sized first (the
+        subsequent ``code_predictor_codes`` application overwrites it).
         """
         for req_id, metadata in request_metadata.items():
             request = requests.get(req_id)
@@ -331,12 +332,17 @@ class OmniSchedulingCoordinator:
                                 req_id,
                             )
 
-            if model_mode != "ar":
-                new_ids = self._flatten_prompt_token_ids(metadata.get("code_predictor_codes"))
-                if new_ids:
-                    request.prompt_token_ids = new_ids
-                    request.num_prompt_tokens = len(new_ids)
-                    request._all_token_ids.clear()
-                    request._all_token_ids.extend(new_ids)
-                    request._output_token_ids.clear()
-                    request.num_computed_tokens = 0
+            new_ids = self._flatten_prompt_token_ids(metadata.get("code_predictor_codes"))
+            if new_ids:
+                request.prompt_token_ids = new_ids
+                request.num_prompt_tokens = len(new_ids)
+                request._all_token_ids.clear()
+                request._all_token_ids.extend(new_ids)
+                request._output_token_ids.clear()
+                request.num_computed_tokens = 0
+                logger.debug(
+                    "[Coordinator stage-%s] Applied code_predictor_codes (%d tokens) for req %s",
+                    self._stage_id,
+                    len(new_ids),
+                    req_id,
+                )

@@ -4,6 +4,9 @@
 
 Registered via deploy YAML FQCN; creates a ProsodyGrammarProcessor
 per-request from SamplingParams.extra_args["prosody_grammar"].
+
+When extra_args is absent, creates a dynamic-mode processor that
+enforces prosody structure without knowing num_words in advance.
 """
 
 from __future__ import annotations
@@ -44,20 +47,21 @@ class ProsodyGrammarLogitsProcessor(AdapterLogitsProcessor):
         self,
         params: Any,
     ) -> ProsodyGrammarProcessor | None:
-        # TODO: verify extra_args passthrough works end-to-end in Omni;
-        # remove this check once confirmed.
         extra_args = params.extra_args if params else None
         if extra_args is not None and not isinstance(extra_args, dict):
             raise TypeError(f"Expected extra_args to be dict or None, got {type(extra_args)}")
         grammar_cfg = extra_args.get("prosody_grammar") if extra_args else None
-        if grammar_cfg is None:
-            logger.debug("No prosody_grammar in extra_args; skipping grammar constraint")
-            return None
-        logger.info(
-            "Activating ProsodyGrammarProcessor: num_words=%d",
-            grammar_cfg["num_words"],
-        )
+        if grammar_cfg is not None:
+            logger.info(
+                "Activating ProsodyGrammarProcessor: num_words=%d",
+                grammar_cfg["num_words"],
+            )
+            return ProsodyGrammarProcessor(
+                num_words=grammar_cfg["num_words"],
+                **self._grammar_kwargs,
+            )
+        logger.info("Activating ProsodyGrammarProcessor in dynamic mode")
         return ProsodyGrammarProcessor(
-            num_words=grammar_cfg["num_words"],
+            num_words=None,
             **self._grammar_kwargs,
         )

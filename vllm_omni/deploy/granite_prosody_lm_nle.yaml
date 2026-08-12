@@ -1,0 +1,36 @@
+# Granite ProsodyLM deploy config — NLE CTC text normalization.
+# Stage 0: NLE text norm (non-autoregressive) — single forward + CTC decode.
+# Stage 1: prosody prediction (NAR) — iterative masked decode via NAR heads.
+
+async_chunk: false
+
+stages:
+  - stage_id: 0
+    max_num_seqs: 4
+    gpu_memory_utilization: 0.25
+    trust_remote_code: true
+    enforce_eager: true
+    enable_prefix_caching: false
+    async_scheduling: false
+    max_num_batched_tokens: 4096
+    max_model_len: 4096
+    dtype: bfloat16
+    devices: "0"
+    default_sampling_params:
+      temperature: 0.0
+      max_tokens: 4096
+
+  - stage_id: 1
+    max_num_seqs: 4
+    gpu_memory_utilization: 0.25
+    trust_remote_code: true
+    enforce_eager: true
+    enable_prefix_caching: false
+    async_scheduling: false
+    max_num_batched_tokens: 4096
+    max_model_len: 4096
+    dtype: bfloat16
+    devices: "0"
+    default_sampling_params:
+      temperature: 0.0
+      max_tokens: 4096

@@ -69,6 +69,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             "CosyVoice3Model",
             "DyninOmniForConditionalGeneration",
             "IndexTTS2S2MelDecoder",
+            "GraniteProsodyLMForConditionalGeneration",
         }
         if (
             getattr(self.model_config, "model_arch", None) in _OMNI_CONNECTOR_INIT_ARCHS
@@ -477,6 +478,14 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             # stage; #4527's (None, per_req_payloads) starved the downstream stage. (PR #4792)
             inter_stage_outputs, multimodal_outputs = per_req_payloads, per_req_payloads
 
+        # Generation models that produce discrete tokens (e.g. NAR prosody)
+        # surface them via the "output_token_ids" key in multimodal_outputs.
+        sampled_ids: list = []
+        if isinstance(multimodal_outputs_raw, Mapping):
+            output_ids = multimodal_outputs_raw.get("output_token_ids")
+            if output_ids is not None and isinstance(output_ids, list):
+                sampled_ids = [ids.tolist() if isinstance(ids, torch.Tensor) else list(ids) for ids in output_ids]
+
         # [Omni] Copy req_id mappings to avoid async scheduling mutation.
         req_ids_output_copy = self.input_batch.req_ids.copy()
         req_id_to_index_output_copy = self.input_batch.req_id_to_index.copy()
@@ -492,7 +501,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
         output = OmniModelRunnerOutput(
             req_ids=req_ids_output_copy,
             req_id_to_index=req_id_to_index_output_copy,
-            sampled_token_ids=[],
+            sampled_token_ids=sampled_ids,
             logprobs=None,
             prompt_logprobs_dict={},
             pooler_output=None,

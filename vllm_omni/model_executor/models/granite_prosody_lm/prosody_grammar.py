@@ -4,6 +4,11 @@
 
 Enforces valid prosody token structure during AR generation:
   [emo?] SIL DUR (NUM*K SIL DUR)*N SEP2
+
+Two modes:
+  - Fixed:   num_words known → pre-built position-indexed pattern
+  - Dynamic: num_words unknown → state machine enforces structure,
+             model chooses when to emit SEP2
 """
 
 from __future__ import annotations
@@ -17,15 +22,16 @@ logger = init_logger(__name__)
 class ProsodyGrammarProcessor:
     """Per-request grammar constraint for prosody token generation.
 
-    Builds a position-indexed pattern of allowed token sets, then masks
-    logits at each decode step to enforce the pattern.
+    When ``num_words`` is provided, builds a position-indexed pattern of
+    allowed token sets.  When ``num_words`` is None, runs a state machine
+    that enforces structure without knowing the total word count.
     """
 
     FEATURE_NAMES = ["dur", "prs_1", "prs_2", "prs_3", "prs_4"]
 
     def __init__(
         self,
-        num_words: int,
+        num_words: int | None,
         num_start_id: int,
         num_end_id: int,
         sil_token_id: int,
@@ -47,7 +53,20 @@ class ProsodyGrammarProcessor:
         self.n_emo_bins = n_emo_bins
         self.feature_ranges = feature_ranges
         self.pos = 0
-        self.pattern: list[set[int]] = self._build_pattern()
+
+        self._num_ids = set(range(num_start_id, num_end_id))
+        self._sil_set = frozenset({sil_token_id})
+        self._sep2_set = frozenset({sep2_token_id})
+
+        if num_words is not None:
+            self.pattern: list[set[int]] = self._build_pattern()
+            self._use_pattern = True
+        else:
+            self.pattern = []
+            self._use_pattern = False
+            self._state = "emo" if emotion_control > 0 else "sil"
+            self._emo_remaining = emotion_control
+            self._word_feat_idx = 0
 
     def _build_pattern(self) -> list[set[int]]:
         sil_set = {self.sil_token_id}
@@ -58,7 +77,7 @@ class ProsodyGrammarProcessor:
             dur_ids = feat_sets[0]
             word_sets = feat_sets
         else:
-            num_ids = set(range(self.num_start_id, self.num_end_id))
+            num_ids = self._num_ids
             dur_ids = num_ids
             word_sets = [num_ids] * self.k
 
@@ -88,16 +107,76 @@ class ProsodyGrammarProcessor:
         pattern.append(sep2_set)
         return pattern
 
+    def _dynamic_allowed(self) -> set[int]:
+        """State machine for dynamic mode (num_words unknown)."""
+        if self._state == "emo":
+            if self.emo_start_id is not None:
+                if self._emo_remaining > 1:
+                    return set(range(self.emo_start_id, self.emo_start_id + self.n_emo_bins))
+                else:
+                    return set(
+                        range(
+                            self.emo_start_id + self.n_emo_bins,
+                            self.emo_start_id + 2 * self.n_emo_bins,
+                        )
+                    )
+            self._state = "sil"
+            return self._dynamic_allowed()
+
+        if self._state == "sil":
+            return set(self._sil_set)
+
+        if self._state == "dur":
+            return set(self._num_ids)
+
+        if self._state == "word_feat":
+            return set(self._num_ids)
+
+        if self._state == "word_boundary":
+            return set(self._sil_set) | set(self._sep2_set)
+
+        return set(self._num_ids) | set(self._sil_set) | set(self._sep2_set)
+
+    def _dynamic_advance(self, token_id: int) -> None:
+        """Advance state machine after emitting a token."""
+        if self._state == "emo":
+            self._emo_remaining -= 1
+            if self._emo_remaining <= 0:
+                self._state = "sil"
+        elif self._state == "sil":
+            self._state = "dur"
+        elif self._state == "dur":
+            self._word_feat_idx = 0
+            self._state = "word_feat"
+        elif self._state == "word_feat":
+            self._word_feat_idx += 1
+            if self._word_feat_idx >= self.k:
+                self._state = "word_boundary"
+        elif self._state == "word_boundary":
+            if token_id == self.sil_token_id:
+                self._state = "dur"
+            # if sep2, generation should stop via stop_token_ids
+
     def __call__(
         self,
         output_token_ids: list[int],
         logits: torch.Tensor,
     ) -> torch.Tensor:
-        if self.pos < len(self.pattern):
-            allowed = self.pattern[self.pos]
+        if self._use_pattern:
+            if self.pos < len(self.pattern):
+                allowed = self.pattern[self.pos]
+                mask = torch.full_like(logits, float("-inf"))
+                valid = [i for i in allowed if i < logits.shape[-1]]
+                mask[valid] = 0.0
+                logits = logits + mask
+            self.pos += 1
+        else:
+            if output_token_ids:
+                self._dynamic_advance(output_token_ids[-1])
+            allowed = self._dynamic_allowed()
             mask = torch.full_like(logits, float("-inf"))
             valid = [i for i in allowed if i < logits.shape[-1]]
             mask[valid] = 0.0
             logits = logits + mask
-        self.pos += 1
+
         return logits

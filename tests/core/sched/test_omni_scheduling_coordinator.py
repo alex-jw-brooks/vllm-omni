@@ -128,6 +128,7 @@ class TestFullPayloadCoordinatorSelection(unittest.TestCase):
             ("IndexTTS2S2MelDecoder", "indextts2_s2mel_decoder"),
             ("DyninOmniForConditionalGeneration", "token2image"),
             ("DyninOmniForConditionalGeneration", "token2audio"),
+            ("GraniteProsodyLMForConditionalGeneration", "prosody"),
         }
     )
 
@@ -198,23 +199,40 @@ class TestFullPayloadCoordinatorSelection(unittest.TestCase):
 class TestCoordinatorUpdateRequestMetadata(unittest.TestCase):
     """Test update_request_metadata applies scheduling metadata to requests."""
 
-    def test_ar_mode_no_longer_sets_additional_information(self):
-        """AR mode only processes scheduling metadata, not full payloads."""
+    def test_ar_mode_applies_next_stage_prompt_len(self):
+        """AR mode applies next_stage_prompt_len to resize the prompt."""
         coord = OmniSchedulingCoordinator(stage_id=1)
 
         req = _make_request("r1")
         requests = {"r1": req}
 
-        # Only scheduling metadata is passed now (full payload stays in model runner)
         request_metadata = {"r1": {"next_stage_prompt_len": 50}}
 
         coord.update_request_metadata(requests, request_metadata, model_mode="ar")
 
-        # next_stage_prompt_len should update prompt_token_ids
         self.assertEqual(len(req.prompt_token_ids), 50)
         self.assertEqual(req.num_prompt_tokens, 50)
-        # additional_information should NOT be set
         self.assertIsNone(getattr(req, "additional_information", None))
+
+    def test_ar_mode_applies_code_predictor_codes(self):
+        """AR mode applies code_predictor_codes to prompt_token_ids."""
+        coord = OmniSchedulingCoordinator(stage_id=1)
+
+        req = _make_request("r1")
+        req.prompt_token_ids = [0, 0, 0]
+        req.num_prompt_tokens = 3
+        req._all_token_ids = [0, 0, 0]
+        req._output_token_ids = []
+        requests = {"r1": req}
+
+        request_metadata = {"r1": {"code_predictor_codes": [10, 20, 30, 40]}}
+
+        coord.update_request_metadata(requests, request_metadata, model_mode="ar")
+
+        self.assertEqual(req.prompt_token_ids, [10, 20, 30, 40])
+        self.assertEqual(req.num_prompt_tokens, 4)
+        self.assertEqual(req._all_token_ids, [10, 20, 30, 40])
+        self.assertEqual(req._output_token_ids, [])
 
     def test_generation_mode(self):
         coord = OmniSchedulingCoordinator(stage_id=1)
