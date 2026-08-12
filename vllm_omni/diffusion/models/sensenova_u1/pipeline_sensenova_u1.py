@@ -743,7 +743,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
         z,
         image_token_num,
         image_size=None,
-        cache_dit_skip=False,
+        use_cache_dit=False,
         teacache_branch=None,
         **_kw,
     ):
@@ -758,7 +758,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
             attention_mask=attn_mask,
             past_key_values=past_key_values,
             update_cache=False,
-            cache_dit_skip=cache_dit_skip,
+            use_cache_dit=use_cache_dit,
             use_cache=True,
             compute_logits=False,
         )
@@ -1101,12 +1101,12 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
             timesteps=timesteps,
         )
 
-    def _get_cfg_kwargs(self, caches: dict, image_embeds, t, z, ns, p, branch: str, cache_dit_skip: bool = False):
+    def _get_cfg_kwargs(self, caches: dict, image_embeds, t, z, ns, p, branch: str, use_cache_dit: bool = True):
         required = (branch, f"idx_{branch}", f"mask_{branch}")
         missing = [key for key in required if key not in caches]
         if missing:
             raise KeyError(f"Missing {branch} CFG cache keys: {missing}")
-        kwargs = dict(
+        return dict(
             input_embeds=image_embeds,
             past_key_values=caches[branch],
             indexes_image=caches[f"idx_{branch}"],
@@ -1116,16 +1116,14 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
             image_token_num=ns.token_h * ns.token_w,
             image_size=p.image_size,
             teacache_branch=branch,
+            use_cache_dit=use_cache_dit,
         )
-        if cache_dit_skip:
-            kwargs["cache_dit_skip"] = True
-        return kwargs
 
     def _denoise(self, image_prediction, ns, t, z, image_embeds, caches, p, step_i, is_it2i):
         if not is_it2i:
             has_cached_partner = t >= p.cfg_interval[0] and t <= p.cfg_interval[1] and p.cfg_scale > 1
             cond_kwargs = self._get_cfg_kwargs(
-                caches, image_embeds, t, z, ns, p, branch="cond", cache_dit_skip=not has_cached_partner
+                caches, image_embeds, t, z, ns, p, branch="cond", use_cache_dit=has_cached_partner
             )
 
             in_interval = t >= p.cfg_interval[0] and t <= p.cfg_interval[1]
@@ -1147,7 +1145,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
             needs_cfg = p.cfg_scale != 1 or p.img_cfg_scale != 1
             has_cached_partner = use_cfg and needs_cfg
             cond_kwargs = self._get_cfg_kwargs(
-                caches, image_embeds, t, z, ns, p, branch="cond", cache_dit_skip=not has_cached_partner
+                caches, image_embeds, t, z, ns, p, branch="cond", use_cache_dit=has_cached_partner
             )
 
             if not use_cfg or not needs_cfg:
@@ -1176,7 +1174,7 @@ class SenseNovaU1Pipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipeli
                 )
             else:
                 image_cond_kwargs = self._get_cfg_kwargs(
-                    caches, image_embeds, t, z, ns, p, branch="img_cond", cache_dit_skip=True
+                    caches, image_embeds, t, z, ns, p, branch="img_cond", use_cache_dit=False
                 )
                 uncond_kwargs = self._get_cfg_kwargs(caches, image_embeds, t, z, ns, p, branch="uncond")
                 noise_pred = self.predict_noise_with_multi_branch_cfg(

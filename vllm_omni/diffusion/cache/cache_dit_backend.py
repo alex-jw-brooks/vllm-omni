@@ -864,40 +864,20 @@ class BagelCachedAdapter(CachedAdapter):
 
 class SensenovaCachedBlocks(CachedBlocks_Pattern_3_4_5):
     """
-    Custom CachedBlocks for SenseNova-U1 that only caches image-token hidden
-    states during denoising.
+    Custom CachedBlocks for SenseNova-U1 that only caches when the caller
+    explicitly opts in via ``use_cache_dit=True`` (denoising branches).
     """
-
-    @classmethod
-    def _is_denoising_call(cls, kwargs: dict[str, Any]) -> bool:
-        if kwargs.get("cache_dit_skip", False):
-            return False
-
-        # Prefix/text forwards either omit image_gen_indicators or update the
-        # DynamicCache. Denoising forwards are gen-only and use update_cache=False.
-        if kwargs.get("update_cache", True):
-            return False
-
-        exist_gen = kwargs.get("exist_gen")
-        exist_und = kwargs.get("exist_und")
-        if exist_gen is None or exist_und is None:
-            image_gen_indicators = kwargs.get("image_gen_indicators")
-            if image_gen_indicators is None:
-                return False
-            exist_gen = image_gen_indicators.any().item()
-            exist_und = (~image_gen_indicators).any().item()
-
-        return exist_gen and not exist_und
 
     @staticmethod
     def _strip_cache_only_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
         kwargs = dict(kwargs)
-        kwargs.pop("cache_dit_skip", None)
+        kwargs.pop("use_cache_dit", None)
         return kwargs
 
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs):
+        use_cache_dit = kwargs.get("use_cache_dit", False)
         block_kwargs = self._strip_cache_only_kwargs(kwargs)
-        if not self._is_denoising_call(kwargs):
+        if not use_cache_dit:
             hidden_states, new_encoder_hidden_states = self.call_blocks(
                 hidden_states,
                 *args,
