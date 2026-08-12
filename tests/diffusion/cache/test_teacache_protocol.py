@@ -26,7 +26,7 @@ from vllm_omni.diffusion.models.flux2_klein.flux2_klein_transformer import (
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_image3_transformer import HunyuanImage3Model
 from vllm_omni.diffusion.models.longcat_image.longcat_image_transformer import LongCatImageTransformer2DModel
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import QwenImageTransformer2DModel
-from vllm_omni.diffusion.models.sensenova_u1.sensenova_u1_transformer import SenseNovaU1ForCausalLM
+from vllm_omni.diffusion.models.sensenova_u1.pipeline_sensenova_u1 import SenseNovaU1DenoisingAdapter
 from vllm_omni.diffusion.models.stable_audio.stable_audio_transformer import StableAudioDiTModel
 from vllm_omni.diffusion.models.z_image.z_image_transformer import ZImageTransformer2DModel
 
@@ -44,7 +44,7 @@ TEACACHE_TRANSFORMER_CLASSES = [
     ZImageTransformer2DModel,
     StableAudioDiTModel,
     Bagel,
-    SenseNovaU1ForCausalLM,
+    SenseNovaU1DenoisingAdapter,
     HunyuanImage3Model,
 ]
 
@@ -80,7 +80,7 @@ MODEL_COEFFICIENTS = {
     # Using Qwen's coefficients as reasonable default given shared architecture
     Bagel: [1.33313129e06, -1.68644226e05, 7.95050740e03, -1.63747873e02, 1.26352397e00],
     # SenseNova-U1 transformer coefficients
-    SenseNovaU1ForCausalLM: [
+    SenseNovaU1DenoisingAdapter: [
         9.07281930e04,
         -2.17699186e04,
         1.83940990e03,

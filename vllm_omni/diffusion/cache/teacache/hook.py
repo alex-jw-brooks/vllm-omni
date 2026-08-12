@@ -38,8 +38,9 @@ class TeaCacheHook(ModelHook):
 
     Key features:
     - Zero changes to model code
-    - CFG-aware with separate states for positive/negative branches
-    - CFG-parallel compatible: properly detects branch identity across ranks
+    - CFG-aware: prefer explicit ``module.teacache_branch`` (N-branch safe);
+      fall back to positive/negative inference for legacy 2-branch callers
+    - CFG-parallel compatible when pipelines set ``teacache_branch`` per call
     - Model-specific polynomial rescaling
     - Auto-detection of model types
 
@@ -81,8 +82,15 @@ class TeaCacheHook(ModelHook):
         return self._legacy_forward(module, *args, **kwargs)
 
     def _get_cache_state(self, module: torch.nn.Module) -> TeaCacheState:
-        """Resolve CFG branch and return the corresponding cache state."""
-        if getattr(module, "do_true_cfg", False):
+        """Resolve CFG branch and return the corresponding cache state.
+
+        Prefer an explicit ``module.teacache_branch`` set by the pipeline
+        (required for N>2 CFG). Fall back to the legacy 2-branch heuristic.
+        """
+        branch = getattr(module, "teacache_branch", None)
+        if branch is not None:
+            cache_branch = branch
+        elif getattr(module, "do_true_cfg", False):
             cfg_parallel_size = get_classifier_free_guidance_world_size()
             if cfg_parallel_size > 1:
                 cfg_rank = get_classifier_free_guidance_rank()

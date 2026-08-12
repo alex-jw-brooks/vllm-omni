@@ -34,7 +34,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.cache.cache_dit_backend import CacheDiTAdapterConfig, SensenovaCachedAdapter
-from vllm_omni.diffusion.cache.teacache.protocol import ForwardState, SupportsTeaCache
+from vllm_omni.diffusion.cache.teacache.protocol import ForwardState
 
 logger = init_logger(__name__)
 
@@ -140,12 +140,13 @@ class SenseNovaU1State:
 
     exist_und: bool
     exist_gen: bool
-    past_key_values: DynamicCache
+    past_key_values: DynamicCache | None
     attention_mask: dict[str, torch.Tensor]
     indexes: torch.Tensor | None
     compute_logits: bool
     use_cache: bool
     update_cache: bool
+    use_cache_dit: bool = False
 
 
 class Qwen3RotaryEmbedding(nn.Module):
@@ -625,6 +626,7 @@ class SenseNovaU1DecoderLayer(nn.Module):
         attention_mask,
         past_key_values,
         update_cache: bool = True,
+        use_cache_dit: bool = False,
     ):
         if isinstance(attention_mask, dict):
             attention_mask = attention_mask.get(
@@ -672,42 +674,18 @@ class SenseNovaU1Model(nn.Module):
 
     def forward(
         self,
-        input_ids=None,
-        image_gen_indicators=None,
-        indexes=None,
-        attention_mask=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        use_cache=None,
-        **kwargs,
+        inputs_embeds,
+        indexes,
+        attention_mask,
+        past_key_values,
+        exist_und: bool,
+        exist_gen: bool,
+        update_cache: bool = True,
+        use_cache: bool = False,
+        use_cache_dit: bool = False,
     ):
-        if image_gen_indicators is None:
-            exist_und, exist_gen = True, False
-        else:
-            exist_und = (~image_gen_indicators).any().item()
-            exist_gen = image_gen_indicators.any().item()
-
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
-
-        if use_cache and past_key_values is None:
-            past_key_values = DynamicCache()
-
-        # Resolve attention mask. Callers must always provide `indexes`; this
-        # keeps the model stateless and safe under concurrent requests.
-        assert indexes is not None, "SenseNovaU1Model.forward requires explicit `indexes`."
-        if not isinstance(attention_mask, dict):
-            past_len = past_key_values.get_seq_length() if past_key_values else 0
-            seq_len = inputs_embeds.shape[1]
-            total_len = past_len + seq_len
-            mask = torch.zeros(1, 1, seq_len, total_len, device=inputs_embeds.device)
-            if seq_len > 1:
-                causal = torch.tril(torch.ones(seq_len, seq_len, device=inputs_embeds.device))
-                mask[:, :, :, past_len:] = torch.where(causal == 1, 0.0, float("-inf"))
-            causal_mask_mapping = {"full_attention": mask}
-        else:
-            causal_mask_mapping = attention_mask
-
+        # Blocks only: embed / mask / final norm live in ForCausalLM preprocess/postprocess.
+        # CacheDiT wraps this forward and temporarily patches ``layers``.
         hidden_states = inputs_embeds
         for layer in self.layers:
             hidden_states = layer(
@@ -715,15 +693,11 @@ class SenseNovaU1Model(nn.Module):
                 exist_und=exist_und,
                 exist_gen=exist_gen,
                 indexes=indexes,
-                attention_mask=causal_mask_mapping,
+                attention_mask=attention_mask,
                 past_key_values=past_key_values,
+                update_cache=update_cache,
+                use_cache_dit=use_cache_dit,
             )
-
-        if not exist_gen:
-            hidden_states = self.norm(hidden_states)
-        else:
-            hidden_states = self.norm_mot_gen(hidden_states)
-
         return SenseNovaU1ModelOutput(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values if use_cache else None,
@@ -735,7 +709,7 @@ class SenseNovaU1Model(nn.Module):
 # ---------------------------------------------------------------------------
 
 
-class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
+class SenseNovaU1ForCausalLM(nn.Module):
     def __init__(self, config, quant_config=None, prefix: str = ""):
         super().__init__()
         self.config = config
@@ -746,21 +720,21 @@ class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
         # outputs so callers see full-vocab logits regardless of tp_size.
         self.logits_processor = LogitsProcessor(config.vocab_size)
 
-    # SupportsTeaCache protocol stubs
+    # Decomposed forward helpers shared with SenseNovaU1DenoisingAdapter (TeaCache).
     def preprocess(
         self,
-        input_ids: torch.Tensor | None,
-        image_gen_indicators: torch.Tensor,
-        indexes: torch.Tensor | None,
-        attention_mask: dict[str, torch.Tensor] | torch.Tensor | None,
-        past_key_values: DynamicCache,
-        update_cache: bool,
-        inputs_embeds: torch.Tensor | None,
-        use_cache: bool,
-        compute_logits: bool,
+        input_ids: torch.Tensor | None = None,
+        image_gen_indicators: torch.Tensor | None = None,
+        indexes: torch.Tensor | None = None,
+        attention_mask: dict[str, torch.Tensor] | torch.Tensor | None = None,
+        past_key_values: DynamicCache | None = None,
+        update_cache: bool = True,
+        inputs_embeds: torch.Tensor | None = None,
+        use_cache: bool = False,
+        compute_logits: bool = True,
         *,
         skip_modulated_input: bool = False,
-        cache_dit_skip: bool = False,
+        use_cache_dit: bool = False,
     ) -> ForwardState[SenseNovaU1State]:
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
@@ -776,7 +750,7 @@ class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
 
         # Resolve attention mask. Callers must always provide `indexes`; this
         # keeps the model stateless and safe under concurrent requests.
-        assert indexes is not None, "SenseNovaU1Model.forward requires explicit `indexes`."
+        assert indexes is not None, "SenseNovaU1ForCausalLM.preprocess requires explicit `indexes`."
         if not isinstance(attention_mask, dict):
             assert inputs_embeds is not None
             past_len = past_key_values.get_seq_length() if past_key_values else 0
@@ -808,20 +782,25 @@ class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
                 compute_logits=compute_logits,
                 use_cache=use_cache,
                 update_cache=update_cache,
+                use_cache_dit=use_cache_dit,
             ),
         )
 
     def run_transformer_blocks(self, ctx: ForwardState[SenseNovaU1State]) -> ForwardState[SenseNovaU1State]:
-        for layer in self.model.layers:
-            ctx.hidden_states = layer(
-                ctx.hidden_states,
-                exist_und=ctx.intermediates.exist_und,
-                exist_gen=ctx.intermediates.exist_gen,
-                indexes=ctx.intermediates.indexes,
-                attention_mask=ctx.intermediates.attention_mask,
-                past_key_values=ctx.intermediates.past_key_values,
-                update_cache=ctx.intermediates.update_cache,
-            )
+        # Route through SenseNovaU1Model.forward so CacheDiT's temporary ``layers``
+        # patch is active. Final norm stays in postprocess.
+        out = self.model(
+            ctx.hidden_states,
+            indexes=ctx.intermediates.indexes,
+            attention_mask=ctx.intermediates.attention_mask,
+            past_key_values=ctx.intermediates.past_key_values,
+            exist_und=ctx.intermediates.exist_und,
+            exist_gen=ctx.intermediates.exist_gen,
+            update_cache=ctx.intermediates.update_cache,
+            use_cache=ctx.intermediates.use_cache,
+            use_cache_dit=ctx.intermediates.use_cache_dit,
+        )
+        ctx.hidden_states = out.last_hidden_state
         return ctx
 
     def postprocess(self, ctx: ForwardState) -> SenseNovaU1CausalLMOutput:
@@ -837,16 +816,13 @@ class SenseNovaU1ForCausalLM(nn.Module, SupportsTeaCache):
             hidden_states=ctx.hidden_states,
         )
 
-    def get_teacache_coefficients(self) -> list[float]:
-        return [9.07281930e04, -2.17699186e04, 1.83940990e03, -6.30339273e01, 7.61309272e-01]
-
     def forward(
         self, *args, input_ids: torch.Tensor | None = None, embed_only: bool = False, **kwargs
     ) -> SenseNovaU1CausalLMOutput:
-        """Forward pass for the DiT, which is implemented using the methods outlined by SupportsTeaCache.
+        """Forward using the same preprocess / blocks / postprocess decomposition as TeaCache.
 
-        NOTE: this is the disabled cache path; the forward is overridden by the TeaCache hook when it is
-        enabled, which needs the modulated inputs for cache decision. Skipping modulated inputs is intentional.
+        TeaCache hooks ``SenseNovaU1DenoisingAdapter``, not this module, so prefix / think / AR
+        calls here stay uncached. Skipping modulated inputs on this path is intentional.
         """
         if embed_only:
             if input_ids is None:
