@@ -2,55 +2,31 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """HuggingFace-style configuration classes for SenseNova-U1."""
 
-from transformers import AutoConfig, PretrainedConfig
+from transformers import AutoConfig, PretrainedConfig, Qwen3Config
 
 _SENSENOVA_U1_LLM_HIDDEN_DEFAULT = 4096
 
 
-class SenseNovaU1LLMConfig(PretrainedConfig):
-    """Qwen3-based LLM backbone config with 3D RoPE and MoT extensions."""
+# Adapted from: https://github.com/OpenSenseNova/SenseNova-U1/blob/main/src/sensenova_u1/models/neo_unify/configuration_neo_chat.py
+class SenseNovaU1LLMConfig(Qwen3Config):
+    """Qwen3-based LLM backbone config with 3D RoPE extensions."""
 
     model_type = "sensenova_u1_llm"
 
     def __init__(
         self,
-        hidden_size: int = _SENSENOVA_U1_LLM_HIDDEN_DEFAULT,
-        intermediate_size: int = 11008,
-        num_hidden_layers: int = 32,
-        num_attention_heads: int = 32,
-        num_key_value_heads: int | None = None,
-        head_dim: int | None = None,
-        hidden_act: str = "silu",
-        rms_norm_eps: float = 1e-6,
-        vocab_size: int = 152064,
-        rope_theta: float = 1000000.0,
+        rope_theta: float = 10000.0,
         rope_theta_hw: float = 10000.0,
-        max_position_embeddings: int = 40960,
         max_position_embeddings_hw: int = 10000,
-        attention_bias: bool = True,
-        layer_types: list[str] | None = None,
-        tie_word_embeddings: bool = False,
         **kwargs,
     ):
-        self.hidden_size = hidden_size
-        self.intermediate_size = intermediate_size
-        self.num_hidden_layers = num_hidden_layers
-        self.num_attention_heads = num_attention_heads
-        self.num_key_value_heads = num_key_value_heads if num_key_value_heads is not None else num_attention_heads
-        self.head_dim = head_dim if head_dim is not None else hidden_size // num_attention_heads
-        self.hidden_act = hidden_act
-        self.rms_norm_eps = rms_norm_eps
-        self.vocab_size = vocab_size
         self.rope_theta = rope_theta
         self.rope_theta_hw = rope_theta_hw
-        self.max_position_embeddings = max_position_embeddings
         self.max_position_embeddings_hw = max_position_embeddings_hw
-        self.attention_bias = attention_bias
-        self.layer_types = layer_types if layer_types is not None else ["full_attention"] * num_hidden_layers
-        kwargs["tie_word_embeddings"] = tie_word_embeddings
         super().__init__(**kwargs)
 
 
+# Adapted from https://github.com/OpenSenseNova/SenseNova-U1/blob/main/src/sensenova_u1/models/neo_unify/configuration_neo_vit.py#L10
 class SenseNovaU1VisionConfig(PretrainedConfig):
     """Vision embedding config (2D RoPE + conv patch embed, no transformer)."""
 
