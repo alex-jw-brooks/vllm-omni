@@ -53,6 +53,7 @@ class SenseNovaU1VisionConfig(PretrainedConfig):
         super().__init__(**kwargs)
 
 
+# Adapted from https://github.com/OpenSenseNova/SenseNova-U1/blob/main/training/sensenovavl/model/sensenovavl_moe_chat/configuration_sensenovavl_chat.py#L17
 class SenseNovaU1Config(PretrainedConfig):
     """Top-level composite config for SenseNova-U1.
 
