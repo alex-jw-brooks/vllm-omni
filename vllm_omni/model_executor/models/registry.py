@@ -273,6 +273,11 @@ _OMNI_MODELS = {
         "granite_prosody_lm",
         "GraniteProsodyLMForConditionalGeneration",
     ),
+    "GraniteStyleTTS2Decoder": (
+        "granite_prosody_lm",
+        "styletts2",
+        "GraniteStyleTTS2Decoder",
+    ),
     ## fish_speech (Fish Speech S2 Pro)
     "FishSpeechSlowARForConditionalGeneration": (
         "fish_speech",

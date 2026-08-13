@@ -31,6 +31,7 @@ class GraniteStyleTTS2Config(PretrainedConfig):
         upsample_initial_channel: int = 512,
         resblock_dilation_sizes: list[list[int]] | None = None,
         upsample_kernel_sizes: list[int] | None = None,
+        **kwargs,
     ):
         self.hidden_dim = hidden_dim
         self.style_dim = style_dim
@@ -50,7 +51,12 @@ class GraniteStyleTTS2Config(PretrainedConfig):
             [1, 3, 5],
         ]
         self.upsample_kernel_sizes = upsample_kernel_sizes or [20, 10, 6, 4]
-        super().__init__()
+        # Engine core requires LLM-style fields for ModelArchitectureConfig.
+        # These are not used by StyleTTS2 but must be present and non-zero.
+        self.hidden_size = hidden_dim
+        self.num_attention_heads = 1
+        self.num_hidden_layers = 1
+        super().__init__(**kwargs)
 
 
 AutoConfig.register("granite_styletts2", GraniteStyleTTS2Config)

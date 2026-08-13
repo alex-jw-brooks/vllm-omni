@@ -65,6 +65,7 @@ _STAGE_TTS = StagePipelineConfig(
     execution_type=StageExecutionType.LLM_GENERATION,
     input_sources=(1,),
     engine_output_type="audio",
+    model_subdir="stage2_tts",
     sampling_constraints={"detokenize": True},
 )
 
@@ -119,9 +120,6 @@ def build_granite_prosody_pipeline(
         is_nle: If True, text_norm uses NLE CTC (LLM_GENERATION).
                 If False, text_norm uses standard AR.
     """
-    if n_stages > 2:
-        raise ValueError(f"n_stages={n_stages} requires StyleTTS2 which is not yet ported.")
-
     stages = [_text_norm_stage(is_nle)]
     if n_stages >= 2:
         stages.append(_prosody_stage(is_nar))
@@ -140,7 +138,9 @@ def build_granite_prosody_pipeline(
         sampling_constraints={"detokenize": out_type != "latent"},
     )
 
-    if is_nle:
+    if n_stages >= 3:
+        deploy_yaml = "granite_prosody_lm_tts.yaml"
+    elif is_nle:
         deploy_yaml = "granite_prosody_lm_nle.yaml"
     elif is_nar:
         deploy_yaml = "granite_prosody_lm_nar.yaml"
@@ -158,12 +158,13 @@ def build_granite_prosody_pipeline(
 def resolve_granite_prosody_pipeline(
     hf_config: GraniteProsodyLMConfig,
 ) -> PipelineConfig:
-    n_stages = 2
+    n_stages = 3 if hf_config.tts_mode else 2
     is_nle = getattr(hf_config, "ctc_text_norm", False)
     logger.info(
-        "Granite Prosody Pipeline: %d stages, NAR=%s, NLE=%s",
+        "Granite Prosody Pipeline: %d stages, NAR=%s, NLE=%s, TTS=%s",
         n_stages,
         hf_config.nar_mode,
         is_nle,
+        hf_config.tts_mode,
     )
     return build_granite_prosody_pipeline(n_stages, hf_config.nar_mode, is_nle)

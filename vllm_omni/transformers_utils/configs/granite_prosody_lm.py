@@ -40,6 +40,7 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
     def __init__(
         self,
         # Stage routing
+        tts_mode: bool = False,
         nar_mode: bool = False,
         template_mode: str = "T1",
         compact_preamble: bool = True,
@@ -88,6 +89,7 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
         _warn_unhandled_kwargs(type(self), kwargs)
         super().__init__(**kwargs)
 
+        self.tts_mode = tts_mode
         self.nar_mode = nar_mode
         self.template_mode = template_mode
         self.compact_preamble = compact_preamble

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterable
 
 import numpy as np
 import torch
@@ -26,6 +27,7 @@ import torch.nn as nn
 import torchaudio.functional as audio_F
 from torch.nn.utils import spectral_norm, weight_norm
 from transformers import AlbertConfig, AlbertModel
+from vllm.config import VllmConfig
 
 from vllm_omni.transformers_utils.configs.granite_styletts2 import (
     GraniteStyleTTS2Config,
@@ -745,12 +747,13 @@ class HiFiGANGenerator(nn.Module):
         upsample_initial_channel,
         resblock_dilation_sizes,
         upsample_kernel_sizes,
+        sr,
     ):
         super().__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
         self.m_source = SourceModuleHnNSF(
-            sampling_rate=24000,
+            sampling_rate=sr,
             upsample_scale=np.prod(upsample_rates),
             harmonic_num=8,
             voiced_threshold=10,
@@ -817,12 +820,12 @@ class HiFiGANDecoder(nn.Module):
         self,
         dim_in,
         style_dim,
-        dim_out,
         resblock_kernel_sizes,
         upsample_rates,
         upsample_initial_channel,
         resblock_dilation_sizes,
         upsample_kernel_sizes,
+        sr,
     ):
         super().__init__()
         self.encode = AdainResBlk1d(dim_in + 2, 1024, style_dim)
@@ -850,6 +853,7 @@ class HiFiGANDecoder(nn.Module):
             upsample_initial_channel,
             resblock_dilation_sizes,
             upsample_kernel_sizes,
+            sr,
         )
 
     def forward(self, asr, f0_curve, n, s):
@@ -901,12 +905,12 @@ class StyleTTS2Model(nn.Module):
         self.decoder = HiFiGANDecoder(
             dim_in=config.hidden_dim,
             style_dim=config.style_dim,
-            dim_out=config.n_mels,
             resblock_kernel_sizes=config.resblock_kernel_sizes,
             upsample_rates=config.upsample_rates,
             upsample_initial_channel=config.upsample_initial_channel,
             resblock_dilation_sizes=config.resblock_dilation_sizes,
             upsample_kernel_sizes=config.upsample_kernel_sizes,
+            sr=config.sr,
         )
 
         self.text_encoder = TextEncoder(
@@ -949,3 +953,35 @@ class StyleTTS2Model(nn.Module):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError("StyleTTS2Model.forward() not yet implemented.")
+
+
+# ─── vLLM Omni model wrapper ─────────────────────────────────────────────────
+
+
+class GraniteStyleTTS2Decoder(nn.Module):
+    def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+        super().__init__()
+        config: GraniteStyleTTS2Config = vllm_config.model_config.hf_config
+        self.model = StyleTTS2Model(config)
+
+    def forward(self, input_ids: torch.Tensor, positions: torch.Tensor, **kwargs):
+        raise NotImplementedError("GraniteStyleTTS2Decoder.forward() not yet implemented.")
+
+    def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor | None:
+        raise NotImplementedError("GraniteStyleTTS2Decoder.compute_logits() not yet implemented.")
+
+    def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError("GraniteStyleTTS2Decoder.embed_input_ids() not yet implemented.")
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        params = dict(self.model.named_parameters())
+        buffers = dict(self.model.named_buffers())
+        loaded: set[str] = set()
+        for name, tensor in weights:
+            target = params.get(name)
+            if target is None:
+                target = buffers.get(name)
+            if target is not None:
+                target.data.copy_(tensor)
+                loaded.add(f"model.{name}")
+        return loaded
