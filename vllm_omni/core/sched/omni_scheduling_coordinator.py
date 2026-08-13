@@ -65,10 +65,6 @@ _FULL_PAYLOAD_INPUT_STAGES: frozenset[tuple[str, str]] = frozenset(
         # custom_process_next_stage_input_func: *_full_payload in deploy yaml.
         ("DyninOmniForConditionalGeneration", "token2image"),
         ("DyninOmniForConditionalGeneration", "token2audio"),
-        # granite_prosody_lm: text_norm (Stage 0) -> prosody (Stage 1) ->
-        # styletts2 (Stage 2).
-        ("GraniteProsodyLMForConditionalGeneration", "prosody"),
-        ("GraniteStyleTTS2Decoder", "styletts2"),
     }
 )
 

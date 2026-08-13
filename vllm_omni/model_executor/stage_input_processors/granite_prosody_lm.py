@@ -4,11 +4,9 @@
 
 text_norm_to_prosody (Stage 0 → Stage 1):
   Transforms the completed text normalization output into the prosody
-  stage input. Handles both AR and NAR modes:
-    AR  — chat-template-wrapped prompt ending at [SEP_F0]; model generates
-          prosody tokens autoregressively.
-    NAR — same prompt + masked annotation block; model predicts all mask
-          positions via iterative refinement.
+  stage input. Builds a chat-template-wrapped prompt ending at [SEP_F0]
+  plus a masked NAR annotation block; model predicts all mask positions
+  via iterative refinement.
 
 prosody_to_tts (Stage 1 → Stage 2):
   Transforms the prosody annotation block output into the data needed by
@@ -18,7 +16,6 @@ prosody_to_tts (Stage 1 → Stage 2):
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from functools import lru_cache
@@ -33,7 +30,7 @@ from vllm_omni.data_entry_keys import (
     MetaStruct,
     OmniPayloadStruct,
 )
-from vllm_omni.model_executor.models.granite_prosody_lm.nar_utils import (
+from vllm_omni.model_executor.models.granite_prosody_lm.decode_utils import (
     compute_preamble_layout,
 )
 
@@ -55,30 +52,34 @@ def _get_hf_config(transfer_manager: Any):
     return model_config.hf_config
 
 
-@lru_cache(maxsize=1)
-def _load_base_config(base_dir: str) -> dict:
-    config_path = os.path.join(base_dir, "config.json")
-    if os.path.isfile(config_path):
-        with open(config_path) as f:
-            return json.load(f)
-    return {}
-
-
-def _is_pipeline_nar_mode(transfer_manager: Any) -> bool:
-    """Check whether the pipeline uses NAR prosody mode.
-
-    Reads from the base model directory's config.json (the parent of
-    per-stage subdirectories), which carries the pipeline-level nar_mode.
-    Stage 0's own config always has nar_mode=False since it's AR.
-    """
-    model_config = transfer_manager._get_model_config()
-    base_dir = model_config.tokenizer or os.path.dirname(model_config.model)
-    return _load_base_config(base_dir).get("nar_mode", False)
-
-
 def _get_tokenizer(transfer_manager: Any):
     model_config = transfer_manager._get_model_config()
     return _load_tokenizer(model_config.tokenizer or model_config.model)
+
+
+@lru_cache(maxsize=1)
+def _load_hf_config(model_path: str):
+    from transformers import AutoConfig
+
+    return AutoConfig.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_orchestrator_config_and_tokenizer() -> tuple:
+    """Load config and tokenizer for orchestrator-path functions.
+
+    Uses GRANITE_PROSODY_LM_MODEL_PATH env var (the pipeline model root),
+    or discovers it from the Omni engine's model config.
+    """
+    model_root = os.environ.get("GRANITE_PROSODY_LM_MODEL_PATH")
+    if model_root is None:
+        raise RuntimeError("GRANITE_PROSODY_LM_MODEL_PATH must be set for orchestrator-path stage input processing.")
+    config = _load_hf_config(os.path.join(model_root, "stage1_prosody"))
+    tokenizer = _load_tokenizer(model_root)
+    return config, tokenizer
 
 
 def _extract_normalized_text(
@@ -153,29 +154,221 @@ def _build_nar_annotation_block(config: Any, num_words: int) -> list[int]:
     return [config.sil_token_id] + preamble + word_cols + [config.sep2_token_id]
 
 
+def _extract_multimodal_output(source_output: Any) -> dict[str, Any] | None:
+    """Extract multimodal output from a source output object.
+
+    Handles both OmniRequestOutput (has .multimodal_output property) and raw
+    RequestOutput (multimodal data on .outputs[0].multimodal_output).
+    """
+    from collections.abc import Mapping
+
+    mm = getattr(source_output, "multimodal_output", None)
+    if mm is not None and (isinstance(mm, dict) or isinstance(mm, Mapping)):
+        if hasattr(mm, "to_dict"):
+            return mm.to_dict()
+        return dict(mm) if not isinstance(mm, dict) else mm
+
+    for comp_output in getattr(source_output, "outputs", []):
+        mm = getattr(comp_output, "multimodal_output", None)
+        if mm is not None:
+            if hasattr(mm, "to_dict"):
+                return mm.to_dict()
+            if isinstance(mm, (dict, Mapping)):
+                return dict(mm) if not isinstance(mm, dict) else mm
+
+    return None
+
+
+def process_text_norm_to_prosody(
+    source_outputs: list,
+    prompt: Any = None,
+    requires_multimodal_data: bool = False,
+    streaming_context: Any = None,
+) -> list:
+    """Orchestrator-path processor: Stage 0 (text_norm) → Stage 1 (prosody).
+
+    Called by the orchestrator's process_engine_inputs for LLM_GENERATION stages.
+    Extracts CTC-decoded tokens from source_output.multimodal_output, builds
+    prosody prompt with NAR annotation block, returns as OmniTokensPrompt.
+    """
+    from vllm_omni.inputs.data import OmniTokensPrompt
+
+    results = []
+    for source_output in source_outputs:
+        mm_output = _extract_multimodal_output(source_output)
+
+        text_norm_tensor = mm_output.get("text_norm_tokens") if mm_output else None
+        if text_norm_tensor is None:
+            logger.warning(
+                "process_text_norm_to_prosody: no text_norm_tokens for req=%s, source_type=%s, mm_keys=%s",
+                getattr(source_output, "request_id", "?"),
+                type(source_output).__name__,
+                list(mm_output.keys()) if mm_output else "None",
+            )
+            continue
+
+        if isinstance(text_norm_tensor, torch.Tensor):
+            output_ids = text_norm_tensor.tolist()
+        elif isinstance(text_norm_tensor, list):
+            output_ids = text_norm_tensor
+        else:
+            output_ids = list(text_norm_tensor)
+
+        if not output_ids:
+            logger.warning(
+                "process_text_norm_to_prosody: empty text_norm_tokens for req=%s",
+                getattr(source_output, "request_id", "?"),
+            )
+            continue
+
+        config, tokenizer = _get_orchestrator_config_and_tokenizer()
+
+        normalized_text = _extract_normalized_text(
+            tokenizer,
+            output_ids,
+            config.sep_norm_token_id,
+        )
+
+        f0_bin = config.default_f0_bin
+        prompt_ids = _build_prosody_prompt_ids(tokenizer, normalized_text, f0_bin)
+
+        num_words = len(normalized_text.split())
+        annot_block = _build_nar_annotation_block(config, num_words)
+        prompt_ids = list(prompt_ids) + annot_block
+
+        logger.debug(
+            "process_text_norm_to_prosody: req=%s, num_words=%d, prompt_len=%d",
+            getattr(source_output, "request_id", "?"),
+            num_words,
+            len(prompt_ids),
+        )
+
+        results.append(OmniTokensPrompt(prompt_token_ids=prompt_ids))
+    return results
+
+
+def process_prosody_to_tts(
+    source_outputs: list,
+    prompt: Any = None,
+    requires_multimodal_data: bool = False,
+    streaming_context: Any = None,
+) -> list:
+    """Orchestrator-path processor: Stage 1 (prosody) → Stage 2 (StyleTTS2).
+
+    Extracts prosody tokens from source multimodal output, builds TTS
+    payload (phonemes, prsinf, boundaries, speaker embedding), and packs
+    into prompt_token_ids for the StyleTTS2 decoder.
+    """
+    from vllm_omni.inputs.data import OmniTokensPrompt
+
+    results = []
+    for source_output in source_outputs:
+        mm_output = _extract_multimodal_output(source_output)
+
+        prosody_tensor = mm_output.get("prosody_tokens") if mm_output else None
+        if prosody_tensor is None:
+            logger.warning(
+                "process_prosody_to_tts: no prosody_tokens for req=%s, mm_keys=%s",
+                getattr(source_output, "request_id", "?"),
+                list(mm_output.keys()) if mm_output else "None",
+            )
+            continue
+
+        if isinstance(prosody_tensor, torch.Tensor):
+            annot_tokens = prosody_tensor.tolist()
+        elif isinstance(prosody_tensor, list):
+            annot_tokens = prosody_tensor
+        else:
+            annot_tokens = list(prosody_tensor)
+
+        if not annot_tokens:
+            logger.warning(
+                "process_prosody_to_tts: empty prosody_tokens for req=%s",
+                getattr(source_output, "request_id", "?"),
+            )
+            continue
+
+        config, tokenizer = _get_orchestrator_config_and_tokenizer()
+
+        prompt_ids = list(getattr(source_output, "prompt_token_ids", None) or [])
+        normalized_text = _extract_normalized_text_from_prompt(
+            tokenizer,
+            prompt_ids,
+            config.sep_norm_token_id,
+            config.sep_f0_token_id,
+        )
+        if not normalized_text:
+            logger.warning(
+                "process_prosody_to_tts: no normalized_text for req=%s",
+                getattr(source_output, "request_id", "?"),
+            )
+            continue
+
+        g_pre, _ = compute_preamble_layout(
+            config.emotion_control,
+            list(config.nar_global_dims),
+            config.compact_preamble,
+        )
+        output_nums = _nar_block_to_nums(annot_tokens, config.num_start_id, g_pre)
+        prsinf = _output_nums_to_prsinf(output_nums)
+
+        tts_text = re.sub(r"^\[SPEAKER\s+\S+\]\s*", "", normalized_text)
+        tts_text = re.sub(r"^\[SPEAKER\s+\S+\s+", "", tts_text)
+        tts_text = tts_text.replace("_", " ")
+        ps = _text_to_phonemes(tts_text)
+        tokens = _text_cleaner(ps)
+        tokens.insert(0, 0)
+        is_sil = [1 if _ID2SYM.get(tk, "") in _PUNCTUATION + _PAD else 0 for tk in tokens]
+        if is_sil and is_sil[-1] == 0:
+            tokens.append(0)
+            is_sil.append(1)
+        indices_word = _find_consecutive_indices(is_sil)
+        boundaries = np.array(indices_word)[:, 1:].T
+
+        model_dir = os.environ.get("GRANITE_PROSODY_LM_MODEL_PATH", "")
+        tts_dir = os.path.join(model_dir, "stage2_tts") if model_dir else ""
+        spk_emb = _load_speaker_embedding(tts_dir)
+
+        packed = pack_tts_payload(
+            phoneme_tokens=tokens,
+            prsinf=prsinf,
+            boundaries=boundaries,
+            speaker_embedding=spk_emb,
+        )
+
+        results.append(OmniTokensPrompt(prompt_token_ids=packed.tolist()))
+    return results
+
+
 def text_norm_to_prosody(
     transfer_manager: Any,
-    pooling_output: dict[str, Any] | None,
+    multimodal_output: dict[str, Any] | None,
     request: Any,
     is_finished: bool = False,
 ) -> dict[str, Any] | None:
-    """Sync stage input processor: Stage 0 (text_norm) → Stage 1 (prosody).
+    """Transfer-adapter-path processor: Stage 0 (text_norm) → Stage 1 (prosody).
 
-    Builds a fresh Stage 1 prompt from Stage 0's normalized text output:
-      chat_template(norm_text[SEP_NORM]Speaker<|num_tk_F0|>:[SEP_F0])
-    For NAR mode, also appends the masked annotation block.
+    Used when Stage 0 is LLM_AR. For LLM_GENERATION stages, the orchestrator
+    calls process_text_norm_to_prosody instead.
     """
     config = _get_hf_config(transfer_manager)
     tokenizer = _get_tokenizer(transfer_manager)
 
     req_id = getattr(request, "req_id", None)
 
-    output_ids = list(getattr(request, "output_token_ids", None) or [])
-    output_ids = [t for t in output_ids if t >= 0]
+    # Stage 0 (NLE/CTC) returns decoded tokens via multimodal_output.
+    output_ids = None
+    if isinstance(multimodal_output, dict):
+        text_norm_tensor = multimodal_output.get("text_norm_tokens")
+        if text_norm_tensor is not None:
+            if isinstance(text_norm_tensor, torch.Tensor):
+                output_ids = text_norm_tensor.tolist()
+            elif isinstance(text_norm_tensor, list):
+                output_ids = text_norm_tensor
 
     if not output_ids:
         logger.warning(
-            "text_norm_to_prosody: empty output_token_ids for req=%s",
+            "text_norm_to_prosody: no text_norm_tokens in multimodal_output for req=%s",
             req_id,
         )
         return None
@@ -189,24 +382,16 @@ def text_norm_to_prosody(
     f0_bin = config.default_f0_bin
     prompt_ids = _build_prosody_prompt_ids(tokenizer, normalized_text, f0_bin)
 
-    nar_mode = _is_pipeline_nar_mode(transfer_manager)
-    if nar_mode:
-        num_words = len(normalized_text.split())
-        annot_block = _build_nar_annotation_block(config, num_words)
-        prompt_ids = list(prompt_ids) + annot_block
-        logger.debug(
-            "text_norm_to_prosody (NAR): req=%s, num_words=%d, prompt_len=%d, annot_block_len=%d",
-            getattr(request, "req_id", None),
-            num_words,
-            len(prompt_ids),
-            len(annot_block),
-        )
-    else:
-        logger.debug(
-            "text_norm_to_prosody (AR): req=%s, prompt_len=%d",
-            getattr(request, "req_id", None),
-            len(prompt_ids),
-        )
+    num_words = len(normalized_text.split())
+    annot_block = _build_nar_annotation_block(config, num_words)
+    prompt_ids = list(prompt_ids) + annot_block
+    logger.debug(
+        "text_norm_to_prosody: req=%s, num_words=%d, prompt_len=%d, annot_block_len=%d",
+        req_id,
+        num_words,
+        len(prompt_ids),
+        len(annot_block),
+    )
 
     return OmniPayloadStruct(
         codes=CodesStruct(audio=torch.tensor(prompt_ids, dtype=torch.long)),
@@ -462,7 +647,7 @@ def _extract_normalized_text_from_prompt(
 
 def prosody_to_tts(
     transfer_manager: Any,
-    pooling_output: dict[str, Any] | None,
+    multimodal_output: dict[str, Any] | None,
     request: Any,
     is_finished: bool = False,
 ) -> dict[str, Any] | None:
@@ -483,8 +668,8 @@ def prosody_to_tts(
     req_id = getattr(request, "req_id", None)
 
     annot_tokens = None
-    if isinstance(pooling_output, dict):
-        prosody_tensor = pooling_output.get("prosody_tokens")
+    if isinstance(multimodal_output, dict):
+        prosody_tensor = multimodal_output.get("prosody_tokens")
         if prosody_tensor is not None:
             if isinstance(prosody_tensor, torch.Tensor):
                 annot_tokens = prosody_tensor.tolist()
@@ -492,7 +677,7 @@ def prosody_to_tts(
                 annot_tokens = prosody_tensor
     if annot_tokens is None:
         logger.warning(
-            "prosody_to_tts: no prosody_tokens in pooling_output for req=%s",
+            "prosody_to_tts: no prosody_tokens in multimodal_output for req=%s",
             req_id,
         )
         return None

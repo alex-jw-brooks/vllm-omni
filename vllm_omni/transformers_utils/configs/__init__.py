@@ -30,7 +30,7 @@ _CLASS_TO_MODULE: dict[str, str] = {
     "Qwen3VLMoeVisionConfig": "vllm_omni.transformers_utils.configs.ming_flash_omni",
     "WhisperEncoderConfig": "vllm_omni.transformers_utils.configs.ming_flash_omni",
     "GraniteProsodyLMConfig": "vllm_omni.transformers_utils.configs.granite_prosody_lm",
-    "GraniteStyleTTS2Config": "vllm_omni.transformers_utils.configs.granite_styletts2",
+    "GraniteStyleTTS2Config": "vllm_omni.transformers_utils.configs.granite_prosody_lm",
 }
 
 __all__ = [
@@ -77,7 +77,6 @@ from vllm_omni.transformers_utils.configs import cosyvoice3 as _cosyvoice3  # no
 from vllm_omni.transformers_utils.configs import fish_speech as _fish_speech  # noqa: F401, E402
 from vllm_omni.transformers_utils.configs import glm_tts as _glm_tts  # noqa: F401, E402
 from vllm_omni.transformers_utils.configs import granite_prosody_lm as _granite_prosody_lm  # noqa: F401, E402
-from vllm_omni.transformers_utils.configs import granite_styletts2 as _granite_styletts2  # noqa: F401, E402
 from vllm_omni.transformers_utils.configs import higgs_audio_v3 as _higgs_audio_v3  # noqa: F401, E402
 from vllm_omni.transformers_utils.configs import mammoth_moda2 as _mammoth_moda2  # noqa: F401, E402
 from vllm_omni.transformers_utils.configs import ming_flash_omni as _ming_flash_omni  # noqa: F401, E402

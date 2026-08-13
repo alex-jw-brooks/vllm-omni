@@ -1,12 +1,55 @@
-"""CTC utilities for NLE text normalization.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""Shared decode utilities for Granite ProsodyLM.
 
-Greedy CTC decode and interleaving helpers, ported from the reference
-implementation (llm/ctc_decode.py, nle_textnorm.py).
+NAR preamble layout (used by both the model and the stage input processor)
+and CTC greedy decode / interleaving helpers for NLE text normalization.
 """
 
 from __future__ import annotations
 
 import torch
+
+_N_PROSODY_DIMS = 5
+
+
+def compute_preamble_layout(
+    emotion_control: int,
+    nar_global_dims: list[int],
+    compact_preamble: bool,
+    n_prosody_dims: int = _N_PROSODY_DIMS,
+) -> tuple[int, list[int]]:
+    """Compute the NAR preamble layout (size and dimension indices).
+
+    Returns (preamble_len, dim_indices) where dim_indices maps each preamble
+    position to its NAR head index (-1 = not predicted).
+    """
+    sil_dim = n_prosody_dims
+    emo_aro_dim = n_prosody_dims + 1
+    emo_val_dim = n_prosody_dims + 2
+
+    if nar_global_dims:
+        compact_preamble = True
+
+    if not compact_preamble:
+        n_legacy = n_prosody_dims + 1
+        dims = [
+            emo_aro_dim if emotion_control > 0 else -1,
+            emo_val_dim if emotion_control > 1 else -1,
+        ]
+        dims.extend([-1] * (n_legacy - 3))
+        dims.append(sil_dim)
+        return n_legacy, dims
+
+    dims: list[int] = []
+    if emotion_control > 0:
+        dims.append(emo_aro_dim)
+    if emotion_control > 1:
+        dims.append(emo_val_dim)
+    for d in nar_global_dims:
+        dims.append(d)
+    dims.append(sil_dim)
+    return len(dims), dims
 
 
 def greedy_ctc_decode(

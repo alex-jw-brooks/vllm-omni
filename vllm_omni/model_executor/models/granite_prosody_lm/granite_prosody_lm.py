@@ -28,11 +28,9 @@ from vllm.model_executor.models.granitemoehybrid import (
 from vllm.model_executor.models.utils import maybe_prefix
 from vllm.sequence import IntermediateTensors
 
-from vllm_omni.model_executor.models.granite_prosody_lm.ctc_utils import (
-    greedy_ctc_decode,
-)
-from vllm_omni.model_executor.models.granite_prosody_lm.nar_utils import (
+from vllm_omni.model_executor.models.granite_prosody_lm.decode_utils import (
     compute_preamble_layout,
+    greedy_ctc_decode,
 )
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.transformers_utils.configs.granite_prosody_lm import (
@@ -182,8 +180,8 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         )
         self.vllm_config = vllm_config
         self.model_stage = vllm_config.model_config.model_stage
-        self.nar_mode = self.model_stage == "prosody" and self.config.nar_mode
-        self.ctc_text_norm = self.model_stage == "text_norm" and self.config.ctc_text_norm
+        self.nar_mode = self.model_stage == "prosody"
+        self.ctc_text_norm = self.model_stage == "text_norm"
 
         if self.model_stage not in ("text_norm", "prosody"):
             raise ValueError(f"Unknown model_stage={self.model_stage!r}. Expected 'text_norm' or 'prosody'.")
@@ -198,17 +196,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         )
 
         if self.model_stage == "prosody":
-            if self.config.emotion_control != 0:
-                raise ValueError(
-                    "Emotion NAR heads are not implemented. emotion_control must be 0 for the prosody stage."
-                )
             num_codebook = self.config.num_end_id - self.config.num_start_id
-            if num_codebook <= 0:
-                raise ValueError(
-                    f"Invalid prosody codebook range: "
-                    f"num_start_id={self.config.num_start_id}, "
-                    f"num_end_id={self.config.num_end_id}."
-                )
             self.model.nar_heads = NARHeads(
                 self.config.hidden_size,
                 num_codebook,
@@ -230,7 +218,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
             )
 
         # LLM_GENERATION runner checks this to handle OmniOutput returns.
-        self.have_multimodal_outputs = self.nar_mode or self.ctc_text_norm
+        self.have_multimodal_outputs = True
 
         self.make_empty_intermediate_tensors = self.model.make_empty_intermediate_tensors
 
@@ -255,17 +243,9 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
                 positions,
                 **kwargs,
             )
-        if self.nar_mode:
-            return self._nar_decode(
-                input_ids,
-                positions,
-                inputs_embeds,
-                **kwargs,
-            )
-        return self.model.forward(
+        return self._nar_decode(
             input_ids,
             positions,
-            intermediate_tensors,
             inputs_embeds,
             **kwargs,
         )
@@ -275,16 +255,10 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         hidden_states: torch.Tensor,
         sampling_metadata: Any = None,
     ) -> torch.Tensor | None:
-        if self.nar_mode:
-            raise NotImplementedError(
-                "compute_logits should not be called for NAR prosody stage. "
-                "NAR decode uses model.nar_heads.forward_head() directly."
-            )
-        if self.ctc_text_norm:
-            raise NotImplementedError(
-                "compute_logits should not be called for CTC text norm stage. CTC decode uses self.ctc_head directly."
-            )
-        return self.model.compute_logits(hidden_states)
+        raise NotImplementedError(
+            "compute_logits should not be called — both stages use dedicated heads "
+            "(NAR heads for prosody, CTC head for text norm)."
+        )
 
     def preprocess(
         self,
@@ -292,10 +266,6 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         input_embeds: torch.Tensor,
         **kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
-        if not self.nar_mode and not self.ctc_text_norm:
-            # AR: populate the runner's inputs_embeds buffer in-place.
-            # NAR/CTC: skip — forward works from input_ids directly.
-            input_embeds.copy_(self.model.model.embed_input_ids(input_ids))
         return input_ids, input_embeds, {}
 
     def postprocess(
@@ -303,9 +273,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         hidden_states: torch.Tensor,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        # text_norm: AR output tokens handled by framework.
-        # prosody AR: same — tokens handled by framework.
-        # prosody NAR: complete result returned from forward() as OmniOutput.
+        # Both stages return complete results from forward() as OmniOutput.
         return {}
 
     def _ctc_text_norm_decode(
@@ -323,7 +291,22 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         """
         cfg = self.config
         blank_positions = (input_ids == cfg.blank_token_id).nonzero(as_tuple=True)[0]
-        prefix_len = int(blank_positions[0].item()) if len(blank_positions) > 0 else 0
+        if len(blank_positions) == 0:
+            self.model.forward(
+                input_ids,
+                positions,
+                inputs_embeds=None,
+                **kwargs,
+            )
+            return OmniOutput(
+                text_hidden_states=None,
+                multimodal_outputs={
+                    "text_norm_tokens": [
+                        torch.tensor([], dtype=torch.long),
+                    ],
+                },
+            )
+        prefix_len = int(blank_positions[0].item())
 
         hidden_states = self.model.forward(
             input_ids,

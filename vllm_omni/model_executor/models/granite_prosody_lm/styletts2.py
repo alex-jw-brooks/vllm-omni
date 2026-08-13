@@ -31,7 +31,7 @@ from transformers import AlbertConfig, AlbertModel
 from vllm.config import VllmConfig
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
-from vllm_omni.transformers_utils.configs.granite_styletts2 import (
+from vllm_omni.transformers_utils.configs.granite_prosody_lm import (
     GraniteStyleTTS2Config,
 )
 

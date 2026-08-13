@@ -54,7 +54,7 @@ from vllm_omni.model_executor.models.glm_image.pipeline import GLM_IMAGE_PIPELIN
 from vllm_omni.model_executor.models.glm_tts.pipeline import GLM_TTS_PIPELINE
 from vllm_omni.model_executor.models.gr00t.pipeline import GR00T_N1D7_PIPELINE
 from vllm_omni.model_executor.models.granite_prosody_lm.pipeline import (
-    resolve_granite_prosody_pipeline,
+    GRANITE_PROSODY_LM_PIPELINE,
 )
 from vllm_omni.model_executor.models.higgs_audio_v2.pipeline import HIGGS_AUDIO_V2_PIPELINE
 from vllm_omni.model_executor.models.higgs_audio_v3.pipeline import HIGGS_AUDIO_V3_PIPELINE
@@ -151,7 +151,7 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "voxtral_tts": VOXTRAL_TTS_PIPELINE,
     "glm_tts": GLM_TTS_PIPELINE,
     "fish_qwen3_omni": FISH_SPEECH_PIPELINE,
-    "granite_prosody_lm": resolve_granite_prosody_pipeline,
+    "granite_prosody_lm": GRANITE_PROSODY_LM_PIPELINE,
     "ming_flash_omni": MING_FLASH_OMNI_PIPELINE,
     "ming_flash_omni_tts": MING_FLASH_OMNI_TTS_PIPELINE,
     "ming_flash_omni_thinker_only": MING_FLASH_OMNI_THINKER_ONLY_PIPELINE,

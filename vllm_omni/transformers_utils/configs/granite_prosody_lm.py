@@ -9,29 +9,7 @@ AR text normalization (Stage 0) and NAR prosody prediction (Stage 1).
 
 from __future__ import annotations
 
-import inspect
-import logging
-
-from transformers import AutoConfig, GraniteMoeHybridConfig
-
-logger = logging.getLogger(__name__)
-
-
-# TODO: remove once config fields / arch are finalized
-def _warn_unhandled_kwargs(cls: type, kwargs: dict) -> None:
-    """Log a warning for kwargs not in our declared fields or any base class."""
-    known = set()
-    for ancestor in cls.__mro__:
-        if ancestor is object:
-            continue
-        sig = inspect.signature(ancestor.__init__)
-        known.update(p for p in sig.parameters if p not in ("self", "kwargs", "args"))
-    unknown = {k for k in kwargs if k not in known and not k.startswith("_")}
-    if unknown:
-        logger.warning(
-            "GraniteProsodyLMConfig: unhandled kwargs (stored but not used at inference): %s",
-            sorted(unknown),
-        )
+from transformers import AutoConfig, GraniteMoeHybridConfig, PretrainedConfig
 
 
 class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
@@ -39,10 +17,6 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
 
     def __init__(
         self,
-        # Stage routing
-        tts_mode: bool = False,
-        nar_mode: bool = False,
-        template_mode: str = "T1",
         compact_preamble: bool = True,
         # Token IDs
         mask_token_id: int = 0,
@@ -62,13 +36,11 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
         nar_history_causal: bool = True,
         nar_max_history: int = 1,
         nar_temperature: float = 0.2,
-        nar_mask_schedule: str = "random",
         # Speaker preamble (pre-tokenized by export script)
         speaker_prefix_ids: list | None = None,
         speaker_suffix_ids: list | None = None,
         default_f0_bin: int = 0,
-        # NLE CTC text normalization (NAR text norm via CTC head)
-        ctc_text_norm: bool = False,
+        # CTC text normalization head
         ctc_head_vocab_size: int = 0,
         ctc_blank_index: int = 0,
         ctc_editor_copy_op: bool = False,
@@ -76,22 +48,12 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
         blank_token_id: int = 0,
         ctc_slots_per_gap: int = 3,
         ctc_steps: int = 1,
-        # Grammar processor (AR mode)
+        # Emotion control (always 0 — passed through to preamble layout)
         emotion_control: int = 0,
-        n_emo_bins: int = 0,
-        emo_start_id: int = 0,
-        # Validation-only (reject if non-default)
-        expert_chain_mode: str | None = None,
-        use_fractional_posids: bool = False,
-        dedicated_prosody_tokens: bool = False,
         **kwargs,
     ):
-        _warn_unhandled_kwargs(type(self), kwargs)
         super().__init__(**kwargs)
 
-        self.tts_mode = tts_mode
-        self.nar_mode = nar_mode
-        self.template_mode = template_mode
         self.compact_preamble = compact_preamble
 
         self.mask_token_id = mask_token_id
@@ -111,17 +73,13 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
         self.nar_history_causal = nar_history_causal
         self.nar_max_history = nar_max_history
         self.nar_temperature = nar_temperature
-        self.nar_mask_schedule = nar_mask_schedule
 
         self.speaker_prefix_ids = speaker_prefix_ids or []
         self.speaker_suffix_ids = speaker_suffix_ids or []
         self.default_f0_bin = default_f0_bin
 
         self.emotion_control = emotion_control
-        self.n_emo_bins = n_emo_bins
-        self.emo_start_id = emo_start_id
 
-        self.ctc_text_norm = ctc_text_norm
         self.ctc_head_vocab_size = ctc_head_vocab_size
         self.ctc_blank_index = ctc_blank_index
         self.ctc_editor_copy_op = ctc_editor_copy_op
@@ -130,60 +88,58 @@ class GraniteProsodyLMConfig(GraniteMoeHybridConfig):
         self.ctc_slots_per_gap = ctc_slots_per_gap
         self.ctc_steps = ctc_steps
 
-        self.expert_chain_mode = expert_chain_mode
-        self.use_fractional_posids = use_fractional_posids
-        self.dedicated_prosody_tokens = dedicated_prosody_tokens
 
-        # vLLM uses is_causal to select attention type (causal vs bidirectional).
-        # NAR needs bidirectional attention; AR needs causal.
-        self.is_causal = not nar_mode
+class GraniteStyleTTS2Config(PretrainedConfig):
+    """Config for Granite StyleTTS2 decoder (Stage 2 of ProsodyLM pipeline).
 
-        validate_config(self)
-
-
-def validate_config(config: GraniteProsodyLMConfig) -> None:
-    """Reject unsupported features at load time.
-
-    Called from the model's __init__ so misconfiguration crashes early
-    rather than producing silent wrong output.
+    Fields mirror config_ft.yml model_params.
     """
-    if config.emotion_control != 0:
-        raise ValueError(
-            f"emotion_control={config.emotion_control} is not supported. "
-            "Only emotion_control=0 (no emotion) is implemented."
-        )
-    if config.n_emo_bins > 0:
-        raise ValueError(f"n_emo_bins={config.n_emo_bins} is not supported. Emotion codebooks are not implemented.")
-    if config.expert_chain_mode is not None:
-        raise ValueError(
-            f"expert_chain_mode={config.expert_chain_mode!r} is not supported. Expert chain decode is not implemented."
-        )
-    if config.use_fractional_posids:
-        raise ValueError("use_fractional_posids=True is not supported. Fractional position IDs are not implemented.")
-    if config.template_mode != "T1":
-        raise ValueError(
-            f"template_mode={config.template_mode!r} is not supported. Only template_mode='T1' is implemented."
-        )
-    if config.dedicated_prosody_tokens:
-        raise ValueError(
-            "dedicated_prosody_tokens=True is not supported. Separate prosody token embeddings are not implemented."
-        )
 
-    if config.nar_mode:
-        if config.mask_token_id == 0:
-            raise ValueError("nar_mode=True requires mask_token_id to be set.")
-        if config.nar_mask_schedule not in ("random",):
-            raise ValueError(
-                f"nar_mask_schedule={config.nar_mask_schedule!r} is not "
-                "supported. Only 'random' (flat, no tiers) is implemented."
-            )
-        if config.nar_mask_schedule != "random":
-            if not config.nar_tiers:
-                raise ValueError("nar_mode=True with tiered schedule requires nar_tiers to be set.")
-            if not config.nar_iterations_per_tier:
-                raise ValueError("nar_mode=True with tiered schedule requires nar_iterations_per_tier to be set.")
+    model_type = "granite_styletts2"
+
+    def __init__(
+        self,
+        hidden_dim: int = 512,
+        style_dim: int = 128,
+        dim_in: int = 64,
+        n_layer: int = 3,
+        n_token: int = 178,
+        max_dur: int = 50,
+        n_mels: int = 80,
+        dropout: float = 0.2,
+        sr: int = 24000,
+        resblock_kernel_sizes: list[int] | None = None,
+        upsample_rates: list[int] | None = None,
+        upsample_initial_channel: int = 512,
+        resblock_dilation_sizes: list[list[int]] | None = None,
+        upsample_kernel_sizes: list[int] | None = None,
+        **kwargs,
+    ):
+        self.hidden_dim = hidden_dim
+        self.style_dim = style_dim
+        self.dim_in = dim_in
+        self.n_layer = n_layer
+        self.n_token = n_token
+        self.max_dur = max_dur
+        self.n_mels = n_mels
+        self.dropout = dropout
+        self.sr = sr
+        self.resblock_kernel_sizes = resblock_kernel_sizes or [3, 7, 11]
+        self.upsample_rates = upsample_rates or [10, 5, 3, 2]
+        self.upsample_initial_channel = upsample_initial_channel
+        self.resblock_dilation_sizes = resblock_dilation_sizes or [
+            [1, 3, 5],
+            [1, 3, 5],
+            [1, 3, 5],
+        ]
+        self.upsample_kernel_sizes = upsample_kernel_sizes or [20, 10, 6, 4]
+        self.hidden_size = hidden_dim
+        self.num_attention_heads = 1
+        self.num_hidden_layers = 1
+        super().__init__(**kwargs)
 
 
 AutoConfig.register("granite_prosody_lm", GraniteProsodyLMConfig)
+AutoConfig.register("granite_styletts2", GraniteStyleTTS2Config)
 
-__all__ = ["GraniteProsodyLMConfig", "validate_config"]
+__all__ = ["GraniteProsodyLMConfig", "GraniteStyleTTS2Config"]
