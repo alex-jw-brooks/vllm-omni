@@ -845,11 +845,6 @@ class OmniDiffusionConfig:
     # Streaming mode settings
     streaming_output: bool = False  # Start (video) generation with initial prompt, but streaming output in chunks
 
-    # Whether or not the Diffusion model should allow prompt upscaling;
-    # If enabled, we may load the text upscaler on the first call it is
-    # needed. If it's disabled, the text upscaler is always skipped.
-    enable_prompt_upscaling: bool = True
-
     # Allow lazy-loading external prompt upscaler models, e.g., in Ernie Image.
     # This is disabled by default to ensure that if prompt scaling is not desired
     # in low resource environments, we don't try to lazily load it and OOM.

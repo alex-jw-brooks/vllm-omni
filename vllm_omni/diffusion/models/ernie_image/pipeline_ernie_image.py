@@ -286,13 +286,13 @@ class ErnieImagePipeline(
 
     @staticmethod
     def _should_apply_pe(req: DiffusionRequestBatch) -> bool:
-        if ErnieImagePipeline._is_warmup_request(req):
-            return False
         if req.num_reqs != 1:
             logger.warning(
                 "ErnieImage prompt upscaling only supports single-request batches; skipping for batch of %d requests",
                 req.num_reqs,
             )
+            return False
+        if ErnieImagePipeline._is_warmup_request(req.requests[0]):
             return False
         return do_prompt_upscaling(req.requests[0])
 
@@ -311,7 +311,7 @@ class ErnieImagePipeline(
         text_hiddens = []
 
         for p in prompt:
-            if apply_pe and self.has_external_prompt_upscaler:
+            if apply_pe:
                 enhanced = self._enhance_prompt(p, device, width=width, height=height)
                 logger.info("PE: original='%s...' enhanced='%s...'", p[:50], enhanced[:50])
                 p = enhanced
