@@ -748,14 +748,8 @@ class OmniConnectorModelRunnerMixin:
                 self._pending_load_reqs.pop(req_id, None)
             self._apply_staged_payloads_locked(results)
             for req_id, payload in results.items():
-                self._local_request_metadata[req_id] = self._extract_scheduling_metadata(payload)
-        logger.debug(
-            "[Stage-%s] recv_full_payload_inputs: consumed %s reqs: %s, stage_recv_req_ids now=%s",
-            self._stage_id,
-            len(results),
-            list(results.keys()),
-            self._stage_recv_req_ids,
-        )
+                sched_meta = self._extract_scheduling_metadata(payload)
+                self._local_request_metadata[req_id] = sched_meta
         return results
 
     def _get_model_config(self) -> Any:
@@ -954,18 +948,11 @@ class OmniConnectorModelRunnerMixin:
         if not (finished_req_ids & pending_req_ids):
             return
 
-        logger.debug(
-            "[Stage-%s] flush_full_payload_outputs: finished_req_ids=%s, pending=%s",
-            self._stage_id,
-            finished_req_ids,
-            list(self._pending_full_payload_send.keys()),
-        )
         to_send: dict[str, tuple[Any, Any]] = {}
         for req_id in finished_req_ids:
             entry = self._pending_full_payload_send.pop(req_id, None)
             if entry is not None:
                 to_send[req_id] = self._materialize_full_payload_entry(entry)
-        logger.debug("[Stage-%s] flush_full_payload_outputs: to_send=%s", self._stage_id, list(to_send.keys()))
         if to_send:
             self.send_full_payload_outputs(scheduler_output=None, outputs=to_send)
 
@@ -1082,7 +1069,6 @@ class OmniConnectorModelRunnerMixin:
         with self._lock:
             if request_id in self._stage_recv_req_ids:
                 return
-            # Don't re-register if the finish sentinel was already received
             if request_id in self._chunk_stream_completed:
                 return
             self._pending_load_reqs[request_id] = request
@@ -1983,13 +1969,6 @@ class OmniConnectorModelRunnerMixin:
             to_stage=str(task["next_stage_id"]),
             put_key=put_key,
             data=payload_data,
-        )
-        logger.debug(
-            "[Stage-%s] _send_single_request: put_key=%s success=%s size=%s",
-            task["stage_id"],
-            put_key,
-            success,
-            _size,
         )
 
         if not success:

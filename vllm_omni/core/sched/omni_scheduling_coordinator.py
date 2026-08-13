@@ -65,8 +65,10 @@ _FULL_PAYLOAD_INPUT_STAGES: frozenset[tuple[str, str]] = frozenset(
         # custom_process_next_stage_input_func: *_full_payload in deploy yaml.
         ("DyninOmniForConditionalGeneration", "token2image"),
         ("DyninOmniForConditionalGeneration", "token2audio"),
-        # granite_prosody_lm: text_norm (Stage 0) -> prosody (Stage 1).
+        # granite_prosody_lm: text_norm (Stage 0) -> prosody (Stage 1) ->
+        # styletts2 (Stage 2).
         ("GraniteProsodyLMForConditionalGeneration", "prosody"),
+        ("GraniteStyleTTS2Decoder", "styletts2"),
     }
 )
 
@@ -297,10 +299,6 @@ class OmniSchedulingCoordinator:
             if request is None:
                 continue
 
-            # Handle next_stage_prompt_len if present (for models like Qwen3-Omni).
-            # Only apply when the request has not started decoding yet
-            # (no output tokens). Resetting a mid-decode request would
-            # destroy generated tokens and desync KV cache state.
             if "next_stage_prompt_len" in metadata:
                 next_len = metadata["next_stage_prompt_len"]
                 if isinstance(next_len, int) and next_len > 0:
@@ -325,12 +323,6 @@ class OmniSchedulingCoordinator:
                             request._all_token_ids.extend(new_prompt)
                             request._output_token_ids.clear()
                             request.num_computed_tokens = 0
-                            logger.debug(
-                                "[Coordinator stage-%s] Updated prompt_token_ids length to %s for req %s",
-                                self._stage_id,
-                                next_len,
-                                req_id,
-                            )
 
             new_ids = self._flatten_prompt_token_ids(metadata.get("code_predictor_codes"))
             if new_ids:
@@ -340,9 +332,3 @@ class OmniSchedulingCoordinator:
                 request._all_token_ids.extend(new_ids)
                 request._output_token_ids.clear()
                 request.num_computed_tokens = 0
-                logger.debug(
-                    "[Coordinator stage-%s] Applied code_predictor_codes (%d tokens) for req %s",
-                    self._stage_id,
-                    len(new_ids),
-                    req_id,
-                )

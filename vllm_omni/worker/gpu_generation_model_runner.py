@@ -70,6 +70,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             "DyninOmniForConditionalGeneration",
             "IndexTTS2S2MelDecoder",
             "GraniteProsodyLMForConditionalGeneration",
+            "GraniteStyleTTS2Decoder",
         }
         if (
             getattr(self.model_config, "model_arch", None) in _OMNI_CONNECTOR_INIT_ARCHS

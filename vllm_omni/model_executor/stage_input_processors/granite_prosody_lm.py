@@ -1,27 +1,30 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Stage input processor: text_norm (Stage 0) → prosody (Stage 1).
+"""Stage input processors for the Granite ProsodyLM pipeline.
 
-Transforms the completed text normalization output into the prosody
-stage input. Handles both AR and NAR modes:
-  AR  — chat-template-wrapped prompt ending at [SEP_F0]; model generates
-        prosody tokens autoregressively.
-  NAR — same prompt + masked annotation block; model predicts all mask
-        positions via iterative refinement.
+text_norm_to_prosody (Stage 0 → Stage 1):
+  Transforms the completed text normalization output into the prosody
+  stage input. Handles both AR and NAR modes:
+    AR  — chat-template-wrapped prompt ending at [SEP_F0]; model generates
+          prosody tokens autoregressively.
+    NAR — same prompt + masked annotation block; model predicts all mask
+          positions via iterative refinement.
 
-The prompt is built from scratch using the normalized text (not forwarded
-from Stage 0), matching the reference first-utterance path:
-  apply_chat_template([{"role": "assistant", "content":
-      norm_text[SEP_NORM]Speaker<|num_tk_F0|>:[SEP_F0]}])
+prosody_to_tts (Stage 1 → Stage 2):
+  Transforms the prosody annotation block output into the data needed by
+  the StyleTTS2 decoder: phoneme tokens, prosody bins (prsinf),
+  word boundaries, and speaker style embeddings.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from functools import lru_cache
 from typing import Any
 
+import numpy as np
 import torch
 from vllm.logger import init_logger
 
@@ -170,13 +173,6 @@ def text_norm_to_prosody(
     output_ids = list(getattr(request, "output_token_ids", None) or [])
     output_ids = [t for t in output_ids if t >= 0]
 
-    logger.info(
-        "text_norm_to_prosody: req=%s output_len=%d last5=%s",
-        req_id,
-        len(output_ids),
-        output_ids[-5:] if output_ids else [],
-    )
-
     if not output_ids:
         logger.warning(
             "text_norm_to_prosody: empty output_token_ids for req=%s",
@@ -217,5 +213,346 @@ def text_norm_to_prosody(
         meta=MetaStruct(
             finished=torch.tensor(True, dtype=torch.bool),
             next_stage_prompt_len=len(prompt_ids),
+        ),
+    )
+
+
+# ─── Stage 1 → Stage 2: prosody → TTS ─────────────────────────────────────────
+
+# Phoneme symbol table (matches StyleTTS2's tts_local/utils.py)
+_PAD = "$"
+_PUNCTUATION = ';:,.!?¡¿—…"«»"" '
+_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_LETTERS_IPA = (
+    "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
+)
+_SYMBOLS = [_PAD] + list(_PUNCTUATION) + list(_LETTERS) + list(_LETTERS_IPA)
+_SYM2ID: dict[str, int] = {s: i for i, s in enumerate(_SYMBOLS)}
+_ID2SYM: dict[int, str] = {i: s for s, i in _SYM2ID.items()}
+
+
+def pack_tts_payload(
+    phoneme_tokens: list[int],
+    prsinf: np.ndarray,
+    boundaries: np.ndarray,
+    speaker_embedding: torch.Tensor,
+) -> torch.Tensor:
+    """Pack TTS data into a single int64 tensor for inter-stage transport.
+
+    Layout: [header(8)] + phoneme_tokens + prsinf_flat + boundaries_flat + spk_emb_bytes
+    Header: n_phonemes, prsinf_r, prsinf_c, bound_r, bound_c, spk_r, spk_c, spk_nbytes
+    Speaker embedding is bit-cast from float32 to int32 pairs.
+    """
+    spk = speaker_embedding.detach().cpu().float().flatten()
+    spk_bytes = spk.view(torch.int32)
+
+    header = torch.tensor(
+        [
+            len(phoneme_tokens),
+            prsinf.shape[0],
+            prsinf.shape[1],
+            boundaries.shape[0],
+            boundaries.shape[1],
+            spk.shape[0],
+            0,
+            spk_bytes.shape[0],
+        ],
+        dtype=torch.int64,
+    )
+
+    parts = [
+        header,
+        torch.tensor(phoneme_tokens, dtype=torch.int64),
+        torch.from_numpy(prsinf).long().flatten(),
+        torch.from_numpy(boundaries).long().flatten(),
+        spk_bytes.to(torch.int64),
+    ]
+    return torch.cat(parts)
+
+
+def unpack_tts_payload(packed: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Unpack a tensor produced by pack_tts_payload back to TTS data dict."""
+    h = packed[:8]
+    n_ph, pr_r, pr_c, bd_r, bd_c, spk_n, _, spk_nb = h.tolist()
+    n_ph, pr_r, pr_c, bd_r, bd_c, spk_n, spk_nb = (
+        int(n_ph),
+        int(pr_r),
+        int(pr_c),
+        int(bd_r),
+        int(bd_c),
+        int(spk_n),
+        int(spk_nb),
+    )
+
+    offset = 8
+    phoneme_tokens = packed[offset : offset + n_ph].unsqueeze(0)
+    offset += n_ph
+
+    prsinf = packed[offset : offset + pr_r * pr_c].reshape(pr_r, pr_c)
+    offset += pr_r * pr_c
+
+    boundaries = packed[offset : offset + bd_r * bd_c].reshape(bd_r, bd_c)
+    offset += bd_r * bd_c
+
+    spk_int = packed[offset : offset + spk_nb].to(torch.int32)
+    spk_emb = spk_int.view(torch.float32).reshape(1, spk_n)
+
+    return {
+        "phoneme_tokens": phoneme_tokens,
+        "prsinf": prsinf,
+        "boundaries": boundaries,
+        "speaker_embedding": spk_emb,
+    }
+
+
+def _text_cleaner(text: str) -> list[int]:
+    """Convert IPA phoneme string to StyleTTS2 token IDs."""
+    return [_SYM2ID[c] for c in text if c in _SYM2ID]
+
+
+def _find_consecutive_indices(arr: list[int]) -> list[tuple[int, int, int]]:
+    """Group consecutive equal values. Returns [(value, start, end), ...]."""
+    result = []
+    start = 0
+    for i in range(1, len(arr)):
+        if arr[i] != arr[i - 1]:
+            result.append((arr[start], start, i))
+            start = i
+    result.append((arr[start], start, len(arr)))
+    return result
+
+
+def _nar_block_to_nums(
+    decoded: list[int],
+    num_start_id: int,
+    g_pre: int = 6,
+) -> list[list[int]]:
+    """Convert NAR annotation block token IDs to nested-list format for TTS.
+
+    Input: [<SIL>] + [preamble(g_pre)] + [word_col(6)]*N + [SEP_2]
+    Returns [[sil0], [dur1,p1,p2,p3,p4], [sil1], ...,[silN]]
+    """
+    block = decoded[1:-1]  # strip <SIL> prefix and [SEP_2] suffix
+    n_words = (len(block) - g_pre) // 6
+    result: list[list[int]] = []
+    result.append([block[g_pre - 1] - num_start_id])
+    for w in range(n_words):
+        base = g_pre + w * 6
+        result.append([block[base + i] - num_start_id for i in range(5)])
+        result.append([block[base + 5] - num_start_id])
+    return result
+
+
+def _output_nums_to_prsinf(output_nums: list[list[int]]) -> np.ndarray:
+    """Convert nested-list prosody output to prsinf array (n_words+1, 5).
+
+    Silence entries ([sil_dur]) → [sil_dur, 512, 512, 512, 512]
+    Word entries ([dur, p1, p2, p3, p4]) → values with 512→256 mapping
+    """
+    extracted = []
+    for prs_vec in output_nums:
+        if len(prs_vec) == 1:
+            new_prs = [512, 512, 512, 512, 512]
+            new_prs[0] = prs_vec[0]
+        else:
+            new_prs = [256 if v == 512 else v for v in prs_vec]
+        extracted.append(new_prs)
+    return np.array(extracted)
+
+
+@lru_cache(maxsize=1)
+def _load_phonemizer_backend(language: str = "en-us"):
+    """Lazily load the phonemizer espeak backend."""
+    from phonemizer.backend import EspeakBackend
+
+    return EspeakBackend(language, preserve_punctuation=True, with_stress=True)
+
+
+def _text_to_phonemes(text: str, language: str = "en-us") -> str:
+    """Convert text to IPA phonemes using espeak backend."""
+    backend = _load_phonemizer_backend(language)
+    outputs = backend.phonemize([text])
+    output = outputs[0] if outputs else ""
+    if text[:1] == " " and output[:1] != " ":
+        output = " " + output
+    if text[:1] != " " and output[:1] == " ":
+        output = output[1:]
+    if text[-1:] == " " and output[-1:] != " ":
+        output = output + " "
+    if text[-1:] != " " and output[-1:] == " ":
+        output = output[:-1]
+    j = 0
+    while j < len(output) - 1:
+        if output[j] == " " and output[j + 1] in _PUNCTUATION:
+            output = output[:j] + output[j + 1 :]
+        j += 1
+    return output
+
+
+@lru_cache(maxsize=1)
+def _load_speaker_embedding(model_dir: str) -> torch.Tensor:
+    """Load precomputed speaker style embedding from the TTS model directory."""
+    pt_path = os.path.join(model_dir, "speaker_embedding.pt")
+    if os.path.isfile(pt_path):
+        emb = torch.load(pt_path, map_location="cpu", weights_only=True)
+    else:
+        logger.warning(
+            "No speaker_embedding.pt found in %s; using zeros",
+            model_dir,
+        )
+        return torch.zeros(1, 128, dtype=torch.float32)
+    if not isinstance(emb, torch.Tensor):
+        emb = torch.tensor(emb, dtype=torch.float32)
+    if emb.dim() == 1:
+        emb = emb.unsqueeze(0)
+    return emb
+
+
+def _get_tts_model_dir(transfer_manager: Any) -> str:
+    """Get the TTS stage model directory from the transfer_manager."""
+    model_config = transfer_manager._get_model_config()
+    base_dir = model_config.tokenizer or os.path.dirname(model_config.model)
+    return os.path.join(base_dir, "stage2_tts")
+
+
+def _extract_normalized_text_from_prompt(
+    tokenizer,
+    prompt_token_ids: list[int],
+    sep_norm_id: int,
+    sep_f0_id: int,
+) -> str:
+    """Extract the normalized text from the prosody stage's prompt tokens.
+
+    The prompt format (Granite chat template) is:
+      <|start_of_role|>system<|end_of_role|>...<|end_of_text|>
+      <|start_of_role|>assistant<|end_of_role|>norm_text[SEP_NORM]...
+    We decode the portion between the last <|end_of_role|> and [SEP_NORM].
+    """
+    sep_norm_pos = None
+    for i, tid in enumerate(prompt_token_ids):
+        if tid == sep_norm_id:
+            sep_norm_pos = i
+            break
+    if sep_norm_pos is None:
+        logger.warning(
+            "_extract_normalized_text_from_prompt: sep_norm_id=%d NOT FOUND "
+            "in prompt_token_ids (len=%d). Decoded first 50 tokens: %r",
+            sep_norm_id,
+            len(prompt_token_ids),
+            tokenizer.decode(prompt_token_ids[:50], skip_special_tokens=False),
+        )
+        return ""
+    end_of_role_id = tokenizer.encode(
+        "<|end_of_role|>",
+        add_special_tokens=False,
+    )
+    if not end_of_role_id:
+        logger.warning("_extract_normalized_text_from_prompt: <|end_of_role|> encode returned empty")
+        return ""
+    eor_id = end_of_role_id[0]
+    start_pos = 0
+    for i in range(sep_norm_pos - 1, -1, -1):
+        if prompt_token_ids[i] == eor_id:
+            start_pos = i + 1
+            break
+    norm_ids = prompt_token_ids[start_pos:sep_norm_pos]
+    result = tokenizer.decode(norm_ids, skip_special_tokens=False)
+    return result
+
+
+def prosody_to_tts(
+    transfer_manager: Any,
+    pooling_output: dict[str, Any] | None,
+    request: Any,
+    is_finished: bool = False,
+) -> dict[str, Any] | None:
+    """Stage input processor: Stage 1 (prosody) → Stage 2 (TTS/StyleTTS2).
+
+    Transforms the prosody annotation block output into the data needed by
+    StyleTTS2:
+      - phoneme token IDs (from phonemized normalized text)
+      - prsinf array (prosody bins per word)
+      - word boundaries (start/end phoneme indices)
+      - speaker style embeddings (acoustic + predictor)
+
+    Returns a dict payload that arrives at the TTS stage via
+    model_intermediate_buffer.
+    """
+    config = _get_hf_config(transfer_manager)
+    tokenizer = _get_tokenizer(transfer_manager)
+    req_id = getattr(request, "req_id", None)
+
+    annot_tokens = None
+    if isinstance(pooling_output, dict):
+        prosody_tensor = pooling_output.get("prosody_tokens")
+        if prosody_tensor is not None:
+            if isinstance(prosody_tensor, torch.Tensor):
+                annot_tokens = prosody_tensor.tolist()
+            elif isinstance(prosody_tensor, list):
+                annot_tokens = prosody_tensor
+    if annot_tokens is None:
+        logger.warning(
+            "prosody_to_tts: no prosody_tokens in pooling_output for req=%s",
+            req_id,
+        )
+        return None
+
+    # Extract normalized text from the prosody stage's prompt
+    prompt_ids = list(getattr(request, "prompt_token_ids", None) or [])
+    normalized_text = _extract_normalized_text_from_prompt(
+        tokenizer,
+        prompt_ids,
+        config.sep_norm_token_id,
+        config.sep_f0_token_id,
+    )
+    if not normalized_text:
+        logger.warning(
+            "prosody_to_tts: could not extract normalized text for req=%s",
+            req_id,
+        )
+        return None
+
+    # Parse annotation block → output_nums → prsinf
+    g_pre, _ = compute_preamble_layout(
+        config.emotion_control,
+        list(config.nar_global_dims),
+        config.compact_preamble,
+    )
+    output_nums = _nar_block_to_nums(annot_tokens, config.num_start_id, g_pre)
+    prsinf = _output_nums_to_prsinf(output_nums)
+
+    # Strip speaker prefix if present (e.g. "[SPEAKER one ..." → "...")
+    tts_text = re.sub(r"^\[SPEAKER\s+\S+\]\s*", "", normalized_text)
+    tts_text = re.sub(r"^\[SPEAKER\s+\S+\s+", "", tts_text)
+    # Phonemize normalized text → phoneme tokens + boundaries
+    tts_text = tts_text.replace("_", " ")
+    ps = _text_to_phonemes(tts_text)
+    tokens = _text_cleaner(ps)
+    tokens.insert(0, 0)  # prepend padding token (matches reference)
+    is_sil = [1 if _ID2SYM.get(tk, "") in _PUNCTUATION + _PAD else 0 for tk in tokens]
+    # Ensure trailing silence group exists (prosody block always ends with
+    # a sil row; phonemizer omits trailing sil when text has no final punct).
+    if is_sil and is_sil[-1] == 0:
+        tokens.append(0)
+        is_sil.append(1)
+    indices_word = _find_consecutive_indices(is_sil)
+    boundaries = np.array(indices_word)[:, 1:].T
+
+    # Load speaker embedding
+    tts_dir = _get_tts_model_dir(transfer_manager)
+    spk_emb = _load_speaker_embedding(tts_dir)
+
+    packed = pack_tts_payload(
+        phoneme_tokens=tokens,
+        prsinf=prsinf,
+        boundaries=boundaries,
+        speaker_embedding=spk_emb,
+    )
+
+    return OmniPayloadStruct(
+        codes=CodesStruct(audio=packed),
+        meta=MetaStruct(
+            finished=torch.tensor(True, dtype=torch.bool),
+            next_stage_prompt_len=packed.shape[0],
         ),
     )

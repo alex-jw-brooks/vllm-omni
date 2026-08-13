@@ -122,7 +122,13 @@ def build_granite_prosody_pipeline(
     """
     stages = [_text_norm_stage(is_nle)]
     if n_stages >= 2:
-        stages.append(_prosody_stage(is_nar))
+        prosody = _prosody_stage(is_nar)
+        if n_stages >= 3:
+            prosody = dataclasses.replace(
+                prosody,
+                custom_process_next_stage_input_func=(f"{_PROC}.prosody_to_tts"),
+            )
+        stages.append(prosody)
     if n_stages >= 3:
         stages.append(_tts_stage())
 
