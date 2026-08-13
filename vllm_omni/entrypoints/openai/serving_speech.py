@@ -135,6 +135,12 @@ _QWEN3_TTS_REF_AUDIO_CACHE_KEY = "_qwen3_tts_ref_audio_cache_key"
 _TTS_MAX_INSTRUCTIONS_LENGTH = 500
 _TTS_MAX_NEW_TOKENS_MAX = 4096
 _MING_DEFAULT_PROMPT = MING_DEFAULT_PROMPT
+_DEFAULT_VOICE_NAME = "default"
+
+def _is_default_voice(voice, supported_speakers):
+    """Check if a lowercased voice name is the placeholder default and not
+    an actual registered/built-in speaker."""
+    return voice == _DEFAULT_VOICE_NAME and voice not in supported_speakers
 
 
 def _create_wav_header(sample_rate: int, num_channels: int = 1, bits_per_sample: int = 16) -> bytes:
@@ -471,7 +477,14 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         self._audex_tta_rvq = None
         self._voxcpm2_split_map: dict[int, list[int]] = {}
 
-        logger.info("Loaded %d supported speakers: %s", len(self.supported_speakers), sorted(self.supported_speakers))
+        if self.supported_speakers:
+            logger.info(
+                "Loaded %d supported speakers: %s", len(self.supported_speakers), sorted(self.supported_speakers)
+            )
+        else:
+            logger.info(
+                "No built-in speakers configured; only '%s' and uploaded voices are available", _DEFAULT_VOICE_NAME
+            )
 
         # Batch configuration
         self._batch_max_items: int = getattr(self.engine_client, "tts_batch_max_items", 32)
@@ -759,6 +772,10 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
 
         # 3. Default fallback
         return _TTS_MAX_INSTRUCTIONS_LENGTH
+
+    def _get_available_voices(self) -> set[str]:
+        """Get all voice names accepted by the API, including the placeholder default."""
+        return self.supported_speakers | self.uploaded_speakers.keys() | {_DEFAULT_VOICE_NAME}
 
     def _load_supported_speakers(self) -> set[str]:
         """Load supported speakers (case-insensitive) from the model configuration."""
@@ -3561,26 +3578,17 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
     def _get_normalized_voice(self, voice: Voice | None) -> str | None:
         """Get the normalized voice to be used; currently this means that
         the voice is a:
-            - lowercase str if it's a valid supported speaker
-            - None if the the model doesn't have any uploaded speakers
-
-        If a voice is passed and we do have uploaded speakers, but it's still
-        not supported, we raise an error.
+            - lowercase str if it's a valid supported/uploaded speaker
+            - None if the voice is the placeholder default or not provided
         """
         if voice is not None:
-            # It's a VoiceID typed dict
             if not isinstance(voice, str):
                 voice = voice["id"]
             voice = voice.lower()
-            if self.uploaded_speakers:
-                if voice not in self.uploaded_speakers and voice not in self.supported_speakers:
-                    all_voices = sorted(self.uploaded_speakers.keys() | self.supported_speakers)
-                    raise ValueError(f"Invalid normalized voice '{voice}'. Supported: {', '.join(all_voices)}")
-            else:
-                logger.warning(
-                    "This model does not have any uploaded speakers, but one was provided; its value will be ignored."
+            if voice not in self.uploaded_speakers and voice not in self.supported_speakers:
+                raise ValueError(
+                    f"Invalid voice '{voice}'. Supported: {', '.join(sorted(self._get_available_voices()))}"
                 )
-                return None
         return voice
 
     async def _create_diffusion_speech(
@@ -3755,6 +3763,11 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         Raw audio streaming yields each Code2Wav chunk as raw bytes as soon as it is
         decoded. Raw WAV streaming emits a header with placeholder size values first.
         """
+        if request.voice is not None:
+            voice = request.voice if isinstance(request.voice, str) else request.voice["id"]
+            if _is_default_voice(voice.lower(), self.supported_speakers):
+                request.voice = None
+
         if self._diffusion_mode:
             return await self._create_diffusion_speech(request)
 
