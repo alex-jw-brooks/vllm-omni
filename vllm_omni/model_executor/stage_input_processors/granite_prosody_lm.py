@@ -16,21 +16,27 @@ from __future__ import annotations
 import os
 import re
 from functools import lru_cache
-from typing import Any
 
 import numpy as np
 import torch
+from transformers import PreTrainedTokenizerBase
 from vllm.logger import init_logger
+from vllm.outputs import RequestOutput
 
+from vllm_omni.engine.orchestrator import StreamingInputState
+from vllm_omni.inputs.data import OmniTokensPrompt
 from vllm_omni.model_executor.models.granite_prosody_lm.decode_utils import (
     compute_preamble_layout,
+)
+from vllm_omni.transformers_utils.configs.granite_prosody_lm import (
+    GraniteProsodyLMConfig,
 )
 
 logger = init_logger(__name__)
 
 
 @lru_cache(maxsize=1)
-def _load_tokenizer(tokenizer_path: str):
+def _load_tokenizer(tokenizer_path: str) -> PreTrainedTokenizerBase:
     from transformers import AutoTokenizer
 
     return AutoTokenizer.from_pretrained(
@@ -40,7 +46,7 @@ def _load_tokenizer(tokenizer_path: str):
 
 
 @lru_cache(maxsize=1)
-def _load_hf_config(model_path: str):
+def _load_hf_config(model_path: str) -> GraniteProsodyLMConfig:
     from transformers import AutoConfig
 
     return AutoConfig.from_pretrained(
@@ -50,7 +56,7 @@ def _load_hf_config(model_path: str):
 
 
 @lru_cache(maxsize=1)
-def _get_orchestrator_config_and_tokenizer() -> tuple:
+def _get_orchestrator_config_and_tokenizer() -> tuple[GraniteProsodyLMConfig, PreTrainedTokenizerBase]:
     """Load config and tokenizer for orchestrator-path functions.
 
     Uses GRANITE_PROSODY_LM_MODEL_PATH env var (the pipeline model root),
@@ -65,7 +71,7 @@ def _get_orchestrator_config_and_tokenizer() -> tuple:
 
 
 def _extract_normalized_text(
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     output_token_ids: list[int],
     sep_norm_id: int,
 ) -> str:
@@ -80,7 +86,7 @@ def _extract_normalized_text(
 
 
 def _build_prosody_prompt_ids(
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     normalized_text: str,
     f0_bin: int,
 ) -> list[int]:
@@ -105,7 +111,7 @@ def _build_prosody_prompt_ids(
     return tokenizer.encode(full_text, add_special_tokens=False)
 
 
-def _build_nar_annotation_block(config: Any, num_words: int) -> list[int]:
+def _build_nar_annotation_block(config: GraniteProsodyLMConfig, num_words: int) -> list[int]:
     """Build the masked NAR annotation block: [SIL] + preamble + word_cols + [SEP_2].
 
     All predictable positions are filled with mask_token_id. The caller
@@ -136,7 +142,7 @@ def _build_nar_annotation_block(config: Any, num_words: int) -> list[int]:
     return [config.sil_token_id] + preamble + word_cols + [config.sep2_token_id]
 
 
-def _extract_multimodal_output(source_output: Any) -> dict[str, Any] | None:
+def _extract_multimodal_output(source_output: RequestOutput) -> dict[str, torch.Tensor] | None:
     """Extract multimodal output from a source output object.
 
     Handles both OmniRequestOutput (has .multimodal_output property) and raw
@@ -162,11 +168,11 @@ def _extract_multimodal_output(source_output: Any) -> dict[str, Any] | None:
 
 
 def process_text_norm_to_prosody(
-    source_outputs: list,
-    prompt: Any = None,
+    source_outputs: list[RequestOutput],
+    prompt: dict | None = None,
     requires_multimodal_data: bool = False,
-    streaming_context: Any = None,
-) -> list:
+    streaming_context: StreamingInputState | None = None,
+) -> list[OmniTokensPrompt]:
     """Orchestrator-path processor: Stage 0 (text_norm) → Stage 1 (prosody).
 
     Called by the orchestrator's process_engine_inputs for LLM_GENERATION stages.
@@ -230,11 +236,11 @@ def process_text_norm_to_prosody(
 
 
 def process_prosody_to_tts(
-    source_outputs: list,
-    prompt: Any = None,
+    source_outputs: list[RequestOutput],
+    prompt: dict | None = None,
     requires_multimodal_data: bool = False,
-    streaming_context: Any = None,
-) -> list:
+    streaming_context: StreamingInputState | None = None,
+) -> list[OmniTokensPrompt]:
     """Orchestrator-path processor: Stage 1 (prosody) → Stage 2 (StyleTTS2).
 
     Extracts prosody tokens from source multimodal output, builds TTS
@@ -514,7 +520,7 @@ def _load_speaker_embedding(model_dir: str) -> torch.Tensor:
 
 
 def _extract_normalized_text_from_prompt(
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     prompt_token_ids: list[int],
     sep_norm_id: int,
     sep_f0_id: int,

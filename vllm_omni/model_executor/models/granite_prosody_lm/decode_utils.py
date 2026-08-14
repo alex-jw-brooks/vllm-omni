@@ -17,22 +17,21 @@ def compute_preamble_layout(
     emotion_control: int,
     nar_global_dims: list[int],
     compact_preamble: bool,
-    n_prosody_dims: int = _N_PROSODY_DIMS,
 ) -> tuple[int, list[int]]:
     """Compute the NAR preamble layout (size and dimension indices).
 
     Returns (preamble_len, dim_indices) where dim_indices maps each preamble
     position to its NAR head index (-1 = not predicted).
     """
-    sil_dim = n_prosody_dims
-    emo_aro_dim = n_prosody_dims + 1
-    emo_val_dim = n_prosody_dims + 2
+    sil_dim = _N_PROSODY_DIMS
+    emo_aro_dim = _N_PROSODY_DIMS + 1
+    emo_val_dim = _N_PROSODY_DIMS + 2
 
     if nar_global_dims:
         compact_preamble = True
 
     if not compact_preamble:
-        n_legacy = n_prosody_dims + 1
+        n_legacy = _N_PROSODY_DIMS + 1
         dims = [
             emo_aro_dim if emotion_control > 0 else -1,
             emo_val_dim if emotion_control > 1 else -1,

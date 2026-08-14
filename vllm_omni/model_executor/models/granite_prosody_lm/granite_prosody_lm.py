@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -26,7 +26,7 @@ from vllm.model_executor.models.granitemoehybrid import (
     GraniteMoeHybridForCausalLM,
 )
 from vllm.model_executor.models.utils import maybe_prefix
-from vllm.sequence import IntermediateTensors
+from vllm.v1.sample.metadata import SamplingMetadata
 
 from vllm_omni.model_executor.models.granite_prosody_lm.decode_utils import (
     compute_preamble_layout,
@@ -225,7 +225,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
     def embed_input_ids(
         self,
         input_ids: torch.Tensor,
-        **kwargs: Any,
+        **kwargs,
     ) -> torch.Tensor:
         return self.model.embed_input_ids(input_ids)
 
@@ -233,10 +233,9 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
-        **kwargs: Any,
-    ) -> torch.Tensor | IntermediateTensors | OmniOutput:
+        **kwargs,
+    ) -> OmniOutput:
         if self.ctc_text_norm:
             return self._ctc_text_norm_decode(
                 input_ids,
@@ -253,7 +252,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
-        sampling_metadata: Any = None,
+        sampling_metadata: SamplingMetadata | None = None,
     ) -> torch.Tensor | None:
         raise NotImplementedError(
             "compute_logits should not be called — both stages use dedicated heads "
@@ -264,15 +263,15 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         self,
         input_ids: torch.Tensor,
         input_embeds: torch.Tensor,
-        **kwargs: Any,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, object]]:
         return input_ids, input_embeds, {}
 
     def postprocess(
         self,
         hidden_states: torch.Tensor,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        **kwargs,
+    ) -> dict[str, object]:
         # Both stages return complete results from forward() as OmniOutput.
         return {}
 
@@ -280,7 +279,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        **kwargs: Any,
+        **kwargs,
     ) -> OmniOutput:
         """NLE CTC text normalization: single forward pass + CTC greedy decode.
 
@@ -384,7 +383,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         dim_index: list[int],
         tier_positions: set[int],
         tau: float,
-        **kwargs: Any,
+        **kwargs,
     ) -> tuple[dict[int, int], dict[int, float]]:
         """Run one NAR prediction step.
 
@@ -435,7 +434,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         input_ids: torch.Tensor,
         positions: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
-        **kwargs: Any,
+        **kwargs,
     ) -> OmniOutput:
         """Iterative masked prediction for NAR prosody decode.
 

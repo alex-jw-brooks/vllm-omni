@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable
-from typing import Any
 
 import numpy as np
 import torch
@@ -21,6 +20,7 @@ import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 from transformers import AlbertConfig, AlbertModel
 from vllm.config import VllmConfig
+from vllm.v1.sample.metadata import SamplingMetadata
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.transformers_utils.configs.granite_prosody_lm import (
@@ -436,8 +436,7 @@ class SourceModuleHnNSF(nn.Module):
         self.l_tanh = nn.Tanh()
 
     def forward(self, x):
-        with torch.no_grad():
-            sine_wavs, uv, _ = self.l_sin_gen(x)
+        sine_wavs, uv, _ = self.l_sin_gen(x)
         sine_merge = self.l_tanh(self.l_linear(sine_wavs))
         noise = torch.randn_like(uv) * self.sine_amp / 3
         return sine_merge, noise, uv
@@ -764,7 +763,6 @@ class StyleTTS2Model(nn.Module):
             padding_idx=-1,
         )
 
-    @torch.inference_mode()
     def inference(
         self,
         tokens: torch.Tensor,
@@ -772,23 +770,7 @@ class StyleTTS2Model(nn.Module):
         ref_p: torch.Tensor,
         prsinf: torch.Tensor,
         boundaries: torch.Tensor,
-        ref_p_f0n: torch.Tensor | None = None,
-        duration_scale: float = 1.0,
     ) -> torch.Tensor:
-        """Run full StyleTTS2 inference pipeline.
-
-        Args:
-            tokens: (1, T_phon) phoneme token IDs
-            ref_s: (1, style_dim) acoustic style embedding (speaker)
-            ref_p: (1, style_dim) predictor style embedding (duration)
-            prsinf: (n_words+1, 5) prosody bins [dur, h1, h2, h3, h4]
-            boundaries: (2, n_words) word start/end phoneme indices
-            ref_p_f0n: (1, style_dim) optional separate F0/N style
-            duration_scale: multiply predicted durations (>1 = slower)
-
-        Returns:
-            1-D waveform tensor at 24 kHz
-        """
         device = tokens.device
         input_lengths = torch.LongTensor([tokens.shape[-1]]).to(device)
         text_mask = _length_to_mask(input_lengths).to(device)
@@ -808,8 +790,6 @@ class StyleTTS2Model(nn.Module):
         duration = self.predictor.duration_proj(x)
         duration = torch.sigmoid(duration).sum(axis=-1)
         pred_dur = torch.round(duration.squeeze()).clamp(min=1)
-        if duration_scale != 1.0:
-            pred_dur = torch.round(pred_dur * duration_scale).clamp(min=1)
         num_sil = int(pred_dur[-2:].sum())
 
         pred_aln_trg = torch.zeros(input_lengths, int(pred_dur.sum().data), device=device)
@@ -837,8 +817,7 @@ class StyleTTS2Model(nn.Module):
         f0n_emb = f0n_emb.reshape(f0n_emb.size(0), -1, f0n_emb.size(-1))
         en = en + f0n_emb
 
-        f0n_style = ref_p_f0n if ref_p_f0n is not None else ref_p
-        f0_pred, n_pred = self.predictor.f0n_train(en, f0n_style)
+        f0_pred, n_pred = self.predictor.f0n_train(en, ref_p)
         f0_pred[0, -num_sil:] = 0
         n_pred[0, -num_sil:] = -6
 
@@ -867,7 +846,7 @@ class GraniteStyleTTS2Decoder(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        **kwargs: Any,
+        **kwargs,
     ) -> OmniOutput:
         from vllm_omni.model_executor.stage_input_processors.granite_prosody_lm import (
             unpack_tts_payload,
@@ -930,11 +909,11 @@ class GraniteStyleTTS2Decoder(nn.Module):
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
-        sampling_metadata: Any = None,
+        sampling_metadata: SamplingMetadata | None = None,
     ) -> torch.Tensor | None:
         return None
 
-    def embed_input_ids(self, input_ids: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    def embed_input_ids(self, input_ids: torch.Tensor, **kwargs) -> torch.Tensor:
         return torch.zeros(
             input_ids.shape[0],
             self.config.hidden_size,
