@@ -41,23 +41,8 @@ def _length_to_mask(lengths: torch.Tensor) -> torch.Tensor:
 # ─── Shared utility layers ─────────────────────────────────────────────────────
 
 
-def _init_weights(m, mean=0.0, std=0.01):
-    if m.__class__.__name__.find("Conv") != -1:
-        m.weight.data.normal_(mean, std)
-
-
 def _get_padding(kernel_size, dilation=1):
     return int((kernel_size * dilation - dilation) / 2)
-
-
-class LinearNorm(nn.Module):
-    def __init__(self, in_dim, out_dim, bias=True, w_init_gain="linear"):
-        super().__init__()
-        self.linear_layer = nn.Linear(in_dim, out_dim, bias=bias)
-        nn.init.xavier_uniform_(self.linear_layer.weight, gain=nn.init.calculate_gain(w_init_gain))
-
-    def forward(self, x):
-        return self.linear_layer(x)
 
 
 # ─── PLBERT ─────────────────────────────────────────────────────────────────────
@@ -105,7 +90,6 @@ class TextEncoder(nn.Module):
                     ),
                     LayerNorm1d(channels),
                     actv,
-                    nn.Dropout(0.2),
                 )
             )
         self.lstm = nn.LSTM(
@@ -125,16 +109,11 @@ class TextEncoder(nn.Module):
             x = c(x)
             x.masked_fill_(m, 0.0)
         x = x.transpose(1, 2)
-        input_lengths_np = input_lengths.cpu().numpy()
-        x = nn.utils.rnn.pack_padded_sequence(x, input_lengths_np, batch_first=True, enforce_sorted=False)
         self.lstm.flatten_parameters()
         x, _ = self.lstm(x)
-        x, _ = nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
         x = x.transpose(-1, -2)
-        x_pad = torch.zeros([x.shape[0], x.shape[1], m.shape[-1]], device=x.device)
-        x_pad[:, :, : x.shape[-1]] = x
-        x_pad.masked_fill_(m, 0.0)
-        return x_pad
+        x.masked_fill_(m, 0.0)
+        return x
 
 
 class AdaIN1d(nn.Module):
@@ -150,25 +129,12 @@ class AdaIN1d(nn.Module):
         return (1 + gamma) * self.norm(x) + beta
 
 
-class UpSample1d(nn.Module):
-    def __init__(self, layer_type):
-        super().__init__()
-        self.layer_type = layer_type
-
-    def forward(self, x):
-        if self.layer_type == "none":
-            return x
-        return F.interpolate(x, scale_factor=2, mode="nearest")
-
-
 class AdainResBlk1d(nn.Module):
-    def __init__(self, dim_in, dim_out, style_dim, actv=nn.LeakyReLU(0.2), upsample="none", dropout_p=0.0):
+    def __init__(self, dim_in, dim_out, style_dim, actv=nn.LeakyReLU(0.2), upsample="none"):
         super().__init__()
         self.actv = actv
         self.upsample_type = upsample
-        self.upsample = UpSample1d(upsample)
         self.learned_sc = dim_in != dim_out
-        self.dropout = nn.Dropout(dropout_p)
         self.conv1 = weight_norm(nn.Conv1d(dim_in, dim_out, 3, 1, 1))
         self.conv2 = weight_norm(nn.Conv1d(dim_out, dim_out, 3, 1, 1))
         self.norm1 = AdaIN1d(style_dim, dim_in)
@@ -193,7 +159,8 @@ class AdainResBlk1d(nn.Module):
             )
 
     def _shortcut(self, x):
-        x = self.upsample(x)
+        if self.upsample_type != "none":
+            x = F.interpolate(x, scale_factor=2, mode="nearest")
         if self.learned_sc:
             x = self.conv1x1(x)
         return x
@@ -202,10 +169,10 @@ class AdainResBlk1d(nn.Module):
         x = self.norm1(x, s)
         x = self.actv(x)
         x = self.pool(x)
-        x = self.conv1(self.dropout(x))
+        x = self.conv1(x)
         x = self.norm2(x, s)
         x = self.actv(x)
-        x = self.conv2(self.dropout(x))
+        x = self.conv2(x)
         return x
 
     def forward(self, x, s):
@@ -233,7 +200,7 @@ class AdaLayerNorm(nn.Module):
 
 
 class DurationEncoder(nn.Module):
-    def __init__(self, sty_dim, d_model, nlayers, dropout):
+    def __init__(self, sty_dim, d_model, nlayers):
         super().__init__()
         self.lstms = nn.ModuleList()
         for _ in range(nlayers):
@@ -244,11 +211,9 @@ class DurationEncoder(nn.Module):
                     num_layers=1,
                     batch_first=True,
                     bidirectional=True,
-                    dropout=dropout,
                 )
             )
             self.lstms.append(AdaLayerNorm(sty_dim, d_model))
-        self.dropout = dropout
         self.d_model = d_model
         self.sty_dim = sty_dim
 
@@ -259,7 +224,6 @@ class DurationEncoder(nn.Module):
         x = torch.cat([x, s], axis=-1)
         x.masked_fill_(masks.unsqueeze(-1).transpose(0, 1), 0.0)
         x = x.transpose(0, 1)
-        input_lengths = text_lengths.cpu().numpy()
         x = x.transpose(-1, -2)
         for block in self.lstms:
             if isinstance(block, AdaLayerNorm):
@@ -268,26 +232,19 @@ class DurationEncoder(nn.Module):
                 x.masked_fill_(masks.unsqueeze(-1).transpose(-1, -2), 0.0)
             else:
                 x = x.transpose(-1, -2)
-                x = nn.utils.rnn.pack_padded_sequence(x, input_lengths, batch_first=True, enforce_sorted=False)
                 block.flatten_parameters()
                 x, _ = block(x)
-                x, _ = nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
-                x = F.dropout(x, p=self.dropout, training=self.training)
                 x = x.transpose(-1, -2)
-                x_pad = torch.zeros([x.shape[0], x.shape[1], m.shape[-1]], device=x.device)
-                x_pad[:, :, : x.shape[-1]] = x
-                x = x_pad
         return x.transpose(-1, -2)
 
 
 class ProsodyPredictor(nn.Module):
-    def __init__(self, style_dim, d_hid, nlayers, max_dur, dropout):
+    def __init__(self, style_dim, d_hid, nlayers, max_dur):
         super().__init__()
         self.text_encoder = DurationEncoder(
             sty_dim=style_dim,
             d_model=d_hid,
             nlayers=nlayers,
-            dropout=dropout,
         )
         self.lstm = nn.LSTM(
             d_hid + style_dim,
@@ -296,7 +253,7 @@ class ProsodyPredictor(nn.Module):
             batch_first=True,
             bidirectional=True,
         )
-        self.duration_proj = LinearNorm(d_hid, max_dur)
+        self.duration_proj = nn.Linear(d_hid, max_dur)
         self.shared = nn.LSTM(
             d_hid + style_dim,
             d_hid // 2,
@@ -306,40 +263,30 @@ class ProsodyPredictor(nn.Module):
         )
         self.F0 = nn.ModuleList(
             [
-                AdainResBlk1d(d_hid, d_hid, style_dim, dropout_p=dropout),
-                AdainResBlk1d(d_hid, d_hid // 2, style_dim, upsample=True, dropout_p=dropout),
-                AdainResBlk1d(d_hid // 2, d_hid // 2, style_dim, dropout_p=dropout),
+                AdainResBlk1d(d_hid, d_hid, style_dim),
+                AdainResBlk1d(d_hid, d_hid // 2, style_dim, upsample=True),
+                AdainResBlk1d(d_hid // 2, d_hid // 2, style_dim),
             ]
         )
         self.N = nn.ModuleList(
             [
-                AdainResBlk1d(d_hid, d_hid, style_dim, dropout_p=dropout),
-                AdainResBlk1d(d_hid, d_hid // 2, style_dim, upsample=True, dropout_p=dropout),
-                AdainResBlk1d(d_hid // 2, d_hid // 2, style_dim, dropout_p=dropout),
+                AdainResBlk1d(d_hid, d_hid, style_dim),
+                AdainResBlk1d(d_hid, d_hid // 2, style_dim, upsample=True),
+                AdainResBlk1d(d_hid // 2, d_hid // 2, style_dim),
             ]
         )
         self.F0_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
         self.N_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
 
-    def f0n_train(self, x, s, f0_branch_emb=None, n_branch_emb=None):
+    def predict_f0_and_energy(self, x, s):
         x, _ = self.shared(x.transpose(-1, -2))
         f0 = x.transpose(-1, -2)
-        if f0_branch_emb is not None:
-            coarse = f0_branch_emb[0] if isinstance(f0_branch_emb, tuple) else f0_branch_emb
-            f0 = f0 + coarse
-        for i, block in enumerate(self.F0):
+        for block in self.F0:
             f0 = block(f0, s)
-            if i == 0 and isinstance(f0_branch_emb, tuple) and f0_branch_emb[1] is not None:
-                f0 = f0 + f0_branch_emb[1]
         f0 = self.F0_proj(f0)
         n = x.transpose(-1, -2)
-        if n_branch_emb is not None:
-            coarse = n_branch_emb[0] if isinstance(n_branch_emb, tuple) else n_branch_emb
-            n = n + coarse
-        for i, block in enumerate(self.N):
+        for block in self.N:
             n = block(n, s)
-            if i == 0 and isinstance(n_branch_emb, tuple) and n_branch_emb[1] is not None:
-                n = n + n_branch_emb[1]
         n = self.N_proj(n)
         return f0.squeeze(1), n.squeeze(1)
 
@@ -479,7 +426,6 @@ class AdaINResBlock1(nn.Module):
                 ),
             ]
         )
-        self.convs1.apply(_init_weights)
         self.convs2 = nn.ModuleList(
             [
                 weight_norm(
@@ -514,7 +460,6 @@ class AdaINResBlock1(nn.Module):
                 ),
             ]
         )
-        self.convs2.apply(_init_weights)
         self.adain1 = nn.ModuleList([AdaIN1d(style_dim, channels) for _ in range(3)])
         self.adain2 = nn.ModuleList([AdaIN1d(style_dim, channels) for _ in range(3)])
         self.alpha1 = nn.ParameterList([nn.Parameter(torch.ones(1, channels, 1)) for _ in range(3)])
@@ -609,8 +554,6 @@ class HiFiGANGenerator(nn.Module):
             for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes):
                 self.resblocks.append(AdaINResBlock1(ch, k, d, style_dim))
         self.conv_post = weight_norm(nn.Conv1d(ch, 1, 7, 1, padding=3))
-        self.ups.apply(_init_weights)
-        self.conv_post.apply(_init_weights)
 
     def forward(self, x, s, f0):
         f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)
@@ -731,7 +674,6 @@ class StyleTTS2Model(nn.Module):
             d_hid=config.hidden_dim,
             nlayers=config.n_layer,
             max_dur=config.max_dur,
-            dropout=config.dropout,
         )
 
         self.decoder = HiFiGANDecoder(
@@ -817,7 +759,7 @@ class StyleTTS2Model(nn.Module):
         f0n_emb = f0n_emb.reshape(f0n_emb.size(0), -1, f0n_emb.size(-1))
         en = en + f0n_emb
 
-        f0_pred, n_pred = self.predictor.f0n_train(en, ref_p)
+        f0_pred, n_pred = self.predictor.predict_f0_and_energy(en, ref_p)
         f0_pred[0, -num_sil:] = 0
         n_pred[0, -num_sil:] = -6
 
@@ -926,6 +868,8 @@ class GraniteStyleTTS2Decoder(nn.Module):
         buffers = dict(self.model.named_buffers())
         loaded: set[str] = set()
         for name, tensor in weights:
+            # LinearNorm → nn.Linear: remap checkpoint keys
+            name = name.replace(".linear_layer.weight", ".weight").replace(".linear_layer.bias", ".bias")
             target = params.get(name)
             if target is None:
                 target = buffers.get(name)
