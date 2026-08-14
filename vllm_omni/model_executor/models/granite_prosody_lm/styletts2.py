@@ -1,17 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""StyleTTS2 model — nn.Module wrapper for vLLM Omni.
+"""StyleTTS2 model — inference-only nn.Module wrapper for vLLM Omni.
 
-All component module definitions are ported with __init__ methods matching
-the reference exactly so state_dict keys align with exported checkpoints.
-
-Expected checkpoint format (produced by export_styletts2.py):
-  Flat state_dict with keys like:
-    bert.embeddings.word_embeddings.weight
-    bert_encoder.weight
-    decoder.decode.0.conv1.weight_g
-    predictor.text_encoder.lstms.0.weight_ih_l0
-    ...
+Training-only components (pitch_extractor, text_aligner, style_encoder,
+predictor_encoder) are excluded — their checkpoint weights are skipped
+during loading.
 """
 
 from __future__ import annotations
@@ -25,8 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchaudio.functional as audio_F
-from torch.nn.utils import spectral_norm, weight_norm
+from torch.nn.utils import weight_norm
 from transformers import AlbertConfig, AlbertModel
 from vllm.config import VllmConfig
 
@@ -58,14 +50,6 @@ def _get_padding(kernel_size, dilation=1):
     return int((kernel_size * dilation - dilation) / 2)
 
 
-def _get_activation_fn(active):
-    if active == "relu":
-        return nn.ReLU()
-    elif active == "lrelu":
-        return nn.LeakyReLU(0.2)
-    raise RuntimeError(f"Unexpected active type {active}")
-
-
 class LinearNorm(nn.Module):
     def __init__(self, in_dim, out_dim, bias=True, w_init_gain="linear"):
         super().__init__()
@@ -74,281 +58,6 @@ class LinearNorm(nn.Module):
 
     def forward(self, x):
         return self.linear_layer(x)
-
-
-class ConvNorm(nn.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        kernel_size=1,
-        stride=1,
-        padding=None,
-        dilation=1,
-        bias=True,
-        w_init_gain="linear",
-        param=None,
-    ):
-        super().__init__()
-        if padding is None:
-            assert kernel_size % 2 == 1
-            padding = int(dilation * (kernel_size - 1) / 2)
-        self.conv = nn.Conv1d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            bias=bias,
-        )
-        nn.init.xavier_uniform_(
-            self.conv.weight,
-            gain=nn.init.calculate_gain(w_init_gain, param=param),
-        )
-
-    def forward(self, signal):
-        return self.conv(signal)
-
-
-# ─── JDC (pitch extractor) ─────────────────────────────────────────────────────
-
-
-class JDCResBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, leaky_relu_slope=0.01):
-        super().__init__()
-        self.downsample = in_channels != out_channels
-        self.pre_conv = nn.Sequential(
-            nn.BatchNorm2d(in_channels),
-            nn.LeakyReLU(leaky_relu_slope, inplace=True),
-            nn.MaxPool2d(kernel_size=(1, 2)),
-        )
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(leaky_relu_slope, inplace=True),
-            nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
-        )
-        self.conv1by1 = None
-        if self.downsample:
-            self.conv1by1 = nn.Conv2d(in_channels, out_channels, 1, bias=False)
-
-    def forward(self, x):
-        res = x
-        x = self.pre_conv(x)
-        x = self.conv(x)
-        if self.downsample:
-            res = self.conv1by1(res)
-            res = F.max_pool2d(res, kernel_size=(1, 2))
-        return x + res
-
-
-class JDCNet(nn.Module):
-    def __init__(self, num_class, seq_len, leaky_relu_slope=0.01):
-        super().__init__()
-        self.num_class = num_class
-        self.conv_block = nn.Sequential(
-            nn.Conv2d(1, 64, 3, padding=1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(leaky_relu_slope, inplace=True),
-            nn.Conv2d(64, 64, 3, padding=1, bias=False),
-        )
-        self.res_block1 = JDCResBlock(64, 128)
-        self.res_block2 = JDCResBlock(128, 192)
-        self.res_block3 = JDCResBlock(192, 256)
-        self.pool_block = nn.Sequential(
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(leaky_relu_slope, inplace=True),
-            nn.MaxPool2d(kernel_size=(1, 4)),
-            nn.Dropout(p=0.2),
-        )
-        self.maxpool1 = nn.MaxPool2d(kernel_size=(1, 40))
-        self.maxpool2 = nn.MaxPool2d(kernel_size=(1, 20))
-        self.maxpool3 = nn.MaxPool2d(kernel_size=(1, 10))
-        self.detector_conv = nn.Sequential(
-            nn.Conv2d(640, 256, 1, bias=False),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(leaky_relu_slope, inplace=True),
-            nn.Dropout(p=0.2),
-        )
-        self.bilstm_classifier = nn.LSTM(
-            512,
-            256,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.bilstm_detector = nn.LSTM(
-            512,
-            256,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.classifier = nn.Linear(512, self.num_class)
-        self.detector = nn.Linear(512, 2)
-
-    def forward(self, x):
-        # Not used in inference — pitch_extractor is only for training
-        raise NotImplementedError("JDCNet.forward() not needed for inference")
-
-
-# ─── ASR (text aligner) ────────────────────────────────────────────────────────
-
-
-class ConvBlock(nn.Module):
-    def __init__(self, hidden_dim, n_conv=3, dropout_p=0.2, active="relu"):
-        super().__init__()
-        self._n_groups = 8
-        self.blocks = nn.ModuleList(
-            [self._get_conv(hidden_dim, dilation=3**i, active=active, dropout_p=dropout_p) for i in range(n_conv)]
-        )
-
-    def _get_conv(self, hidden_dim, dilation, active="relu", dropout_p=0.2):
-        return nn.Sequential(
-            ConvNorm(hidden_dim, hidden_dim, kernel_size=3, padding=dilation, dilation=dilation),
-            _get_activation_fn(active),
-            nn.GroupNorm(self._n_groups, hidden_dim),
-            nn.Dropout(p=dropout_p),
-            ConvNorm(hidden_dim, hidden_dim, kernel_size=3, padding=1, dilation=1),
-            _get_activation_fn(active),
-            nn.Dropout(p=dropout_p),
-        )
-
-    def forward(self, x):
-        for block in self.blocks:
-            x = x + block(x)
-        return x
-
-
-class MFCC(nn.Module):
-    def __init__(self, n_mfcc=40, n_mels=80):
-        super().__init__()
-        dct_mat = audio_F.create_dct(n_mfcc, n_mels, "ortho")
-        self.register_buffer("dct_mat", dct_mat)
-
-    def forward(self, mel_specgram):
-        return torch.matmul(mel_specgram, self.dct_mat)
-
-
-class LocationLayer(nn.Module):
-    def __init__(self, attention_n_filters, attention_kernel_size, attention_dim):
-        super().__init__()
-        padding = int((attention_kernel_size - 1) / 2)
-        self.location_conv = ConvNorm(
-            2,
-            attention_n_filters,
-            kernel_size=attention_kernel_size,
-            padding=padding,
-            bias=False,
-            stride=1,
-            dilation=1,
-        )
-        self.location_dense = LinearNorm(
-            attention_n_filters,
-            attention_dim,
-            bias=False,
-            w_init_gain="tanh",
-        )
-
-    def forward(self, x):
-        x = self.location_conv(x)
-        x = x.transpose(1, 2)
-        return self.location_dense(x)
-
-
-class ASRAttention(nn.Module):
-    def __init__(
-        self,
-        attention_rnn_dim,
-        embedding_dim,
-        attention_dim,
-        attention_location_n_filters,
-        attention_location_kernel_size,
-    ):
-        super().__init__()
-        self.query_layer = LinearNorm(
-            attention_rnn_dim,
-            attention_dim,
-            bias=False,
-            w_init_gain="tanh",
-        )
-        self.memory_layer = LinearNorm(
-            embedding_dim,
-            attention_dim,
-            bias=False,
-            w_init_gain="tanh",
-        )
-        self.v = LinearNorm(attention_dim, 1, bias=False)
-        self.location_layer = LocationLayer(
-            attention_location_n_filters,
-            attention_location_kernel_size,
-            attention_dim,
-        )
-
-    def forward(self, *args, **kwargs):
-        # Not used in inference — text_aligner attention is training-only
-        raise NotImplementedError("ASRAttention.forward() not needed for inference")
-
-
-class ASRS2S(nn.Module):
-    def __init__(self, embedding_dim, hidden_dim, n_location_filters=32, location_kernel_size=63, *, n_token):
-        super().__init__()
-        self.embedding = nn.Embedding(n_token, embedding_dim)
-        val_range = math.sqrt(6 / hidden_dim)
-        self.embedding.weight.data.uniform_(-val_range, val_range)
-        self.decoder_rnn_dim = hidden_dim
-        self.project_to_n_symbols = nn.Linear(self.decoder_rnn_dim, n_token)
-        self.attention_layer = ASRAttention(
-            self.decoder_rnn_dim,
-            hidden_dim,
-            hidden_dim,
-            n_location_filters,
-            location_kernel_size,
-        )
-        self.decoder_rnn = nn.LSTMCell(
-            self.decoder_rnn_dim + embedding_dim,
-            self.decoder_rnn_dim,
-        )
-        self.project_to_hidden = nn.Sequential(
-            LinearNorm(self.decoder_rnn_dim * 2, hidden_dim),
-            nn.Tanh(),
-        )
-
-    def forward(self, *args, **kwargs):
-        # Not used in inference
-        raise NotImplementedError("ASRS2S.forward() not needed for inference")
-
-
-class ASRCNN(nn.Module):
-    def __init__(self, input_dim, hidden_dim, n_token, n_layers=6, *, token_embedding_dim):
-        super().__init__()
-        self.n_token = n_token
-        self.n_down = 1
-        self.to_mfcc = MFCC()
-        self.init_cnn = ConvNorm(
-            input_dim // 2,
-            hidden_dim,
-            kernel_size=7,
-            padding=3,
-            stride=2,
-        )
-        self.cnns = nn.Sequential(
-            *[nn.Sequential(ConvBlock(hidden_dim), nn.GroupNorm(1, hidden_dim)) for _ in range(n_layers)]
-        )
-        self.projection = ConvNorm(hidden_dim, hidden_dim // 2)
-        self.ctc_linear = nn.Sequential(
-            LinearNorm(hidden_dim // 2, hidden_dim),
-            nn.ReLU(),
-            LinearNorm(hidden_dim, n_token),
-        )
-        self.asr_s2s = ASRS2S(
-            embedding_dim=token_embedding_dim,
-            hidden_dim=hidden_dim // 2,
-            n_token=n_token,
-        )
-
-    def forward(self, x, **kwargs):
-        # Not used in inference
-        raise NotImplementedError("ASRCNN.forward() not needed for inference")
 
 
 # ─── PLBERT ─────────────────────────────────────────────────────────────────────
@@ -361,119 +70,6 @@ class CustomAlbert(AlbertModel):
 
 
 # ─── StyleTTS2 core modules ────────────────────────────────────────────────────
-
-
-class DownSample(nn.Module):
-    def __init__(self, layer_type):
-        super().__init__()
-        self.layer_type = layer_type
-
-    def forward(self, x):
-        if self.layer_type == "none":
-            return x
-        elif self.layer_type == "timepreserve":
-            return F.avg_pool2d(x, (2, 1))
-        elif self.layer_type == "half":
-            if x.shape[-1] % 2 != 0:
-                x = torch.cat([x, x[..., -1:]], dim=-1)
-            return F.avg_pool2d(x, 2)
-        raise RuntimeError(f"Unexpected downsample type {self.layer_type}")
-
-
-class LearnedDownSample(nn.Module):
-    def __init__(self, layer_type, dim_in):
-        super().__init__()
-        self.layer_type = layer_type
-        if layer_type == "none":
-            self.conv = nn.Identity()
-        elif layer_type == "timepreserve":
-            self.conv = spectral_norm(
-                nn.Conv2d(
-                    dim_in,
-                    dim_in,
-                    kernel_size=(3, 1),
-                    stride=(2, 1),
-                    groups=dim_in,
-                    padding=(1, 0),
-                )
-            )
-        elif layer_type == "half":
-            self.conv = spectral_norm(
-                nn.Conv2d(
-                    dim_in,
-                    dim_in,
-                    kernel_size=(3, 3),
-                    stride=(2, 2),
-                    groups=dim_in,
-                    padding=1,
-                )
-            )
-        else:
-            raise RuntimeError(f"Unexpected downsample type {layer_type}")
-
-    def forward(self, x):
-        return self.conv(x)
-
-
-class ResBlk(nn.Module):
-    def __init__(self, dim_in, dim_out, actv=nn.LeakyReLU(0.2), normalize=False, *, downsample):
-        super().__init__()
-        self.actv = actv
-        self.normalize = normalize
-        self.downsample = DownSample(downsample)
-        self.downsample_res = LearnedDownSample(downsample, dim_in)
-        self.learned_sc = dim_in != dim_out
-        self.conv1 = spectral_norm(nn.Conv2d(dim_in, dim_in, 3, 1, 1))
-        self.conv2 = spectral_norm(nn.Conv2d(dim_in, dim_out, 3, 1, 1))
-        if self.normalize:
-            self.norm1 = nn.InstanceNorm2d(dim_in, affine=True)
-            self.norm2 = nn.InstanceNorm2d(dim_in, affine=True)
-        if self.learned_sc:
-            self.conv1x1 = spectral_norm(
-                nn.Conv2d(dim_in, dim_out, 1, 1, 0, bias=False),
-            )
-
-    def _shortcut(self, x):
-        if self.learned_sc:
-            x = self.conv1x1(x)
-        x = self.downsample(x)
-        return x
-
-    def _residual(self, x):
-        if self.normalize:
-            x = self.norm1(x)
-        x = self.actv(x)
-        x = self.conv1(x)
-        x = self.downsample_res(x)
-        if self.normalize:
-            x = self.norm2(x)
-        x = self.actv(x)
-        x = self.conv2(x)
-        return x
-
-    def forward(self, x):
-        return (self._shortcut(x) + self._residual(x)) / math.sqrt(2)
-
-
-class StyleEncoder(nn.Module):
-    def __init__(self, dim_in, style_dim, max_conv_dim):
-        super().__init__()
-        blocks = [spectral_norm(nn.Conv2d(1, dim_in, 3, 1, 1))]
-        for _ in range(4):
-            dim_out = min(dim_in * 2, max_conv_dim)
-            blocks.append(ResBlk(dim_in, dim_out, downsample="half"))
-            dim_in = dim_out
-        blocks.append(nn.LeakyReLU(0.2))
-        blocks.append(spectral_norm(nn.Conv2d(dim_out, dim_out, 5, 1, 0)))
-        blocks.append(nn.AdaptiveAvgPool2d(1))
-        blocks.append(nn.LeakyReLU(0.2))
-        self.shared = nn.Sequential(*blocks)
-        self.unshared = nn.Linear(dim_out, style_dim)
-
-    def forward(self, x):
-        h = self.shared(x)
-        h = h.view(h.size(0), -1)
-        return self.unshared(h)
 
 
 class LayerNorm1d(nn.Module):
@@ -724,20 +320,6 @@ class ProsodyPredictor(nn.Module):
         )
         self.F0_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
         self.N_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
-
-    def forward(self, texts, style, text_lengths, alignment, m):
-        d = self.text_encoder(texts, style, text_lengths, m)
-        input_lengths = text_lengths.cpu().numpy()
-        m = m.to(text_lengths.device).unsqueeze(1)
-        x = nn.utils.rnn.pack_padded_sequence(d, input_lengths, batch_first=True, enforce_sorted=False)
-        self.lstm.flatten_parameters()
-        x, _ = self.lstm(x)
-        x, _ = nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
-        x_pad = torch.zeros([x.shape[0], m.shape[-1], x.shape[-1]], device=x.device)
-        x_pad[:, : x.shape[1], :] = x
-        duration = self.duration_proj(F.dropout(x_pad, 0.5, training=self.training))
-        en = d.transpose(-1, -2) @ alignment
-        return duration.squeeze(-1), en
 
     def f0n_train(self, x, s, f0_branch_emb=None, n_branch_emb=None):
         x, _ = self.shared(x.transpose(-1, -2))
@@ -1116,11 +698,10 @@ class HiFiGANDecoder(nn.Module):
 
 
 class StyleTTS2Model(nn.Module):
-    """Unified nn.Module wrapping all StyleTTS2 components.
+    """Unified nn.Module wrapping inference-only StyleTTS2 components.
 
     Submodule names match the checkpoint component keys:
     bert, bert_encoder, predictor, decoder, text_encoder,
-    predictor_encoder, style_encoder, text_aligner, pitch_extractor,
     embed_dur, embed_f0N.
     """
 
@@ -1171,26 +752,6 @@ class StyleTTS2Model(nn.Module):
             depth=config.n_layer,
             n_symbols=config.n_token,
         )
-
-        self.predictor_encoder = StyleEncoder(
-            dim_in=config.dim_in,
-            style_dim=config.style_dim,
-            max_conv_dim=config.hidden_dim,
-        )
-        self.style_encoder = StyleEncoder(
-            dim_in=config.dim_in,
-            style_dim=config.style_dim,
-            max_conv_dim=config.hidden_dim,
-        )
-
-        self.text_aligner = ASRCNN(
-            input_dim=80,
-            hidden_dim=256,
-            n_token=178,
-            token_embedding_dim=512,
-        )
-
-        self.pitch_extractor = JDCNet(num_class=1, seq_len=192)
 
         self.embed_dur = nn.Embedding(
             514,
