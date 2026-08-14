@@ -2,7 +2,6 @@ import math
 from typing import Any, Literal
 
 import numpy as np
-from openai.types.audio.speech_create_params import Voice
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 _MAX_EMBEDDING_DIM = 8192
@@ -55,11 +54,21 @@ class OpenAICreateSpeechRequest(BaseModel):
     # Accept both "voice" (OpenAI convention) and "speaker" (model/internal
     # convention) as input keys.  Intentionally global — all TTS backends
     # (Qwen3-TTS, Voxtral, Fish Speech) use this field for the speaker name.
-    voice: Voice | None = Field(
+    voice: str | None = Field(
         default=None,
         validation_alias=AliasChoices("voice", "speaker"),
         description="Speaker/voice to use. For Qwen3-TTS: vivian, ryan, aiden, etc.",
     )
+
+    @field_validator("voice", mode="before")
+    @classmethod
+    def _normalize_voice(cls, voice: str | dict[str, str]) -> str:
+        if isinstance(voice, dict):
+            if "id" not in voice:
+                raise ValueError("voice dict must contain 'id'")
+            return voice["id"]
+        return voice
+
     instructions: str | None = Field(
         default=None,
         description="Instructions for voice style/emotion (maps to 'instruct' for Qwen3-TTS)",

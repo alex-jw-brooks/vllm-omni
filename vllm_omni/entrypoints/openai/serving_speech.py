@@ -20,7 +20,6 @@ import soundfile as sf
 import torch
 from fastapi import HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from openai.types.audio.speech_create_params import Voice
 from transformers.utils.hub import cached_file
 from vllm.entrypoints.generate.base.serving import GenerateBaseServing as OpenAIServing
 from vllm.entrypoints.launcher import terminate_if_errored
@@ -136,6 +135,7 @@ _TTS_MAX_INSTRUCTIONS_LENGTH = 500
 _TTS_MAX_NEW_TOKENS_MAX = 4096
 _MING_DEFAULT_PROMPT = MING_DEFAULT_PROMPT
 _DEFAULT_VOICE_NAME = "default"
+
 
 def _is_default_voice(voice, supported_speakers):
     """Check if a lowercased voice name is the placeholder default and not
@@ -3575,15 +3575,13 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             if not artifact_ready:
                 self._discard_ref_audio_artifact_warmup(request_id)
 
-    def _get_normalized_voice(self, voice: Voice | None) -> str | None:
+    def _get_normalized_voice(self, voice: str | None) -> str | None:
         """Get the normalized voice to be used; currently this means that
         the voice is a:
             - lowercase str if it's a valid supported/uploaded speaker
             - None if the voice is the placeholder default or not provided
         """
         if voice is not None:
-            if not isinstance(voice, str):
-                voice = voice["id"]
             voice = voice.lower()
             if voice not in self.uploaded_speakers and voice not in self.supported_speakers:
                 raise ValueError(
@@ -3764,8 +3762,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         decoded. Raw WAV streaming emits a header with placeholder size values first.
         """
         if request.voice is not None:
-            voice = request.voice if isinstance(request.voice, str) else request.voice["id"]
-            if _is_default_voice(voice.lower(), self.supported_speakers):
+            if _is_default_voice(request.voice.lower(), self.supported_speakers):
                 request.voice = None
 
         if self._diffusion_mode:
