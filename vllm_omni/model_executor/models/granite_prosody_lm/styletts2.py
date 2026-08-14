@@ -868,8 +868,6 @@ class GraniteStyleTTS2Decoder(nn.Module):
         buffers = dict(self.model.named_buffers())
         loaded: set[str] = set()
         for name, tensor in weights:
-            # LinearNorm → nn.Linear: remap checkpoint keys
-            name = name.replace(".linear_layer.weight", ".weight").replace(".linear_layer.bias", ".bias")
             target = params.get(name)
             if target is None:
                 target = buffers.get(name)
