@@ -370,94 +370,71 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         working_ids = input_ids.clone()
         mask_id = cfg.mask_token_id
 
-        tiers = cfg.nar_tiers
-        iterations_per_tier = cfg.nar_iterations_per_tier
-
-        if tiers:
-            for tier_idx, tier in enumerate(tiers):
-                t_iter = iterations_per_tier[tier_idx]
-                logger.debug("NAR tier %d/%d: tier=%s, iterations=%d", tier_idx, len(tiers), tier, t_iter)
-
-                global_dims = set(tier.get("global", []))
-                word_dims = set(tier.get("word", []))
-                tier_positions: set[int] = set()
-                for i, d in enumerate(dim_index):
-                    if d < 0:
-                        continue
-                    # Preamble positions are 1..g_pre (after SIL at 0)
-                    if 1 <= i <= g_pre and d in global_dims:
-                        tier_positions.add(i)
-                    elif i > g_pre and d in word_dims:
-                        tier_positions.add(i)
-
-                if not tier_positions:
-                    continue
-
-                for pos in tier_positions:
-                    working_ids[annot_start + pos] = mask_id
-
-                logger.debug("NAR tier %d: %d mask positions", tier_idx, len(tier_positions))
-                for t in range(t_iter):
-                    is_last = t == t_iter - 1
-                    tau = self._compute_tau(
-                        cfg.nar_temperature,
-                        t,
-                        t_iter,
-                    )
-                    logger.debug("NAR tier %d iter %d/%d: tau=%.3f", tier_idx, t, t_iter, tau)
-
-                    predictions, confidences = self._nar_predict_step(
-                        working_ids,
-                        positions,
-                        annot_start,
-                        dim_index,
-                        tier_positions,
-                        tau,
-                    )
-
-                    if not predictions:
-                        continue
-
-                    if is_last:
-                        unmask_positions = set(predictions.keys())
-                    else:
-                        unmask_positions = self._select_unmask_positions(
-                            predictions,
-                            confidences,
-                            t,
-                            t_iter,
-                        )
-
-                    for pos in unmask_positions:
-                        working_ids[annot_start + pos] = predictions[pos]
+        all_dims = set(range(_NUM_PROSODY_HEADS))
+        if cfg.nar_tiers:
+            tiers = cfg.nar_tiers
+            iterations_per_tier = cfg.nar_iterations_per_tier
         else:
-            all_positions = {i for i, d in enumerate(dim_index) if d >= 0}
-            for t in range(cfg.nar_iterations):
-                is_last = t == cfg.nar_iterations - 1
-                tau = self._compute_tau(
-                    cfg.nar_temperature,
-                    t,
-                    cfg.nar_iterations,
+            tiers = [{"global": list(all_dims), "word": list(all_dims)}]
+            iterations_per_tier = [cfg.nar_iterations]
+
+        for tier_idx, tier in enumerate(tiers):
+            t_iter = iterations_per_tier[tier_idx]
+            logger.debug("NAR tier %d/%d: tier=%s, iterations=%d", tier_idx, len(tiers), tier, t_iter)
+
+            global_dims = set(tier.get("global", []))
+            word_dims = set(tier.get("word", []))
+            tier_positions: set[int] = set()
+            for i, d in enumerate(dim_index):
+                if d < 0:
+                    continue
+                if 1 <= i <= g_pre and d in global_dims:
+                    tier_positions.add(i)
+                elif i > g_pre and d in word_dims:
+                    tier_positions.add(i)
+
+            if not tier_positions:
+                logger.warning(
+                    "NAR tier %d has no matching positions (global=%s, word=%s)",
+                    tier_idx,
+                    global_dims,
+                    word_dims,
                 )
+                continue
+
+            for pos in tier_positions:
+                working_ids[annot_start + pos] = mask_id
+
+            logger.debug("NAR tier %d: %d mask positions", tier_idx, len(tier_positions))
+            for t in range(t_iter):
+                tau = self._compute_tau(cfg.nar_temperature, t, t_iter)
+                logger.debug("NAR tier %d iter %d/%d: tau=%.3f", tier_idx, t, t_iter, tau)
+
                 predictions, confidences = self._nar_predict_step(
                     working_ids,
                     positions,
                     annot_start,
                     dim_index,
-                    all_positions,
+                    tier_positions,
                     tau,
                 )
+
                 if not predictions:
-                    continue
-                if is_last:
-                    unmask_positions = set(predictions.keys())
-                else:
-                    unmask_positions = self._select_unmask_positions(
-                        predictions,
-                        confidences,
+                    logger.warning(
+                        "NAR tier %d iter %d: no masked positions remain, skipping remaining %d iteration(s)",
+                        tier_idx,
                         t,
-                        cfg.nar_iterations,
+                        t_iter - t - 1,
                     )
+                    break
+
+                unmask_positions = self._select_unmask_positions(
+                    predictions,
+                    confidences,
+                    t,
+                    t_iter,
+                )
+
                 for pos in unmask_positions:
                     working_ids[annot_start + pos] = predictions[pos]
 
@@ -480,13 +457,8 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         t: int,
         t_iter: int,
     ) -> float:
-        """Compute sampling temperature for NAR iteration t."""
         if t_iter <= 1:
             return base_temperature
-        # Last iteration is greedy
-        if t == t_iter - 1:
-            return 0.0
-        # Linear anneal
         return base_temperature * (1.0 - t / (t_iter - 1))
 
     @staticmethod
