@@ -21,12 +21,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
+from vllm.model_executor.layers.attention import MMEncoderAttention
 from vllm.model_executor.models.granitemoehybrid import (
     GraniteMoeHybridAttentionDecoderLayer,
     GraniteMoeHybridForCausalLM,
 )
-from vllm.model_executor.models.utils import maybe_prefix
-from vllm.v1.sample.metadata import SamplingMetadata
+from vllm.model_executor.models.utils import AutoWeightsLoader, maybe_prefix
 
 from vllm_omni.model_executor.models.granite_prosody_lm.decode_utils import (
     compute_preamble_layout,
@@ -44,31 +44,12 @@ _N_PROSODY_DIMS = 5
 _WORD_COL_SIZE = 6
 
 
-class HybridCausalBidirAttention(nn.Module):
-    """Drop-in replacement for vLLM Attention with hybrid causal/bidirectional.
+class BidirectionalAttention(MMEncoderAttention):
+    """MMEncoderAttention adapted to vLLM's flat (seq_len, hidden) interface.
 
-    Positions [0, bidir_start) use causal attention; positions
-    [bidir_start, seq_len) use bidirectional. Backend-agnostic: uses
-    PyTorch F.scaled_dot_product_attention directly.
-
-    Set the class-level ``_bidir_start`` before each model forward pass.
+    Adds/removes the batch dimension so it can drop into
+    GraniteMoeHybridAttention as a replacement for NAR decoding.
     """
-
-    _bidir_start: int = 0
-
-    def __init__(
-        self,
-        num_heads: int,
-        head_dim: int,
-        scale: float,
-        num_kv_heads: int,
-    ):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-        self.scale = scale
-        self.num_kv_heads = num_kv_heads
-        self.num_groups = num_heads // num_kv_heads
 
     def forward(
         self,
@@ -77,56 +58,17 @@ class HybridCausalBidirAttention(nn.Module):
         value: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
-        seq_len = query.shape[0]
-
-        q = query.view(seq_len, self.num_heads, self.head_dim)
-        k = key.view(seq_len, self.num_kv_heads, self.head_dim)
-        v = value.view(seq_len, self.num_kv_heads, self.head_dim)
-
-        if self.num_groups > 1:
-            k = k.repeat_interleave(self.num_groups, dim=1)
-            v = v.repeat_interleave(self.num_groups, dim=1)
-
-        # [1, heads, seq, dim]
-        q = q.transpose(0, 1).unsqueeze(0)
-        k = k.transpose(0, 1).unsqueeze(0)
-        v = v.transpose(0, 1).unsqueeze(0)
-
-        bidir_start = self._bidir_start
-
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        if 0 < bidir_start < seq_len:
-            min_val = torch.finfo(attn_weights.dtype).min
-            causal_mask = torch.triu(
-                torch.ones(bidir_start, seq_len, device=query.device),
-                diagonal=1,
-            ).bool()
-            float_mask = torch.zeros(
-                seq_len,
-                seq_len,
-                dtype=attn_weights.dtype,
-                device=query.device,
-            )
-            float_mask[:bidir_start].masked_fill_(causal_mask, min_val)
-            attn_weights = attn_weights + float_mask
-        elif bidir_start >= seq_len:
-            causal_mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=query.device),
-                diagonal=1,
-            ).bool()
-            attn_weights.masked_fill_(causal_mask, torch.finfo(attn_weights.dtype).min)
-        # bidir_start == 0 → fully bidirectional, no mask needed
-        attn_weights = F.softmax(
-            attn_weights,
-            dim=-1,
-            dtype=torch.float32,
-        ).to(q.dtype)
-        out = torch.matmul(attn_weights, v)
-        return out.squeeze(0).transpose(0, 1).contiguous().view(seq_len, -1)
+        needs_batch = query.dim() == 2
+        if needs_batch:
+            query = query.unsqueeze(0)
+            key = key.unsqueeze(0)
+            value = value.unsqueeze(0)
+        out = super().forward(query, key, value)
+        return out.squeeze(0) if needs_batch else out
 
 
-def patch_hybrid_attention(model: nn.Module, vllm_config: VllmConfig) -> int:
-    """Replace causal Attention with HybridCausalBidirAttention on all layers.
+def patch_bidirectional_attention(model: nn.Module, vllm_config: VllmConfig) -> int:
+    """Replace causal Attention with BidirectionalAttention on all layers.
 
     Returns the number of layers patched.
     """
@@ -135,15 +77,15 @@ def patch_hybrid_attention(model: nn.Module, vllm_config: VllmConfig) -> int:
     for layer in model.layers:
         if not isinstance(layer, GraniteMoeHybridAttentionDecoderLayer):
             raise NotImplementedError(
-                f"NAR hybrid attention patch only supports attention layers, got {type(layer).__name__}."
+                f"Bidirectional attention patch only supports attention layers, got {type(layer).__name__}."
             )
         sa = layer.self_attn
         old_prefix = sa.attn.layer_name
         del fwd_ctx[old_prefix]
-        sa.attn = HybridCausalBidirAttention(
-            sa.num_heads,
-            sa.head_dim,
-            sa.attention_multiplier,
+        sa.attn = BidirectionalAttention(
+            num_heads=sa.num_heads,
+            head_size=sa.head_dim,
+            scale=sa.attention_multiplier,
             num_kv_heads=sa.num_key_value_heads,
         )
         patched += 1
@@ -169,9 +111,6 @@ class NARHeads(nn.Module):
 
 
 class GraniteProsodyLMForConditionalGeneration(nn.Module):
-    has_preprocess = True
-    has_postprocess = True
-
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         self.config = cast(
@@ -180,9 +119,6 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         )
         self.vllm_config = vllm_config
         self.model_stage = vllm_config.model_config.model_stage
-        self.nar_mode = self.model_stage == "prosody"
-        self.ctc_text_norm = self.model_stage == "text_norm"
-
         if self.model_stage not in ("text_norm", "prosody"):
             raise ValueError(f"Unknown model_stage={self.model_stage!r}. Expected 'text_norm' or 'prosody'.")
 
@@ -195,14 +131,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
             prefix=maybe_prefix(prefix, "model"),
         )
 
-        if self.model_stage == "prosody":
-            num_codebook = self.config.num_end_id - self.config.num_start_id
-            self.model.nar_heads = NARHeads(
-                self.config.hidden_size,
-                num_codebook,
-            )
-
-        if self.ctc_text_norm:
+        if self.model_stage == "text_norm":
             head_size = self.config.ctc_head_vocab_size + (2 if self.config.ctc_editor_copy_op else 1)
             self.ctc_head = nn.Linear(
                 self.config.hidden_size,
@@ -210,10 +139,15 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
                 bias=False,
             )
 
-        if self.nar_mode:
-            n = patch_hybrid_attention(self.model.model, vllm_config)
+        if self.model_stage == "prosody":
+            num_codebook = self.config.num_end_id - self.config.num_start_id
+            self.model.nar_heads = NARHeads(
+                self.config.hidden_size,
+                num_codebook,
+            )
+            n = patch_bidirectional_attention(self.model.model, vllm_config)
             logger.info(
-                "Patched %d attention layers to hybrid causal/bidirectional (NAR mode)",
+                "Patched %d attention layers to bidirectional (NAR mode)",
                 n,
             )
 
@@ -229,6 +163,17 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
     ) -> torch.Tensor:
         return self.model.embed_input_ids(input_ids)
 
+    def compute_logits(
+        self,
+        hidden_states: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor | None:
+        raise NotImplementedError(
+            "GraniteProsodyLM uses dedicated heads (CTC/NAR), not "
+            "the AR logits path. This method exists only to satisfy "
+            "the VllmModelForTextGeneration protocol."
+        )
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -236,7 +181,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         inputs_embeds: torch.Tensor | None = None,
         **kwargs,
     ) -> OmniOutput:
-        if self.ctc_text_norm:
+        if self.model_stage == "text_norm":
             return self._ctc_text_norm_decode(
                 input_ids,
                 positions,
@@ -248,32 +193,6 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
             inputs_embeds,
             **kwargs,
         )
-
-    def compute_logits(
-        self,
-        hidden_states: torch.Tensor,
-        sampling_metadata: SamplingMetadata | None = None,
-    ) -> torch.Tensor | None:
-        raise NotImplementedError(
-            "compute_logits should not be called — both stages use dedicated heads "
-            "(NAR heads for prosody, CTC head for text norm)."
-        )
-
-    def preprocess(
-        self,
-        input_ids: torch.Tensor,
-        input_embeds: torch.Tensor,
-        **kwargs,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, object]]:
-        return input_ids, input_embeds, {}
-
-    def postprocess(
-        self,
-        hidden_states: torch.Tensor,
-        **kwargs,
-    ) -> dict[str, object]:
-        # Both stages return complete results from forward() as OmniOutput.
-        return {}
 
     def _ctc_text_norm_decode(
         self,
@@ -465,10 +384,6 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
             )
         annot_len = input_ids.shape[-1] - annot_start
 
-        # Use fully bidirectional attention for NAR decode, matching
-        # the reference's FA2 is_causal=False behavior.
-        HybridCausalBidirAttention._bidir_start = 0
-
         g_pre, _ = compute_preamble_layout(
             cfg.emotion_control,
             list(cfg.nar_global_dims),
@@ -624,15 +539,5 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         self,
         weights: Iterable[tuple[str, torch.Tensor]],
     ) -> set[str]:
-        model_weights = []
-        loaded_keys: set[str] = set()
-        for name, tensor in weights:
-            if name.startswith("ctc_head."):
-                param = dict(self.named_parameters())[name]
-                param.data.copy_(tensor)
-                loaded_keys.add(name)
-            else:
-                model_weights.append((name, tensor))
-        loaded = self.model.load_weights(model_weights)
-        loaded_keys.update(f"model.{k}" for k in loaded)
-        return loaded_keys
+        loader = AutoWeightsLoader(self)
+        return loader.load_weights(weights)  # type: ignore[call-arg]
