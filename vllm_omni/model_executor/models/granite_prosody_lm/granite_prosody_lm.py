@@ -24,7 +24,7 @@ from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import MMEncoderAttention
 from vllm.model_executor.models.granitemoehybrid import (
     GraniteMoeHybridAttentionDecoderLayer,
-    GraniteMoeHybridForCausalLM,
+    GraniteMoeHybridModel,
 )
 from vllm.model_executor.models.utils import AutoWeightsLoader, maybe_prefix
 
@@ -122,11 +122,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         if self.model_stage not in ("text_norm", "prosody"):
             raise ValueError(f"Unknown model_stage={self.model_stage!r}. Expected 'text_norm' or 'prosody'.")
 
-        # FIXME: wrapping ForCausalLM instead of the inner Model to avoid
-        # reimplementing lm_head/logits_processor/load_weights, but this
-        # triggers a spurious "SupportsLoRA.lora_manager not implemented"
-        # warning. Consider wrapping GraniteMoeHybridModel directly.
-        self.model = GraniteMoeHybridForCausalLM(
+        self.model = GraniteMoeHybridModel(
             vllm_config=vllm_config,
             prefix=maybe_prefix(prefix, "model"),
         )
@@ -141,19 +137,17 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
 
         if self.model_stage == "prosody":
             num_codebook = self.config.num_end_id - self.config.num_start_id
-            self.model.nar_heads = NARHeads(
+            self.nar_heads = NARHeads(
                 self.config.hidden_size,
                 num_codebook,
             )
-            n = patch_bidirectional_attention(self.model.model, vllm_config)
+            n = patch_bidirectional_attention(self.model, vllm_config)
             logger.info(
                 "Patched %d attention layers to bidirectional (NAR mode)",
                 n,
             )
 
-        # LLM_GENERATION runner checks this to handle OmniOutput returns.
         self.have_multimodal_outputs = True
-
         self.make_empty_intermediate_tensors = self.model.make_empty_intermediate_tensors
 
     def embed_input_ids(
@@ -210,12 +204,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         cfg = self.config
         blank_positions = (input_ids == cfg.blank_token_id).nonzero(as_tuple=True)[0]
         if len(blank_positions) == 0:
-            self.model.forward(
-                input_ids,
-                positions,
-                inputs_embeds=None,
-                **kwargs,
-            )
+            self.model.forward(input_ids, positions)
             return OmniOutput(
                 text_hidden_states=None,
                 multimodal_outputs={
@@ -226,12 +215,7 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
             )
         prefix_len = int(blank_positions[0].item())
 
-        hidden_states = self.model.forward(
-            input_ids,
-            positions,
-            inputs_embeds=None,
-            **kwargs,
-        )
+        hidden_states = self.model.forward(input_ids, positions)
         logits = self.ctc_head(
             hidden_states.to(self.ctc_head.weight.dtype),
         ).float()
@@ -302,23 +286,17 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         dim_index: list[int],
         tier_positions: set[int],
         tau: float,
-        **kwargs,
     ) -> tuple[dict[int, int], dict[int, float]]:
         """Run one NAR prediction step.
 
         Returns (predictions, confidences) dicts mapping annotation-block
         position -> predicted token ID / confidence score.
         """
-        hidden_states = self.model.forward(
-            input_ids,
-            positions,
-            inputs_embeds=None,
-            **kwargs,
-        )
+        hidden_states = self.model.forward(input_ids, positions)
 
         mask_id = self.config.mask_token_id
         num_start = self.config.num_start_id
-        nar_heads = self.model.nar_heads
+        nar_heads = self.nar_heads
 
         predictions: dict[int, int] = {}
         confidences: dict[int, float] = {}
@@ -366,13 +344,10 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
         cfg = self.config
         annot_start = self._find_annot_start(input_ids)
         if annot_start is None:
-            # Profiling/warmup with dummy inputs — run backbone for memory
-            # profiling but skip NAR decode logic.
             self.model.forward(
                 input_ids,
                 positions,
                 inputs_embeds=inputs_embeds,
-                **kwargs,
             )
             return OmniOutput(
                 text_hidden_states=None,
@@ -438,7 +413,6 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
                         dim_index,
                         tier_positions,
                         tau,
-                        **kwargs,
                     )
 
                     if not predictions:
@@ -472,7 +446,6 @@ class GraniteProsodyLMForConditionalGeneration(nn.Module):
                     dim_index,
                     all_positions,
                     tau,
-                    **kwargs,
                 )
                 if not predictions:
                     continue
