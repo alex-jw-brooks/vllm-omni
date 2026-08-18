@@ -14,15 +14,15 @@ from vllm.distributed.parallel_state import (
     init_distributed_environment,
     initialize_model_parallel,
 )
-from vllm_omni.transformers_utils.configs.sensenova_u1 import (
-    SenseNovaU1Config,
-)
 
 from vllm_omni.diffusion.models.sensenova_u1.sensenova_u1_transformer import (
     SenseNovaU1ForCausalLM,
 )
 from vllm_omni.diffusion.worker.diffusion_worker import (
     _DiffusionVllmModelConfig,
+)
+from vllm_omni.transformers_utils.configs.sensenova_u1 import (
+    SenseNovaU1Config,
 )
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
