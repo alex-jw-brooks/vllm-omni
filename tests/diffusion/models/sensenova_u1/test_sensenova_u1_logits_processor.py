@@ -18,9 +18,7 @@ from vllm.distributed.parallel_state import (
 from vllm_omni.diffusion.models.sensenova_u1.sensenova_u1_transformer import (
     SenseNovaU1ForCausalLM,
 )
-from vllm_omni.diffusion.worker.diffusion_worker import (
-    _DiffusionVllmModelConfig,
-)
+from vllm_omni.diffusion.vllm_config import _DiffusionVllmModelConfig
 from vllm_omni.transformers_utils.configs.sensenova_u1 import (
     SenseNovaU1Config,
 )
@@ -55,6 +53,8 @@ def test_logits_processor_head_dtype_under_diffusion_shim():
     fake_diff_config = _DiffusionVllmModelConfig(
         model="sensenova-u1-test",
         dtype=torch.bfloat16,
+        max_model_len=8192,
+        original_max_model_len=8192,
     )
     vllm_config = VllmConfig(
         device_config=DeviceConfig(device="cpu"),
