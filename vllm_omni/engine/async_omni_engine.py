@@ -80,7 +80,11 @@ from vllm_omni.engine.stage_runtime import (
     create_stage_runtime,
 )
 from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
-from vllm_omni.entrypoints.utils import parse_stage_overrides
+from vllm_omni.entrypoints.utils import (
+    _apply_stage_engine_arg_overrides,
+    load_and_resolve_stage_configs,
+    parse_stage_overrides,
+)
 from vllm_omni.inputs.data import OmniInteractionPrompt, OmniSamplingParams
 from vllm_omni.metrics.prometheus import OmniRequestCounter
 
@@ -319,6 +323,7 @@ class AsyncOmniEngine:
             stage_configs=self.stage_configs,
             model=self.model,
             config_path=self.config_path,
+            hf_config=self.hf_config,
             single_stage_mode=self.single_stage_mode,
             stage_init_timeout=stage_init_timeout,
             async_chunk=self.async_chunk,
@@ -1066,7 +1071,47 @@ class AsyncOmniEngine:
         # rather than as a per-stage config field.
         self._apply_strategy_lb_policy(strategy_lb_policy, kwargs)
 
-        return cast(str, config_path), stage_configs
+        # Inject diffusion LoRA-related knobs from kwargs if not present in the stage config.
+        for cfg in stage_configs:
+            try:
+              
+                global_sleep_mode = kwargs.get("enable_sleep_mode")
+                if global_sleep_mode is not None:
+                    if not hasattr(cfg.engine_args, "enable_sleep_mode") or cfg.engine_args.enable_sleep_mode is None:
+                        cfg.engine_args.enable_sleep_mode = global_sleep_mode
+                if getattr(cfg, "stage_type", None) != "diffusion":
+                    continue
+
+
+                if (
+                    kwargs.get("diffusion_attention_config") is not None
+                    or kwargs.get("diffusion_attention_backend") is not None
+                    or kwargs.get("fastvideo_vsa_topk") is not None
+                ):
+                    has_stage_attention = (
+                        getattr(cfg.engine_args, "diffusion_attention_config", None) is not None
+                        or getattr(cfg.engine_args, "diffusion_attention_backend", None) is not None
+                    )
+                    if not has_stage_attention:
+                        cfg.engine_args.diffusion_attention_config = parse_attention_config(
+                            kwargs.get("diffusion_attention_config"),
+                            attention_backend=kwargs.get("diffusion_attention_backend"),
+                            fastvideo_vsa_topk=kwargs.get("fastvideo_vsa_topk"),
+                        )
+
+                      
+            except Exception as e:
+                logger.warning("Failed to inject LoRA config for stage: %s", e)
+
+=======
+>>>>>>> 030f65bf9 (wip simplifying engine arg building)
+=======
+        for cfg in stage_configs:
+            _apply_stage_engine_arg_overrides(cfg, kwargs)
+
+>>>>>>> 1efdd642b (integrate stage overrides)
+        return config_path, stage_configs
+>>>>>>> 340f31dfd (wip simplifying engine arg building)
 
     # ==================== Public API ====================
 

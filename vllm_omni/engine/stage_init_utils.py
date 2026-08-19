@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import regex as re
+from transformers import PretrainedConfig
 from vllm.logger import init_logger
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import BaseRenderer
@@ -60,8 +61,8 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParam
 from vllm_omni.inputs.preprocess import build_omni_renderer, omni_renderer_cls
 from vllm_omni.outputs.output_processor import MultimodalOutputProcessor
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.quantization.inc_config import OmniINCConfig
 from vllm_omni.transformers_utils.repo_utils import hf_api
+from vllm_omni.quantization.factory import build_quantization_config
 
 logger = init_logger(__name__)
 
@@ -1442,6 +1443,7 @@ def _check_stage_device_layout(stage_config: Any, engine_args_dict: dict[str, An
 def build_vllm_config(
     stage_config: Any,
     model: str,
+    hf_config: PretrainedConfig | None,
     stage_connector_spec: dict[str, Any] | None = None,
     engine_args_dict: dict[str, Any] | None = None,
     headless: bool = False,
@@ -1459,6 +1461,10 @@ def build_vllm_config(
         )
 
     filtered_engine_args_dict = filter_dataclass_kwargs(OmniEngineArgs, engine_args_dict)
+
+    quant_method = filtered_engine_args_dict.pop("quantization", None)
+    quant_dict = getattr(hf_config, "quantization_config", None) if hf_config else None
+    quant_config = build_quantization_config(quant_method, quant_dict)
 
     # _to_dict serializes dataclass fields (e.g. StructuredOutputsConfig) into
     # plain dicts.  When OmniEngineArgs is instantiated with the dict, these
@@ -1503,10 +1509,9 @@ def build_vllm_config(
     )
     executor_class = Executor.get_class(vllm_config)
 
-    # Upgrade vanilla INCConfig to OmniINCConfig for multi-stage models.
-    upgraded = OmniINCConfig.maybe_upgrade(vllm_config.quant_config)
-    if upgraded is not vllm_config.quant_config:
-        vllm_config = replace(vllm_config, quant_config=upgraded)
+    # INC/AutoRound checkpoints must resolve to OmniINCConfig
+    if quant_config is not None:
+        vllm_config = replace(vllm_config, quant_config=quant_config)
 
     custom_voice_dir = engine_args_dict.get("custom_voice_dir")
     if custom_voice_dir:
@@ -1922,12 +1927,18 @@ def get_stage_connector_spec(
 
 def build_diffusion_config(
     model: str,
+    hf_config: PretrainedConfig | None,
     stage_cfg: Any,
     metadata: StageMetadata,
 ) -> Any:
     """Build diffusion config for a stage."""
 
     engine_args_dict = build_engine_args_dict(stage_cfg, model)
+
+    quant_method = engine_args_dict.pop("quantization_config", None) or engine_args_dict.pop("quantization", None)
+    quant_dict = getattr(hf_config, "quantization_config", None) if hf_config else None
+    engine_args_dict["quantization_config"] = build_quantization_config(quant_method, quant_dict)
+
     od_config = OmniDiffusionConfig.from_kwargs(**engine_args_dict)
 
     num_devices_per_stage = od_config.parallel_config.world_size
@@ -1954,6 +1965,7 @@ def build_diffusion_config(
 def initialize_diffusion_stage(
     stage_id: int,
     model: str,
+    hf_config: PretrainedConfig | None,
     stage_cfg: Any,
     metadata: StageMetadata,
     stage_init_timeout: int,
@@ -1963,6 +1975,7 @@ def initialize_diffusion_stage(
 
     Args:
         model: Model name or path.
+        hf_config: Cached HF PretrainedConfig for early quant resolution.
         stage_cfg: Stage configuration.
         metadata: Extracted stage metadata.
         stage_init_timeout: Timeout in seconds for stage initialization handshake
@@ -1970,7 +1983,7 @@ def initialize_diffusion_stage(
     """
     from vllm_omni.diffusion.stage_diffusion_client import create_diffusion_client
 
-    od_config = build_diffusion_config(model, stage_cfg, metadata)
+    od_config = build_diffusion_config(model, hf_config, stage_cfg, metadata)
     return create_diffusion_client(model, od_config, metadata, stage_init_timeout, use_inline)
 
 
