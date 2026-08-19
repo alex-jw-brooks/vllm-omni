@@ -6,6 +6,7 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, get_args, get_origin
 
+from omegaconf import DictConfig, OmegaConf
 from vllm.logger import init_logger
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.transformers_utils.config import get_config, get_hf_file_to_dict
@@ -366,7 +367,7 @@ def load_stage_configs_from_model(
     deploy_config_path: str | None = None,
     stage_overrides: dict[str, dict[str, Any]] | None = None,
     strategy_config_path: str | None = None,
-) -> tuple[list, str | None]:
+) -> tuple[list[DictConfig], str | None]:
     """Load stage configurations from model's default config file.
 
     For models registered in the pipeline registry, uses
@@ -563,7 +564,7 @@ def load_and_resolve_stage_configs(
     deploy_config_path: str | None = None,
     stage_overrides: dict[str, dict[str, Any]] | None = None,
     strategy_config_path: str | None = None,
-) -> tuple[str, list, str | None]:
+) -> tuple[str, list[DictConfig], str | None]:
     """Load stage configurations from a deploy YAML or model defaults.
 
     Args:
@@ -603,6 +604,67 @@ def load_and_resolve_stage_configs(
     logger.debug(f"stage_configs: {stage_configs}")
 
     return config_path, stage_configs, omni_lb_policy
+
+
+# TODO < def do not hard code this and just use dataclass metadata
+# This is needed when we have a global setting that needs
+# to propagate down as a value for
+DIFFUSION_KWARG_NAMES = [
+    "lora_path",
+    "lora_backend",
+    "additional_config",
+    "diffusion_attention_config",
+    "diffusion_attention_backend",
+    "diffusion_kv_cache_dtype",
+    "diffusion_kv_cache_skip_steps",
+    # Make sure removing the default stuff for these doesn't cause weird behaviors,
+    # but should be fine since they are unset and default to False in engine args...
+    "enable_diffusion_pipeline_profiler",
+    "enable_ar_profiler",
+]
+
+
+# TODO - integrate this tomorrow
+def _apply_stage_engine_arg_overrides(
+    stage_config: DictConfig,
+    *,
+    enable_sleep_mode: bool | None,
+    **kwargs,
+):
+    """Apply any overrides to the StageConfig's engine args. Any opts that
+    are keywords to this function should be agnostic to engine type, while
+    anything remaining in kwargs is presumed to be engine specific.
+    """
+    if stage_config.engine_args is None:
+        stage_config.engine_args = OmegaConf.create({})
+
+    if stage_config.enable_sleep_mode is not None and stage_config.engine_args.enable_sleep_mode is None:
+        stage_config.enable_sleep_mode = enable_sleep_mode
+
+    # FIXME - this should always be the case, but omegaconf makes types funky here
+    if not hasattr(stage_config, "stage_type"):
+        raise AssertionError("We should always have a stage type...")
+
+    elif stage_config.stage_type == "diffusion":
+        # TODO (Alex) deprecate + remove static_lora_scale and diffusion_quantization_config
+        diff_kwargs = {}
+        for kwarg_name in DIFFUSION_KWARG_NAMES:
+            if kwarg_name in kwargs:
+                diff_kwargs[kwarg_name] = kwargs[kwarg_name]
+            # TODO: Warn + deprecate aliases here...
+        diff_kwargs["lora_scale"] = kwargs.get("lora_scale") or kwargs.get("static_lora_scale")
+        diff_kwargs["quantization_config"] = kwargs.get("diffusion_quantization_config") or kwargs.get(
+            "quantization_config"
+        )
+        # FIXME we need to handle the stage attention stuff here as well...
+        _update_engine_specific_kwargs(stage_config, **diff_kwargs)
+
+
+def _update_engine_specific_kwargs(stage_config: DictConfig, **kwargs):
+    for name, val in kwargs.items():
+        assert hasattr(stage_config, name)  # check this
+        if getattr(stage_config, name) is None:
+            setattr(stage_config, name, val)
 
 
 def get_final_stage_id_for_e2e(
