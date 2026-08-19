@@ -2,8 +2,24 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Tests for MXFP4 quantization configs and the MXFP4 DualScale + BF16 mixed config."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 import torch
+from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
+
+from vllm_omni.platforms import current_omni_platform
+from vllm_omni.quantization import SUPPORTED_QUANTIZATION_METHODS, build_quantization_config, mxfp4_config
+from vllm_omni.quantization.mxfp4_config import (
+    DiffusionMXFP4Config,
+    DiffusionMXFP4DualScaleMixedConfig,
+    NPUMxfp4DualScaleLinearMethod,
+    NPUMxfp4DualScaleOnlineLinearMethod,
+    NPUMxfp4LinearMethod,
+    ROCmMxfp4OnlineLinearMethod,
+    _parse_block_idx,
+)
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
@@ -22,8 +38,6 @@ def _patch_tp_state(monkeypatch):
 
 
 def test_mxfp4_config_get_name():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
     assert DiffusionMXFP4Config.get_name() == "mxfp4"
 
 
@@ -57,8 +71,6 @@ def test_runtime_algorithm_survives_offline_storage_rebuild(runtime_alg, seriali
 
 
 def test_mxfp4_config_from_config_defaults():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
     cfg = DiffusionMXFP4Config.from_config({})
     assert cfg.is_checkpoint_mxfp4_serialized is False
     assert cfg.ignored_layers == []
@@ -66,8 +78,6 @@ def test_mxfp4_config_from_config_defaults():
 
 
 def test_mxfp4_config_from_config_serialized():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
     cfg = DiffusionMXFP4Config.from_config({"is_checkpoint_mxfp4_serialized": True})
     assert cfg.is_checkpoint_mxfp4_serialized is True
 
@@ -165,16 +175,12 @@ def test_quantization_disk_string_accepts_equivalent_method_alias():
 
 
 def test_mxfp4_config_from_config_ignored_layers():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
     cfg = DiffusionMXFP4Config.from_config({"ignored_layers": ["proj_out"]})
     assert cfg.ignored_layers == ["proj_out"]
 
 
 def test_mxfp4_config_from_config_modules_to_not_convert_fallback():
     """modules_to_not_convert must be accepted as an alias for ignored_layers."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
     cfg = DiffusionMXFP4Config.from_config({"modules_to_not_convert": ["proj_out"]})
     assert cfg.ignored_layers == ["proj_out"]
 
@@ -376,45 +382,33 @@ def test_serialized_mxfp4_disk_uses_modules_to_not_convert(method, flag, with_ac
 
 
 # ---------------------------------------------------------------------------
-# build_quant_config integration
+# build_quantization_config integration
 # ---------------------------------------------------------------------------
 
 
-def test_build_quant_config_mxfp4_string():
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
-    cfg = build_quant_config("mxfp4")
+def test_build_quantization_config_mxfp4_string():
+    cfg = build_quantization_config("mxfp4")
     assert isinstance(cfg, DiffusionMXFP4Config)
     assert cfg.get_name() == "mxfp4"
     assert cfg.is_checkpoint_mxfp4_serialized is False
 
 
-def test_build_quant_config_mxfp4_dict():
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
-    cfg = build_quant_config({"method": "mxfp4", "is_checkpoint_mxfp4_serialized": True})
+def test_build_quantization_config_mxfp4_dict():
+    cfg = build_quantization_config({"method": "mxfp4", "is_checkpoint_mxfp4_serialized": True})
     assert isinstance(cfg, DiffusionMXFP4Config)
     assert cfg.is_checkpoint_mxfp4_serialized is True
 
 
-def test_build_quant_config_mxfp4_dualscale_string():
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
-    cfg = build_quant_config("mxfp4_dualscale")
+def test_build_quantization_config_mxfp4_dualscale_string():
+    cfg = build_quantization_config("mxfp4_dualscale")
     assert isinstance(cfg, DiffusionMXFP4DualScaleMixedConfig)
     assert cfg.is_checkpoint_serialized is False
     assert cfg.num_bf16_fallback_layers == 5
     assert cfg.ignored_layers == []
 
 
-def test_build_quant_config_mxfp4_dualscale_dict_offline():
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
-    cfg = build_quant_config(
+def test_build_quantization_config_mxfp4_dualscale_dict_offline():
+    cfg = build_quantization_config(
         {
             "method": "mxfp4_dualscale",
             "is_checkpoint_serialized": True,
@@ -426,11 +420,8 @@ def test_build_quant_config_mxfp4_dualscale_dict_offline():
     assert cfg.ignored_layers == ["blocks.0.attn1.to_q", "blocks.0.attn1.to_k"]
 
 
-def test_build_quant_config_mxfp4_dualscale_dict_online_custom_fallback():
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
-    cfg = build_quant_config({"method": "mxfp4_dualscale", "num_bf16_fallback_layers": 10})
+def test_build_quantization_config_mxfp4_dualscale_dict_online_custom_fallback():
+    cfg = build_quantization_config({"method": "mxfp4_dualscale", "num_bf16_fallback_layers": 10})
     assert isinstance(cfg, DiffusionMXFP4DualScaleMixedConfig)
     assert cfg.num_bf16_fallback_layers == 10
 
@@ -441,8 +432,6 @@ def test_build_quant_config_mxfp4_dualscale_dict_online_custom_fallback():
 
 
 def test_parse_block_idx_valid():
-    from vllm_omni.quantization.mxfp4_config import _parse_block_idx
-
     assert _parse_block_idx("blocks.0.attn1.to_q") == 0
     assert _parse_block_idx("blocks.5.ffn.net.0.proj") == 5
     assert _parse_block_idx("blocks.40.norm1.weight") == 40
@@ -450,8 +439,6 @@ def test_parse_block_idx_valid():
 
 def test_parse_block_idx_non_block_prefixes():
     """Prefixes that do not start with 'blocks.N.' must return None."""
-    from vllm_omni.quantization.mxfp4_config import _parse_block_idx
-
     assert _parse_block_idx("condition_embedder.time_embedder.linear_1") is None
     assert _parse_block_idx("proj_out.weight") is None
     assert _parse_block_idx("model.layers.0.self_attn.q_proj") is None
@@ -464,8 +451,6 @@ def test_parse_block_idx_non_block_prefixes():
 
 
 def test_supported_methods_include_mxfp4_variants():
-    from vllm_omni.quantization import SUPPORTED_QUANTIZATION_METHODS
-
     assert "mxfp4" in SUPPORTED_QUANTIZATION_METHODS
     assert "mxfp8" in SUPPORTED_QUANTIZATION_METHODS
     assert "mxfp4_dualscale" in SUPPORTED_QUANTIZATION_METHODS
@@ -477,14 +462,10 @@ def test_supported_methods_include_mxfp4_variants():
 
 
 def test_mixed_dualscale_config_get_name():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     assert DiffusionMXFP4DualScaleMixedConfig.get_name() == "mxfp4_dualscale"
 
 
 def test_mixed_dualscale_config_no_args_defaults():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig()
     assert cfg.is_checkpoint_serialized is False
     assert cfg.ignored_layers == []
@@ -492,8 +473,6 @@ def test_mixed_dualscale_config_no_args_defaults():
 
 
 def test_mixed_dualscale_config_from_config_offline():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig.from_config(
         {
             "quant_method": "mxfp4_dualscale",
@@ -507,8 +486,6 @@ def test_mixed_dualscale_config_from_config_offline():
 
 
 def test_mixed_dualscale_config_from_config_online_custom_fallback():
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig.from_config({"num_bf16_fallback_layers": 10})
     assert cfg.is_checkpoint_serialized is False
     assert cfg.num_bf16_fallback_layers == 10
@@ -516,8 +493,6 @@ def test_mixed_dualscale_config_from_config_online_custom_fallback():
 
 def test_mixed_dualscale_config_from_config_modules_to_not_convert_fallback():
     """modules_to_not_convert must be accepted as an alias for ignored_layers."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig.from_config(
         {"is_checkpoint_serialized": True, "modules_to_not_convert": ["proj_out"]}
     )
@@ -534,11 +509,6 @@ def test_mixed_dualscale_offline_ignored_layer_returns_unquantized(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Offline: a prefix in ignored_layers must return UnquantizedLinearMethod."""
-    from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
-
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig(
         is_checkpoint_serialized=True,
         ignored_layers=["blocks.0.attn1.to_q"],
@@ -555,11 +525,6 @@ def test_mixed_dualscale_offline_non_ignored_returns_mxfp4(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Offline: a prefix NOT in ignored_layers must return NPUMxfp4DualScaleLinearMethod."""
-    from vllm.model_executor.layers.linear import LinearBase
-
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig, NPUMxfp4DualScaleLinearMethod
-
     cfg = DiffusionMXFP4DualScaleMixedConfig(
         is_checkpoint_serialized=True,
         ignored_layers=["blocks.0.attn1.to_q"],
@@ -576,11 +541,6 @@ def test_mixed_dualscale_online_fallback_block_returns_unquantized(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Online: blocks < num_bf16_fallback_layers must return UnquantizedLinearMethod."""
-    from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
-
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig(is_checkpoint_serialized=False, num_bf16_fallback_layers=5)
     layer = mocker.Mock(spec=LinearBase)
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
@@ -594,14 +554,6 @@ def test_mixed_dualscale_online_quantized_block_returns_mxfp4(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Online: blocks >= num_bf16_fallback_layers must return NPUMxfp4DualScaleOnlineLinearMethod."""
-    from vllm.model_executor.layers.linear import LinearBase
-
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization.mxfp4_config import (
-        DiffusionMXFP4DualScaleMixedConfig,
-        NPUMxfp4DualScaleOnlineLinearMethod,
-    )
-
     cfg = DiffusionMXFP4DualScaleMixedConfig(is_checkpoint_serialized=False, num_bf16_fallback_layers=5)
     layer = mocker.Mock(spec=LinearBase)
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
@@ -615,14 +567,6 @@ def test_mixed_dualscale_online_non_block_prefix_returns_mxfp4(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Online: layers outside 'blocks.N.*' (condition_embedder etc.) always use MXFP4 online."""
-    from vllm.model_executor.layers.linear import LinearBase
-
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization.mxfp4_config import (
-        DiffusionMXFP4DualScaleMixedConfig,
-        NPUMxfp4DualScaleOnlineLinearMethod,
-    )
-
     cfg = DiffusionMXFP4DualScaleMixedConfig(is_checkpoint_serialized=False, num_bf16_fallback_layers=5)
     layer = mocker.Mock(spec=LinearBase)
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
@@ -642,11 +586,6 @@ def test_mixed_dualscale_online_ignored_layers_override(
     pin specific interleaved layers to BF16 during online quantization without needing an
     offline checkpoint.
     """
-    from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
-
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig(
         is_checkpoint_serialized=False,
         num_bf16_fallback_layers=5,
@@ -661,9 +600,6 @@ def test_mixed_dualscale_online_ignored_layers_override(
 
 def test_mixed_dualscale_non_linear_returns_none(monkeypatch: pytest.MonkeyPatch):
     """Non-LinearBase layers (norms, embeddings) must return None → no quantization."""
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
     cfg = DiffusionMXFP4DualScaleMixedConfig()
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
 
@@ -724,8 +660,6 @@ def _shard(tensor, param, rank, tp, dim_attr):
 
 def test_dualscale_column_parallel_tp2_shapes():
     """Column-parallel TP=2: output halved, fine/coarse groups stay full, mul_scale full."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig, NPUMxfp4DualScaleLinearMethod
-
     method = NPUMxfp4DualScaleLinearMethod(DiffusionMXFP4DualScaleMixedConfig())
     layer = _create_weights(method, input_size_per_partition=_TP2_K, output_partition_sizes=[_TP2_N // _TP2])
 
@@ -737,8 +671,6 @@ def test_dualscale_column_parallel_tp2_shapes():
 
 def test_dualscale_row_parallel_tp2_shapes():
     """Row-parallel TP=2: input halved, fine/coarse groups halved, mul_scale halved."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig, NPUMxfp4DualScaleLinearMethod
-
     method = NPUMxfp4DualScaleLinearMethod(DiffusionMXFP4DualScaleMixedConfig())
     layer = _create_weights(method, input_size_per_partition=_TP2_K // _TP2, output_partition_sizes=[_TP2_N])
 
@@ -755,8 +687,6 @@ def test_dualscale_scale_parameter_input_dims():
     Without these, loading a full checkpoint tensor into a per-rank shape causes a
     shape mismatch for TP>1 row-parallel layers (to_out, ffn.net_2).
     """
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig, NPUMxfp4DualScaleLinearMethod
-
     method = NPUMxfp4DualScaleLinearMethod(DiffusionMXFP4DualScaleMixedConfig())
     layer = _create_weights(method, input_size_per_partition=_TP2_K, output_partition_sizes=[_TP2_N])
 
@@ -775,8 +705,6 @@ def test_dualscale_row_parallel_tp2_loader_simulation():
     take the slice at rank*shard_size:(rank+1)*shard_size along input_dim.
     The resulting shape must equal the per-rank parameter shape allocated by create_weights.
     """
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig, NPUMxfp4DualScaleLinearMethod
-
     method = NPUMxfp4DualScaleLinearMethod(DiffusionMXFP4DualScaleMixedConfig())
     layer = _create_weights(method, input_size_per_partition=_TP2_K // _TP2, output_partition_sizes=[_TP2_N])
 
@@ -800,8 +728,6 @@ def test_dualscale_column_parallel_tp2_loader_simulation():
     For column-parallel layers, the loader shards along output_dim (rows).
     mul_scale has output_dim=None → not sharded (full tensor, same for all ranks).
     """
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig, NPUMxfp4DualScaleLinearMethod
-
     method = NPUMxfp4DualScaleLinearMethod(DiffusionMXFP4DualScaleMixedConfig())
     layer = _create_weights(method, input_size_per_partition=_TP2_K, output_partition_sizes=[_TP2_N // _TP2])
 
@@ -824,8 +750,6 @@ def test_dualscale_column_parallel_tp2_loader_simulation():
 
 def test_single_scale_row_parallel_tp2_shapes():
     """Row-parallel TP=2: input halved → weight_scale groups halved."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config, NPUMxfp4LinearMethod
-
     method = NPUMxfp4LinearMethod(DiffusionMXFP4Config())
     layer = _create_weights(method, input_size_per_partition=_TP2_K // _TP2, output_partition_sizes=[_TP2_N])
 
@@ -835,8 +759,6 @@ def test_single_scale_row_parallel_tp2_shapes():
 
 def test_single_scale_scale_parameter_input_dims():
     """Single-scale weight_scale must have input_dim=1 for RowParallel TP sharding."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config, NPUMxfp4LinearMethod
-
     method = NPUMxfp4LinearMethod(DiffusionMXFP4Config())
     layer = _create_weights(method, input_size_per_partition=_TP2_K, output_partition_sizes=[_TP2_N])
 
@@ -846,8 +768,6 @@ def test_single_scale_scale_parameter_input_dims():
 
 def test_single_scale_row_parallel_tp2_loader_simulation():
     """Slicing full checkpoint weight_scale along input_dim matches row-parallel parameter shape."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config, NPUMxfp4LinearMethod
-
     method = NPUMxfp4LinearMethod(DiffusionMXFP4Config())
     layer = _create_weights(method, input_size_per_partition=_TP2_K // _TP2, output_partition_sizes=[_TP2_N])
 
@@ -872,9 +792,6 @@ def test_single_scale_row_parallel_tp2_loader_simulation():
 def _rocm_platform(monkeypatch: pytest.MonkeyPatch):
     """Make current_omni_platform report ROCm, and stub the aiter
     custom-op registration so ROCmMxfp4*Method can be constructed without aiter."""
-    from vllm_omni.platforms import current_omni_platform
-    from vllm_omni.quantization import mxfp4_config
-
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
     monkeypatch.setattr(current_omni_platform, "is_rocm", lambda: True)
     monkeypatch.setattr(mxfp4_config, "_register_rocm_mxfp4_op", lambda: None)
@@ -882,8 +799,6 @@ def _rocm_platform(monkeypatch: pytest.MonkeyPatch):
 
 def _patch_gcn_arch(monkeypatch: pytest.MonkeyPatch, arch: str) -> None:
     """Patch torch.cuda.get_device_properties(...).gcnArchName to return `arch`."""
-    from types import SimpleNamespace
-
     monkeypatch.setattr(torch.accelerator, "current_device_index", lambda: 0)
     monkeypatch.setattr(
         torch.cuda,
@@ -894,17 +809,11 @@ def _patch_gcn_arch(monkeypatch: pytest.MonkeyPatch, arch: str) -> None:
 
 def _fake_linear_layer():
     """A stand-in that passes isinstance(layer, LinearBase) without a real layer."""
-    from unittest.mock import MagicMock
-
-    from vllm.model_executor.layers.linear import LinearBase
-
     return MagicMock(spec=LinearBase)
 
 
 def test_rocm_online_dispatch_returns_rocm_method(_rocm_platform, monkeypatch):
     """ROCm + gfx950 + online checkpoint must return ROCmMxfp4OnlineLinearMethod."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config, ROCmMxfp4OnlineLinearMethod
-
     _patch_gcn_arch(monkeypatch, "gfx950:sramecc+:xnack-")
     cfg = DiffusionMXFP4Config(is_checkpoint_mxfp4_serialized=False)
 
@@ -915,10 +824,6 @@ def test_rocm_online_dispatch_returns_rocm_method(_rocm_platform, monkeypatch):
 @pytest.mark.parametrize("steps", [[], [0, 2]])
 def test_rocm_ignored_layer_returns_unquantized(_rocm_platform, monkeypatch, steps):
     """A prefix in ignored_layers must return UnquantizedLinearMethod before the gfx950 probe."""
-    from vllm.model_executor.layers.linear import UnquantizedLinearMethod
-
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
     _patch_gcn_arch(monkeypatch, "gfx950:sramecc+:xnack-")
     cfg = DiffusionMXFP4Config(
         is_checkpoint_mxfp4_serialized=False, ignored_layers=["proj_out"], w4a8_fallback_steps=steps
@@ -939,8 +844,6 @@ def test_rocm_rejects_w4a8_step_fallback(_rocm_platform, monkeypatch):
 
 def test_rocm_non_gfx950_raises(_rocm_platform, monkeypatch):
     """MXFP4 on ROCm requires gfx950; any other arch must raise."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
-
     _patch_gcn_arch(monkeypatch, "gfx942:sramecc+:xnack-")
     cfg = DiffusionMXFP4Config(is_checkpoint_mxfp4_serialized=False)
 
@@ -959,8 +862,6 @@ def test_rocm_non_gfx950_raises(_rocm_platform, monkeypatch):
 
 def test_rocm_create_weights_column_parallel_tp2(_rocm_platform):
     """Column-parallel TP=2: meta BF16 weight has the output halved, input full."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config, ROCmMxfp4OnlineLinearMethod
-
     method = ROCmMxfp4OnlineLinearMethod(DiffusionMXFP4Config())
     layer = _create_weights(method, input_size_per_partition=_TP2_K, output_partition_sizes=[_TP2_N // _TP2])
 
@@ -975,8 +876,6 @@ def test_rocm_create_weights_column_parallel_tp2(_rocm_platform):
 
 def test_rocm_create_weights_row_parallel_tp2(_rocm_platform):
     """Row-parallel TP=2: meta BF16 weight has the input halved, output full."""
-    from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config, ROCmMxfp4OnlineLinearMethod
-
     method = ROCmMxfp4OnlineLinearMethod(DiffusionMXFP4Config())
     layer = _create_weights(method, input_size_per_partition=_TP2_K // _TP2, output_partition_sizes=[_TP2_N])
 

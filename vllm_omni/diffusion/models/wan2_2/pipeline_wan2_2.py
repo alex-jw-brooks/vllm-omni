@@ -19,6 +19,7 @@ from vllm.model_executor.layers.quantization.base_config import QuantizationConf
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm.sequence import IntermediateTensors
 
+from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import DistributedAutoencoderKLWan
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
@@ -252,7 +253,9 @@ def create_transformer_from_config(
     if "pos_embed_seq_len" in config:
         kwargs["pos_embed_seq_len"] = config["pos_embed_seq_len"]
 
-    quant_config = resolve_wan_transformer_quant_config(config, quant_config, component)
+    if "quantization_config" in config:
+        quant_config = resolve_quantization_config_from_disk(quant_config, config["quantization_config"])
+
     if quant_config is not None:
         kwargs["quant_config"] = quant_config
     if prefix:

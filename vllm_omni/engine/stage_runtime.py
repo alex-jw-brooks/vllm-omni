@@ -72,6 +72,7 @@ from vllm_omni.entrypoints.stage_utils import resolve_stage_physical_devices
 from vllm_omni.entrypoints.utils import inject_omni_kv_config
 from vllm_omni.outputs.output_metadata import FinalOutputModalityType
 from vllm_omni.platforms import current_omni_platform
+from vllm_omni.quantization.factory import get_stage_quantization_config
 
 logger = init_logger(__name__)
 
@@ -727,6 +728,21 @@ class StageRuntime:
             num_replicas = replicas_per_stage[stage_idx]
             launch_mode = self._get_launch_mode(stage_id)
 
+            # TODO: (Alex) This should be folded into the VllmOmniConfig.
+            # Build the quantization config early so both the LLM and diffusion
+            # init paths share one instance. Quantization is already normalized
+            # to `quantization_config` for all engine types before this point.
+            quantization_config = get_stage_quantization_config(
+                self._model,
+                stage_cfg.engine_args.get("quantization_config"),
+                revision=stage_cfg.engine_args.get("revision"),
+                stage_type=base_metadata.stage_type,
+                trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
+                hf_config_name=stage_cfg.engine_args.get("hf_config_name"),
+            )
+            if quantization_config is not None:
+                logger.info("created quantization config of type: %s", type(quantization_config).__name__)
+
             replicas: list[ReplicaInitPlan] = []
             stage_vllm_config = None
             executor_class = None
@@ -764,6 +780,7 @@ class StageRuntime:
                     engine_args_dict=engine_args_dict,
                     api_process_count=self._client_count,
                     api_process_rank=self._api_process_rank,
+                    quantization_config=quantization_config,
                 )
 
             for replica_id in range(num_replicas):
@@ -806,6 +823,7 @@ class StageRuntime:
                         stage_vllm_config=replica_vllm_config,
                         executor_class=executor_class,
                         engine_args_dict=copy.deepcopy(engine_args_dict) if engine_args_dict is not None else None,
+                        quantization_config=quantization_config,
                     )
                 )
 
@@ -1105,6 +1123,13 @@ class StageRuntime:
         stage_init_timeout: int,
     ) -> StagePoolClient:
         """Initialize one local LLM replica using vLLM's launch/attach pattern."""
+        # This should not happen because build_vllm_config .replace()s the plan's
+        # quantization_config onto the vLLM config, so they must be identical.
+        if plan.stage_vllm_config is not None and plan.stage_vllm_config.quant_config is not plan.quantization_config:
+            logger.warning(
+                "LLM replica vLLM config's quantization config does not match the plan's quantization config"
+            )
+
         external_addresses = self._get_external_client_addresses(
             plan.metadata.stage_id,
             plan.replica_id,
@@ -1221,6 +1246,7 @@ class StageRuntime:
                     replica_id=plan.replica_id,
                     omni_master_server=self._get_omni_master_server(),
                     omni_coordinator_address=self._get_coordinator_address(),
+                    quantization_config=plan.quantization_config,
                 )
 
             logger.info(
