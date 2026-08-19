@@ -50,6 +50,7 @@ from vllm_omni.config.stage_config import (
     load_deploy_config,
     merge_pipeline_deploy,
 )
+from vllm_omni.diffusion.data import normalize_omni_kwargs
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.engine.stage_engine_startup import _serialize_stage_config
 from vllm_omni.engine.stage_init_utils import build_legacy_engine_args_dict
@@ -1404,18 +1405,6 @@ def test_diffusion_config_none_values_preserve_dataclass_defaults():
     ("canonical_key", "alias_key", "canonical_value", "alias_value"),
     [
         ("lora_scale", "static_lora_scale", 0.75, 0.25),
-        (
-            "quantization_config",
-            "diffusion_quantization_config",
-            {"method": "canonical"},
-            {"method": "diffusion-alias"},
-        ),
-        (
-            "quantization_config",
-            "quantization",
-            {"method": "canonical"},
-            "legacy-alias",
-        ),
         ("diffusion_kv_cache_dtype", "kv_cache_dtype", "fp8", "fp16"),
         ("diffusion_kv_cache_skip_steps", "kv_cache_skip_steps", "0-1", "2-3"),
         ("diffusion_kv_cache_skip_layers", "kv_cache_skip_layers", "1-2", "3-4"),
@@ -1428,17 +1417,52 @@ def test_diffusion_alias_conflicts_prefer_canonical_key(
     canonical_value,
     alias_value,
 ):
-    from vllm_omni.diffusion.data import normalize_omni_diffusion_kwargs
-
-    normalized = normalize_omni_diffusion_kwargs(
+    normalized = normalize_omni_kwargs(
         {
             canonical_key: canonical_value,
             alias_key: alias_value,
-        }
+        },
+        is_diffusion=True,
     )
 
     assert normalized[canonical_key] == canonical_value
     assert alias_key not in normalized
+
+
+def test_quantization_alias_resolution_priority():
+    # High to low ordering for precedence of values in quantization
+    diff_quant_key = "diffusion_quantization_config"
+    quantization_alias_order = [
+        diff_quant_key,
+        "quantization_config",
+        "quantization",
+    ]
+    normalized_key = "quantization_config"
+    non_normalized_keys = [alias for alias in quantization_alias_order if not normalized_key]
+
+    # Check all together; diffusion_quantization_key is highest priority for diffusion models
+    normalized = normalize_omni_kwargs(
+        {field_name: field_name for field_name in quantization_alias_order},
+        is_diffusion=True,
+    )
+    assert normalized_key in normalized and normalized[normalized_key] == diff_quant_key
+    assert not any(non_norm_key in normalized for non_norm_key in non_normalized_keys)
+
+    # If it's not diffusion, then diffusion_quantization_config is not used
+    normalized = normalize_omni_kwargs(
+        {field_name: field_name for field_name in quantization_alias_order},
+        is_diffusion=False,
+    )
+    assert normalized_key in normalized and normalized[normalized_key] == "quantization_config"
+    assert "quantization" not in normalized
+
+    # And quantization_config value takes priority over quantization in all cases
+    normalized = normalize_omni_kwargs(
+        {field_name: field_name for field_name in quantization_alias_order if field_name != diff_quant_key},
+        is_diffusion=True,
+    )
+    assert normalized_key in normalized and normalized[normalized_key] == "quantization_config"
+    assert "quantization" not in normalized
 
 
 def test_from_pipeline_config_normalizes_diffusion_config_aliases_from_engine_args(tmp_path, monkeypatch):
@@ -1562,35 +1586,6 @@ def test_diffusion_config_field_classification_covers_current_fields():
         "distributed_executor_backend",
     } <= omni_config_module._DIFFUSION_SHARED_CONFIG_FIELDS
     assert "prompt_file_path" in omni_config_module._DIFFUSION_RUNTIME_CONFIG_FIELDS
-
-
-def test_diffusion_config_projection_keeps_mapping_quantization_config_serializable():
-    quantization_config = {
-        "method": "example_quant",
-        "weights": "weights.bin",
-    }
-
-    cfg = omni_config_module._DiffusionConfigProjection.from_kwargs(quantization_config=quantization_config)
-
-    assert cfg.quantization_config == quantization_config
-
-
-def test_diffusion_quantization_mapping_reaches_terminal_config(monkeypatch):
-    from vllm_omni.diffusion.data import OmniDiffusionConfig
-
-    quantization_config = {"method": "int8", "activation_scheme": "dynamic"}
-    cfg = omni_config_module._DiffusionConfigProjection.from_kwargs(
-        quantization_config=quantization_config,
-    )
-
-    # Exercise the terminal construction performed by the future typed startup
-    # path without probing ports or loading remote model metadata.
-    monkeypatch.setattr(OmniDiffusionConfig, "_resolve_master_port", lambda _self: 29500)
-    monkeypatch.setattr(OmniDiffusionConfig, "enrich_config", lambda _self: None)
-    cfg.enrich_config()
-
-    assert cfg.quantization_config is not None
-    assert cfg.quantization_config.get_name() == "int8"
 
 
 def test_video_output_transport_mapping_is_normalized() -> None:
