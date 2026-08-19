@@ -26,7 +26,6 @@ from typing import Any, Literal, cast
 
 import janus
 import torch
-from omegaconf import OmegaConf
 from vllm import envs as vllm_envs
 from vllm.inputs import PromptType
 from vllm.logger import init_logger
@@ -1315,6 +1314,7 @@ class AsyncOmniEngine:
         # rather than as a per-stage config field.
         self._apply_strategy_lb_policy(strategy_lb_policy, kwargs)
 
+<<<<<<< HEAD
         # Inject diffusion LoRA-related knobs from kwargs if not present in the stage config.
         for cfg in stage_configs:
             try:
@@ -1407,6 +1407,8 @@ class AsyncOmniEngine:
             except Exception as e:
                 logger.warning("Failed to inject LoRA config for stage: %s", e)
 
+=======
+>>>>>>> 030f65bf9 (wip simplifying engine arg building)
         return config_path, stage_configs
 
     # ==================== Public API ====================
