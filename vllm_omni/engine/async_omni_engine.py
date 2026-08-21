@@ -319,6 +319,7 @@ class AsyncOmniEngine:
             stage_configs=self.stage_configs,
             model=self.model,
             config_path=self.config_path,
+            hf_config=self.hf_config,
             single_stage_mode=self.single_stage_mode,
             stage_init_timeout=stage_init_timeout,
             async_chunk=self.async_chunk,

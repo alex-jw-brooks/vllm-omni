@@ -433,6 +433,39 @@ def build_quant_config(
     raise TypeError(f"quantization config must be str, dict, QuantizationConfig, or None, got {type(spec).__name__}")
 
 
+def build_quantization_config(
+    quantization: str | None,
+    quant_config: dict[str, Any] | None,
+) -> QuantizationConfig | None:
+    """Build a resolved QuantizationConfig from a method string and config dict.
+
+    Called early in init, before EngineArgs / ModelConfig / LoadConfig exist.
+
+    For omni-specific methods (int8, mxfp8, etc.), uses the override registry.
+    For vLLM methods, looks up the config class from vLLM's registry and calls
+    from_config() — the same call vLLM's get_quant_config() eventually makes.
+    """
+    if quantization is None:
+        return None
+
+    method = _normalize_method_name(quantization)
+    if method == "none":
+        return None
+
+    # TODO (Alex) refactor overrides and use vLLM's registry directly
+    if method in _OVERRIDES:
+        return _OVERRIDES[method]()
+
+    if method not in QUANTIZATION_METHODS:
+        raise ValueError(f"Unknown quantization method: {method!r}. Supported: {SUPPORTED_QUANTIZATION_METHODS}")
+
+    if quant_config is None:
+        raise ValueError(f"Cannot build quantization config for {method!r}: no quantization metadata provided.")
+
+    quant_cls = get_quantization_config(method)
+    return quant_cls.from_config(quant_config)
+
+
 def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: object) -> bool:
     """Return True when config.json says serialized but the active quant_config does not.
 
