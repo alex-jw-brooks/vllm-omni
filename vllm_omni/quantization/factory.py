@@ -349,23 +349,24 @@ def _maybe_build_component_quant_config(
 
 def build_quantization_config(
     quantization: str | dict[str, Any] | QuantizationConfig | None,
-    quant_config: dict[str, Any] | None,
+    quant_config: dict[str, Any] | None = None,
 ) -> QuantizationConfig | None:
-    """Build a resolved QuantizationConfig from a method string and config dict.
+    """Build a resolved QuantizationConfig.
 
-    Called early in init, before EngineArgs / ModelConfig / LoadConfig exist.
+    Examples::
 
-    ``quantization`` may be a method string ("fp8"), a dict spec (flat or
-    per-component), or an already-resolved QuantizationConfig.
+        build_quantization_config("fp8")
+        build_quantization_config("fp8", {"quant_method": "fp8", "is_checkpoint_fp8_serialized": True})
+        build_quantization_config({"method": "fp8", "activation_scheme": "static"})
+        build_quantization_config({"transformer": "fp8", "vae": None}) # component config
 
-    ``quant_config`` is the HF checkpoint's quantization metadata dict
-    (from hf_config.quantization_config), used when building from a
-    method string for checkpoint-quantized models.
+    Args:
+        quantization: Method string, dict spec, QuantizationConfig passthrough, or None.
+        quant_config: Checkpoint quantization metadata dict (e.g. from a model's
+            config.json ``quantization_config`` field). Passed to ``from_config()``
+            for checkpoint-quantized models. Omit for online quantization.
     """
-    if quantization is None:
-        return None
-
-    if isinstance(quantization, QuantizationConfig):
+    if isinstance(quantization, QuantizationConfig) or quantization is None:
         return quantization
 
     if isinstance(quantization, Mapping):
@@ -383,105 +384,57 @@ def build_quantization_config(
         modelopt_method = _detect_modelopt_method({"quant_method": quantization, **spec})
         if modelopt_method is not None:
             return _build_modelopt_from_config(modelopt_method, {"quant_method": quantization, **spec})
-        quant_config = spec
+    else:
+        spec = dict(quant_config) if isinstance(quant_config, dict) else {}
 
     method = _normalize_method_name(quantization)
     if method == "none":
         return None
 
+    # FIXME: _OVERRIDES maps to builder functions, not classes. When
+    # quant_config is a checkpoint dict (has quant_method), kwarg expansion
+    # can break builders that don't accept it. PR 2 fixes this by
+    # registering classes directly with vLLM's registry.
     if method in _OVERRIDES:
-        return _OVERRIDES[method](**(quant_config or {}))
+        return _OVERRIDES[method](**spec)
 
     if method not in QUANTIZATION_METHODS:
         raise ValueError(f"Unknown quantization method: {method!r}. Supported: {SUPPORTED_QUANTIZATION_METHODS}")
 
     quant_cls = get_quantization_config(method)
-    if quant_config is None:
-        return quant_cls()
-    return quant_cls.from_config(quant_config)
-
-
-def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: object) -> bool:
-    """Return True when config.json says serialized but the active quant_config does not.
-
-    Matches any flag following the is_checkpoint_*_serialized naming convention,
-    so new quant methods don't require updating an explicit allowlist.
-    """
-    for key, val in qc_kwargs.items():
-        if key.startswith("is_checkpoint_") and key.endswith("_serialized"):
-            if val and hasattr(quant_config, key) and not getattr(quant_config, key):
-                return True
-    return False
+    if "quant_method" in spec:
+        return quant_cls.from_config(spec)
+    return quant_cls(**spec)
 
 
 def resolve_quant_config_from_disk(
     quant_config: QuantizationConfig | None,
     disk_qc: dict[str, Any] | str | None,
 ) -> QuantizationConfig | None:
-    """Reconcile an active quant_config against quantization_config from a transformer's config.json.
+    """Reconcile an active quant_config against a transformer's config.json.
 
-    Used when loading individual transformer blocks that each have their own config.json
-    (e.g. cascade models with separate transformer and transformer_2 directories).
-
-    Rules:
-      - disk_qc is None: return quant_config unchanged.
-      - quant_config is None: auto-detect from disk_qc (full build).
-      - Methods mismatch: raise ValueError — prevents silent weight corruption.
-      - Disk marks serialized but quant_config is online: rebuild from disk.
-      - ignored_layers differ: rebuild from disk (per-transformer BF16 routing).
+    Used for cascade models where individual transformer blocks have their
+    own config.json (e.g. separate transformer and transformer_2 directories).
+    Returns the disk config when it carries more specific info than the active one.
     """
     if disk_qc is None:
         return quant_config
 
+    if quant_config is None:
+        return build_quantization_config(disk_qc, disk_qc if isinstance(disk_qc, dict) else None)
+
     if isinstance(disk_qc, str):
-        if quant_config is None:
-            logger.info("Auto-detected quantization from config.json: method=%s", disk_qc)
-            return build_quantization_config(disk_qc, None)
         return quant_config
 
     if not isinstance(disk_qc, Mapping) or "quant_method" not in disk_qc:
         return quant_config
 
-    qc_method: str = disk_qc["quant_method"]
-    qc_kwargs: dict[str, Any] = {k: v for k, v in disk_qc.items() if k != "quant_method"}
-
-    if quant_config is None:
-        logger.info(
-            "Auto-detected quantization from config.json: method=%s kwargs=%s",
-            qc_method,
-            qc_kwargs,
-        )
-        return build_quantization_config(qc_method, qc_kwargs)
-
+    disk_method = _normalize_quant_method_alias(disk_qc["quant_method"])
     active_method = _normalize_quant_method_alias(quant_config.get_name())
-    disk_method = _normalize_quant_method_alias(qc_method)
     if active_method != disk_method:
         raise ValueError(
-            f"Checkpoint config.json declares quant_method={qc_method!r} but the "
-            f"active quantization config is {quant_config.get_name()!r}. "
-            "Pass a matching --quantization flag or omit it for auto-detection."
+            f"Checkpoint config.json declares quant_method={disk_qc['quant_method']!r} "
+            f"but the active quantization config is {quant_config.get_name()!r}."
         )
 
-    if _disk_marks_serialized(qc_kwargs, quant_config):
-        logger.info(
-            "config.json marks checkpoint as serialized; switching to offline %s mode.",
-            qc_method,
-        )
-        return build_quantization_config(qc_method, qc_kwargs)
-
-    # AutoRound MXFP checkpoints use data_type="mx_fp" instead of
-    # is_checkpoint_*_serialized; rebuild so the offline MXFP4/MXFP8 path is
-    # selected according to the checkpoint's bit width.
-    if qc_kwargs.get("data_type") == "mx_fp":
-        logger.info("config.json declares data_type='mx_fp'; rebuilding as offline AutoRound MXFP8.")
-        return build_quantization_config(qc_method, qc_kwargs)
-
-    if (
-        "ignored_layers" in qc_kwargs
-        and hasattr(quant_config, "ignored_layers")
-        and set(qc_kwargs.get("ignored_layers") or []) != set(quant_config.ignored_layers or [])
-    ):
-        logger.info("config.json ignored_layers differs from active config; rebuilding quant_config.")
-        return build_quantization_config(qc_method, qc_kwargs)
-
-    return quant_config
+    return build_quantization_config(disk_method, disk_qc)
