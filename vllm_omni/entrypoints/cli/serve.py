@@ -1027,10 +1027,15 @@ def run_headless(args: TrackingNamespace) -> None:
 
     prepare_engine_environment()
     per_replica_devices = get_headless_replica_devices(stage_cfg, stage_id, omni_dp_size_local)
+    # NOTE: We need to get the hf config early to resolve the pipeline config anyway,
+    # so this is cached; because of this, we get the hf config early to build the quantization
+    # configs as early as possible, which makes typing a lot cleaner.
+    hf_config = StageConfigFactory.get_hf_config(model, args.trust_remote_code)
 
     if stage_cfg.stage_type == "diffusion":
         launch_headless_diffusion_replicas(
             model=model,
+            hf_config=hf_config,
             stage_cfg=stage_cfg,
             stage_configs=stage_configs,
             stage_id=stage_id,
@@ -1067,7 +1072,6 @@ def run_headless(args: TrackingNamespace) -> None:
 
     inject_omni_kv_connector_config(engine_args_dict, omni_kv_connector, stage_id)
 
-    hf_config = StageConfigFactory.get_hf_config(model, args.trust_remote_code)
     vllm_config, executor_class = build_vllm_config(
         stage_cfg,
         model,
