@@ -88,6 +88,7 @@ from vllm_omni.engine.stage_runtime import (
 )
 from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
 from vllm_omni.entrypoints.utils import (
+    _apply_stage_engine_arg_overrides,
     load_and_resolve_stage_configs,
     parse_stage_overrides,
 )
@@ -1317,37 +1318,19 @@ class AsyncOmniEngine:
         self._apply_strategy_lb_policy(strategy_lb_policy, kwargs)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         # Inject diffusion LoRA-related knobs from kwargs if not present in the stage config.
         for cfg in stage_configs:
             try:
-                if not hasattr(cfg, "engine_args") or cfg.engine_args is None:
-                    cfg.engine_args = OmegaConf.create({})
+              
                 global_sleep_mode = kwargs.get("enable_sleep_mode")
                 if global_sleep_mode is not None:
                     if not hasattr(cfg.engine_args, "enable_sleep_mode") or cfg.engine_args.enable_sleep_mode is None:
                         cfg.engine_args.enable_sleep_mode = global_sleep_mode
                 if getattr(cfg, "stage_type", None) != "diffusion":
                     continue
-                if not hasattr(cfg, "engine_args") or cfg.engine_args is None:
-                    cfg.engine_args = OmegaConf.create({})
-                additional_config = kwargs.get("additional_config")
-                if additional_config is not None:
-                    current_additional_config = getattr(cfg.engine_args, "additional_config", None)
-                    if current_additional_config in (None, {}):
-                        cfg.engine_args.additional_config = additional_config
-                if kwargs.get("lora_path") is not None:
-                    if not hasattr(cfg.engine_args, "lora_path") or cfg.engine_args.lora_path is None:
-                        cfg.engine_args.lora_path = kwargs["lora_path"]
-                lora_scale = kwargs.get("lora_scale")
-                if lora_scale is None:
-                    # Backwards compatibility for older callers.
-                    lora_scale = kwargs.get("static_lora_scale")
-                if lora_scale is not None:
-                    if not hasattr(cfg.engine_args, "lora_scale") or cfg.engine_args.lora_scale is None:
-                        cfg.engine_args.lora_scale = lora_scale
-                if kwargs.get("lora_backend") is not None:
-                    if not hasattr(cfg.engine_args, "lora_backend") or cfg.engine_args.lora_backend is None:
-                        cfg.engine_args.lora_backend = kwargs["lora_backend"]
+
+
                 if (
                     kwargs.get("diffusion_attention_config") is not None
                     or kwargs.get("diffusion_attention_backend") is not None
@@ -1363,54 +1346,18 @@ class AsyncOmniEngine:
                             attention_backend=kwargs.get("diffusion_attention_backend"),
                             fastvideo_vsa_topk=kwargs.get("fastvideo_vsa_topk"),
                         )
-                quantization_config = kwargs.get("diffusion_quantization_config") or kwargs.get("quantization_config")
-                if quantization_config is not None:
-                    if (
-                        not hasattr(cfg.engine_args, "quantization_config")
-                        or cfg.engine_args.quantization_config is None
-                    ):
-                        cfg.engine_args.quantization_config = quantization_config
-                # Inject profiler flags for diffusion stages
-                for profiler_key in (
-                    "enable_diffusion_pipeline_profiler",
-                    "enable_ar_profiler",
-                ):
-                    val = kwargs.get(profiler_key)
-                    if val:
-                        if not hasattr(cfg.engine_args, profiler_key) or not getattr(
-                            cfg.engine_args, profiler_key, False
-                        ):
-                            setattr(cfg.engine_args, profiler_key, val)
-                quantization = kwargs.get("quantization")
-                if quantization is not None:
-                    if not hasattr(cfg.engine_args, "quantization") or cfg.engine_args.quantization is None:
-                        cfg.engine_args.quantization = quantization
-                diffusion_kv_cache_dtype = kwargs.get("diffusion_kv_cache_dtype")
-                if diffusion_kv_cache_dtype is not None:
-                    if (
-                        not hasattr(cfg.engine_args, "diffusion_kv_cache_dtype")
-                        or cfg.engine_args.diffusion_kv_cache_dtype is None
-                    ):
-                        cfg.engine_args.diffusion_kv_cache_dtype = diffusion_kv_cache_dtype
-                diffusion_kv_cache_skip_steps = kwargs.get("diffusion_kv_cache_skip_steps")
-                if diffusion_kv_cache_skip_steps is not None:
-                    if (
-                        not hasattr(cfg.engine_args, "diffusion_kv_cache_skip_steps")
-                        or cfg.engine_args.diffusion_kv_cache_skip_steps is None
-                    ):
-                        cfg.engine_args.diffusion_kv_cache_skip_steps = diffusion_kv_cache_skip_steps
-                diffusion_kv_cache_skip_layers = kwargs.get("diffusion_kv_cache_skip_layers")
-                if diffusion_kv_cache_skip_layers is not None:
-                    if (
-                        not hasattr(cfg.engine_args, "diffusion_kv_cache_skip_layers")
-                        or cfg.engine_args.diffusion_kv_cache_skip_layers is None
-                    ):
-                        cfg.engine_args.diffusion_kv_cache_skip_layers = diffusion_kv_cache_skip_layers
+
+                      
             except Exception as e:
                 logger.warning("Failed to inject LoRA config for stage: %s", e)
 
 =======
 >>>>>>> 030f65bf9 (wip simplifying engine arg building)
+=======
+        for cfg in stage_configs:
+            _apply_stage_engine_arg_overrides(cfg, kwargs)
+
+>>>>>>> 1efdd642b (integrate stage overrides)
         return config_path, stage_configs
 
     # ==================== Public API ====================
