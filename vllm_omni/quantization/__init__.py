@@ -7,8 +7,8 @@ Adds per-component quantization for multi-stage models.
 
     from vllm_omni.quantization.factory import build_quantization_config
 
-    config = build_quantization_config("fp8", None)
-    config = build_quantization_config({"transformer": {"method": "fp8"}, "vae": None}, None)
+    config = build_quantization_config("fp8")
+    config = build_quantization_config({"transformer": {"method": "fp8"}, "vae": None})
 """
 
 from .component_config import ComponentQuantizationConfig, resolve_component_quant_config

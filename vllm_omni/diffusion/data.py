@@ -454,7 +454,7 @@ class TransformerConfig:
         disk_qc = params.get("quantization_config")
         if isinstance(disk_qc, dict):
             raw_quant_method = disk_qc.get("quant_method", disk_qc.get("method"))
-            quant_config = build_quantization_config(disk_qc, None)
+            quant_config = build_quantization_config(disk_qc)
             if quant_config is not None:
                 quant_method = raw_quant_method if raw_quant_method is not None else quant_config.get_name()
 

@@ -852,7 +852,7 @@ class _DiffusionConfigProjection:
 
         self._propagate_quantization_from_tf_config(self.tf_model_config)
         if self.quantization_config is not None and not isinstance(self.quantization_config, QuantizationConfig):
-            self.quantization_config = build_quantization_config(self.quantization_config, None)
+            self.quantization_config = build_quantization_config(self.quantization_config)
 
         if self.diffusion_attention_config is None or isinstance(
             self.diffusion_attention_config,
