@@ -65,6 +65,7 @@ from vllm_omni.engine.stage_runtime import (
 )
 from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
 from vllm_omni.entrypoints.utils import (
+    _apply_stage_engine_arg_overrides,
     load_and_resolve_stage_configs,
     parse_stage_overrides,
 )
@@ -1184,6 +1185,9 @@ class AsyncOmniEngine:
         # an orchestrator-level knob (read once at construction), so apply it here
         # rather than as a per-stage config field.
         self._apply_strategy_lb_policy(strategy_lb_policy, kwargs)
+
+        for cfg in stage_configs:
+            _apply_stage_engine_arg_overrides(cfg, kwargs)
 
         return config_path, stage_configs
 
