@@ -814,7 +814,7 @@ class _DiffusionConfigProjection:
             validate_host_weight_runtime_options,
         )
         from vllm_omni.diffusion.diffusion_kv.config import parse_diffusion_kv_cache_mode
-        from vllm_omni.quantization import build_quant_config
+        from vllm_omni.quantization.factory import build_quantization_config
 
         if self.tf_model_config is None:
             self.tf_model_config = TransformerConfig()
@@ -851,18 +851,8 @@ class _DiffusionConfigProjection:
             self.cache_config = DiffusionCacheConfig()
 
         self._propagate_quantization_from_tf_config(self.tf_model_config)
-        if self.quantization_config is not None:
-            if isinstance(self.quantization_config, QuantizationConfig):
-                pass
-            elif isinstance(self.quantization_config, str):
-                self.quantization_config = build_quant_config(self.quantization_config)
-            elif isinstance(self.quantization_config, Mapping):
-                self.quantization_config = dict(self.quantization_config)
-            else:
-                raise TypeError(
-                    "quantization_config must be str, dict, QuantizationConfig, or None, "
-                    f"got {type(self.quantization_config)!r}"
-                )
+        if self.quantization_config is not None and not isinstance(self.quantization_config, QuantizationConfig):
+            self.quantization_config = build_quantization_config(self.quantization_config, None)
 
         if self.diffusion_attention_config is None or isinstance(
             self.diffusion_attention_config,

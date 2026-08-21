@@ -31,7 +31,7 @@ from vllm_omni.diffusion.lora.manager import LoRABackend
 from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.diffusion.utils.network_utils import is_port_available
 from vllm_omni.errors import client_error_metadata
-from vllm_omni.quantization import build_quant_config
+from vllm_omni.quantization.factory import build_quantization_config
 
 if TYPE_CHECKING:
     from vllm.config import KVTransferConfig, ProfilerConfig
@@ -454,7 +454,7 @@ class TransformerConfig:
         disk_qc = params.get("quantization_config")
         if isinstance(disk_qc, dict):
             raw_quant_method = disk_qc.get("quant_method", disk_qc.get("method"))
-            quant_config = build_quant_config(disk_qc)
+            quant_config = build_quantization_config(disk_qc, None)
             if quant_config is not None:
                 quant_method = raw_quant_method if raw_quant_method is not None else quant_config.get_name()
 
@@ -945,10 +945,7 @@ class OmniDiffusionConfig:
     # Model-specific function for collecting CFG KV caches (set at runtime)
     cfg_kv_collect_func: Any | None = None
 
-    # Quantization: str method name, dict config, QuantizationConfig, or None.
-    # str is resolved to {"method": <str>} internally.
-    # Per-component: {"transformer": {"method": "fp8"}, "vae": None}
-    quantization_config: str | QuantizationConfig | dict[str, Any] | None = None
+    quantization_config: QuantizationConfig | None = None
     # Explicit runtime override for ModelOpt FP8 diffusion checkpoints. This
     # does not enable FP8 by itself; it only selects CUTLASS once the checkpoint
     # has already resolved to vLLM's ModelOpt FP8 linear method.
@@ -1212,20 +1209,6 @@ class OmniDiffusionConfig:
         # time. For late (post-construction) assignment, callers should use
         # set_tf_model_config() which propagates quant_config automatically.
         self._propagate_quantization_from_tf_config(self.tf_model_config)
-
-        # Resolve quantization_config: str/dict -> QuantizationConfig via build_quant_config.
-        if self.quantization_config is not None:
-            if isinstance(self.quantization_config, QuantizationConfig):
-                pass  # Already built
-            elif isinstance(self.quantization_config, str):
-                self.quantization_config = build_quant_config(self.quantization_config)
-            elif isinstance(self.quantization_config, Mapping):
-                self.quantization_config = build_quant_config(dict(self.quantization_config))
-            else:
-                raise TypeError(
-                    f"quantization_config must be str, dict, QuantizationConfig, or None, "
-                    f"got {type(self.quantization_config)!r}"
-                )
 
         # Match vLLM's config flow: parse entrypoint shorthands before the
         # config object is built, and keep a single runtime truth source.
