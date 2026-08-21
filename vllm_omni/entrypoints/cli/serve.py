@@ -886,6 +886,7 @@ def run_headless(args: TrackingNamespace) -> None:
     from vllm.v1.executor.multiproc_executor import MultiprocExecutor
     from vllm.version import __version__ as VLLM_VERSION
 
+    from vllm_omni.config.config_factory import StageConfigFactory
     from vllm_omni.distributed.omni_connectors.utils.initialization import resolve_omni_kv_config_for_stage
     from vllm_omni.engine.stage_engine_startup import (
         get_headless_replica_devices,
@@ -1007,9 +1008,11 @@ def run_headless(args: TrackingNamespace) -> None:
 
     inject_omni_kv_connector_config(engine_args_dict, omni_kv_connector, stage_id)
 
+    hf_config = StageConfigFactory.get_hf_config(model, args.trust_remote_code)
     vllm_config, executor_class = build_vllm_config(
         stage_cfg,
         model,
+        hf_config,
         stage_connector_spec=stage_connector_spec,
         engine_args_dict=engine_args_dict,
         headless=True,

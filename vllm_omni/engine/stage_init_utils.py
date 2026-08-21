@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, fields, replace
 from typing import Any, Literal, cast
 
+from transformers import PretrainedConfig
 from vllm.logger import init_logger
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import BaseRenderer
@@ -49,7 +50,7 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParam
 from vllm_omni.inputs.preprocess import OmniInputPreprocessor
 from vllm_omni.outputs.output_processor import MultimodalOutputProcessor
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.quantization.inc_config import OmniINCConfig
+from vllm_omni.quantization.factory import build_quantization_config
 
 logger = init_logger(__name__)
 
@@ -1104,6 +1105,7 @@ def build_engine_args_dict_from_omni_stage_config(
 def build_vllm_config(
     stage_config: Any,
     model: str,
+    hf_config: PretrainedConfig | None,
     stage_connector_spec: dict[str, Any] | None = None,
     engine_args_dict: dict[str, Any] | None = None,
     headless: bool = False,
@@ -1121,6 +1123,10 @@ def build_vllm_config(
         )
 
     filtered_engine_args_dict = filter_dataclass_kwargs(OmniEngineArgs, engine_args_dict)
+
+    quant_method = filtered_engine_args_dict.pop("quantization", None)
+    quant_dict = getattr(hf_config, "quantization_config", None) if hf_config else None
+    quant_config = build_quantization_config(quant_method, quant_dict)
 
     # _to_dict serializes dataclass fields (e.g. StructuredOutputsConfig) into
     # plain dicts.  When OmniEngineArgs is instantiated with the dict, these
@@ -1155,10 +1161,10 @@ def build_vllm_config(
     )
     executor_class = Executor.get_class(vllm_config)
 
-    # Upgrade vanilla INCConfig to OmniINCConfig for multi-stage models.
-    upgraded = OmniINCConfig.maybe_upgrade(vllm_config.quant_config)
-    if upgraded is not vllm_config.quant_config:
-        vllm_config = replace(vllm_config, quant_config=upgraded)
+    # TODO: add test that INC/AutoRound checkpoints resolve to OmniINCConfig
+    # and not INCConfig to make sure we don't break behaviors with quant OVERRIDES
+    if quant_config is not None:
+        vllm_config = replace(vllm_config, quant_config=quant_config)
 
     custom_voice_dir = engine_args_dict.get("custom_voice_dir")
     if custom_voice_dir:

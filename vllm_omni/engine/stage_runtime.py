@@ -16,6 +16,7 @@ from typing import Any
 
 import janus
 from omegaconf import OmegaConf
+from transformers import PretrainedConfig
 from vllm.logger import init_logger
 
 from vllm_omni.distributed.omni_connectors.utils.initialization import (
@@ -123,6 +124,7 @@ class StageRuntime:
         model: str,
         config_path: str,
         *,
+        hf_config: PretrainedConfig | None,
         stage_init_timeout: int,
         diffusion_batch_size: int,
         async_chunk: bool,
@@ -132,6 +134,7 @@ class StageRuntime:
         self._stage_configs = stage_configs
         self._model = model
         self._config_path = config_path
+        self._hf_config = hf_config
         self._stage_init_timeout = stage_init_timeout
         self._diffusion_batch_size = diffusion_batch_size
         self._async_chunk = async_chunk
@@ -393,6 +396,7 @@ class StageRuntime:
                 stage_vllm_config, executor_class = build_vllm_config(
                     stage_cfg,
                     self._model,
+                    self._hf_config,
                     stage_connector_spec=stage_connector_spec,
                     engine_args_dict=engine_args_dict,
                 )
@@ -753,6 +757,7 @@ class DistStageRuntime(StageRuntime):
         model: str,
         config_path: str,
         *,
+        hf_config: PretrainedConfig | None,
         stage_init_timeout: int,
         diffusion_batch_size: int,
         async_chunk: bool,
@@ -770,6 +775,7 @@ class DistStageRuntime(StageRuntime):
             stage_configs=stage_configs,
             model=model,
             config_path=config_path,
+            hf_config=hf_config,
             stage_init_timeout=stage_init_timeout,
             diffusion_batch_size=diffusion_batch_size,
             async_chunk=async_chunk,
@@ -1093,6 +1099,7 @@ def create_stage_runtime(
     model: str,
     config_path: str,
     *,
+    hf_config: PretrainedConfig | None,
     single_stage_mode: bool,
     stage_init_timeout: int,
     diffusion_batch_size: int,
@@ -1116,6 +1123,7 @@ def create_stage_runtime(
             stage_configs=stage_configs,
             model=model,
             config_path=config_path,
+            hf_config=hf_config,
             stage_init_timeout=stage_init_timeout,
             diffusion_batch_size=diffusion_batch_size,
             async_chunk=async_chunk,
@@ -1133,6 +1141,7 @@ def create_stage_runtime(
         stage_configs=stage_configs,
         model=model,
         config_path=config_path,
+        hf_config=hf_config,
         stage_init_timeout=stage_init_timeout,
         diffusion_batch_size=diffusion_batch_size,
         async_chunk=async_chunk,
