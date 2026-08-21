@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Factory for building quantization configs.
 
-build_quant_config() delegates to vLLM's quantization registry.
+build_quantization_config() delegates to vLLM's quantization registry.
 Out-of-tree integrations can register Omni-specific builders with
 register_quantization_override().
 """
@@ -304,39 +304,9 @@ def _pop_method_name(spec: dict[str, Any]) -> str | None:
     method = spec.pop("method", None)
     if method is None:
         method = spec.pop("quant_method", None)
+    if method is not None and not isinstance(method, str):
+        raise TypeError(f"'method'/'quant_method' must be a string, got {type(method).__name__}")
     return method
-
-
-def _build_from_method_and_config(method: str, config: Mapping[str, Any]) -> QuantizationConfig:
-    normalized_config = {"quant_method": method, **config}
-    modelopt_method = _detect_modelopt_method(normalized_config)
-    if modelopt_method is not None:
-        return _build_modelopt_from_config(modelopt_method, normalized_config)
-    return _build_single(method, **config)
-
-
-def _build_single(method: str, **kwargs: Any) -> QuantizationConfig:
-    """Build a single QuantizationConfig by method name.
-
-    Resolution: _OVERRIDES first, then vLLM registry via from_config().
-    """
-    method = _normalize_method_name(method)
-
-    if method in _OVERRIDES:
-        return _OVERRIDES[method](**kwargs)
-
-    if method not in QUANTIZATION_METHODS:
-        raise ValueError(f"Unknown quantization method: {method!r}. Supported: {SUPPORTED_QUANTIZATION_METHODS}")
-
-    config_cls = get_quantization_config(method)
-
-    try:
-        return config_cls(**kwargs)
-    except TypeError:
-        sig = inspect.signature(config_cls.__init__)
-        raise TypeError(
-            f"Cannot instantiate {config_cls.__name__} with kwargs {kwargs}. Expected signature: {sig}"
-        ) from None
 
 
 def _is_per_component_dict(spec: dict[str, Any]) -> bool:
@@ -355,112 +325,77 @@ def _is_per_component_dict(spec: dict[str, Any]) -> bool:
     return any(v is None or (isinstance(v, dict) and ("method" in v or "quant_method" in v)) for v in spec.values())
 
 
-def _build_component_config(spec: dict[str, Any]) -> ComponentQuantizationConfig:
-    """Build ComponentQuantizationConfig from a per-component dict."""
+def _maybe_build_component_quant_config(
+    spec: dict[str, Any],
+    quant_config: dict[str, Any] | None,
+) -> ComponentQuantizationConfig | None:
+    if not _is_per_component_dict(spec):
+        return None
     component_configs: dict[str, QuantizationConfig | None] = {}
     default_config: QuantizationConfig | None = None
-
     for prefix, value in spec.items():
-        if value is None:
-            config = None
-        elif isinstance(value, str):
-            config = _build_single(value)
-        elif isinstance(value, dict):
-            value = dict(value)  # avoid mutating caller's dict
-            method = _pop_method_name(value)
-            if method is None:
-                raise ValueError(f"Component '{prefix}' config dict must have a 'method' or 'quant_method' key")
-            config = _build_from_method_and_config(method, value)
-        else:
-            raise TypeError(f"Component '{prefix}' config must be str, dict, or None, got {type(value).__name__}")
-
+        if not isinstance(value, (str, dict, QuantizationConfig, type(None))):
+            raise TypeError(
+                f"Per-component value for {prefix!r} must be str, dict, "
+                f"QuantizationConfig, or None, got {type(value).__name__}"
+            )
+        resolved = build_quantization_config(value, quant_config)
         if prefix == "default":
-            default_config = config
+            default_config = resolved
         else:
-            component_configs[prefix] = config
-
-    logger.info(
-        "Per-component quantization: %s",
-        {k: (v.get_name() if v else None) for k, v in component_configs.items()},
-    )
+            component_configs[prefix] = resolved
     return ComponentQuantizationConfig(component_configs, default_config)
 
 
-def build_quant_config(
-    spec: str | dict[str, Any] | QuantizationConfig | None,
-    **kwargs: Any,
-) -> QuantizationConfig | None:
-    """Build a quantization config from a flexible specification.
-
-    Args:
-        spec: None/"none", method name str, dict with "method" key,
-              per-component dict, or QuantizationConfig passthrough.
-        **kwargs: Extra params merged with dict spec.
-    """
-    if spec is None:
-        return None
-
-    if isinstance(spec, QuantizationConfig):
-        return spec
-
-    if isinstance(spec, str):
-        if spec.lower() == "none":
-            return None
-        logger.info("Building quantization config: %s", spec)
-        return _build_single(spec, **kwargs)
-
-    if isinstance(spec, Mapping):
-        spec = dict(spec)
-
-        if _is_per_component_dict(spec):
-            return _build_component_config(spec)
-
-        modelopt_method = _detect_modelopt_method(spec)
-        if modelopt_method is not None:
-            logger.info("Building quantization config: %s", modelopt_method)
-            return _build_modelopt_from_config(modelopt_method, spec)
-
-        method = _pop_method_name(spec)
-        if method is None:
-            raise ValueError(
-                "Dict quantization config must have a 'method' or 'quant_method' key or "
-                "be a per-component config with component prefixes as keys."
-            )
-        merged = {**spec, **kwargs}
-        logger.info("Building quantization config: %s", method)
-        return _build_from_method_and_config(method, merged)
-
-    raise TypeError(f"quantization config must be str, dict, QuantizationConfig, or None, got {type(spec).__name__}")
-
-
 def build_quantization_config(
-    quantization: str | None,
+    quantization: str | dict[str, Any] | QuantizationConfig | None,
     quant_config: dict[str, Any] | None,
 ) -> QuantizationConfig | None:
     """Build a resolved QuantizationConfig from a method string and config dict.
 
     Called early in init, before EngineArgs / ModelConfig / LoadConfig exist.
 
-    For omni-specific methods (int8, mxfp8, etc.), uses the override registry.
-    For vLLM methods, looks up the config class from vLLM's registry and calls
-    from_config() — the same call vLLM's get_quant_config() eventually makes.
+    ``quantization`` may be a method string ("fp8"), a dict spec (flat or
+    per-component), or an already-resolved QuantizationConfig.
+
+    ``quant_config`` is the HF checkpoint's quantization metadata dict
+    (from hf_config.quantization_config), used when building from a
+    method string for checkpoint-quantized models.
     """
     if quantization is None:
         return None
+
+    if isinstance(quantization, QuantizationConfig):
+        return quantization
+
+    if isinstance(quantization, Mapping):
+        spec = dict(quantization)
+        component_cfg = _maybe_build_component_quant_config(spec, quant_config)
+        if component_cfg is not None:
+            return component_cfg
+
+        quantization = _pop_method_name(spec)
+        if quantization is None:
+            raise ValueError(
+                "Dict quantization config must have a 'method' or 'quant_method' key "
+                "or be a per-component config with component prefixes as keys."
+            )
+        modelopt_method = _detect_modelopt_method({"quant_method": quantization, **spec})
+        if modelopt_method is not None:
+            return _build_modelopt_from_config(modelopt_method, {"quant_method": quantization, **spec})
+        quant_config = spec
 
     method = _normalize_method_name(quantization)
     if method == "none":
         return None
 
-    # TODO (Alex) refactor overrides and use vLLM's registry directly
     if method in _OVERRIDES:
-        return _OVERRIDES[method]()
+        return _OVERRIDES[method](**(quant_config or {}))
 
     if method not in QUANTIZATION_METHODS:
         raise ValueError(f"Unknown quantization method: {method!r}. Supported: {SUPPORTED_QUANTIZATION_METHODS}")
 
     quant_cls = get_quantization_config(method)
-    # This is the case for some online types, e.g., FP8
     if quant_config is None:
         return quant_cls()
     return quant_cls.from_config(quant_config)
@@ -501,7 +436,7 @@ def resolve_quant_config_from_disk(
     if isinstance(disk_qc, str):
         if quant_config is None:
             logger.info("Auto-detected quantization from config.json: method=%s", disk_qc)
-            return build_quant_config(disk_qc)
+            return build_quantization_config(disk_qc, None)
         return quant_config
 
     if not isinstance(disk_qc, Mapping) or "quant_method" not in disk_qc:
@@ -516,7 +451,7 @@ def resolve_quant_config_from_disk(
             qc_method,
             qc_kwargs,
         )
-        return build_quant_config(qc_method, **qc_kwargs)
+        return build_quantization_config(qc_method, qc_kwargs)
 
     active_method = _normalize_quant_method_alias(quant_config.get_name())
     disk_method = _normalize_quant_method_alias(qc_method)
@@ -532,17 +467,14 @@ def resolve_quant_config_from_disk(
             "config.json marks checkpoint as serialized; switching to offline %s mode.",
             qc_method,
         )
-        return build_quant_config(qc_method, **qc_kwargs)
+        return build_quantization_config(qc_method, qc_kwargs)
 
     # AutoRound MXFP checkpoints use data_type="mx_fp" instead of
     # is_checkpoint_*_serialized; rebuild so the offline MXFP4/MXFP8 path is
     # selected according to the checkpoint's bit width.
     if qc_kwargs.get("data_type") == "mx_fp":
-        logger.info(
-            "config.json declares data_type='mx_fp'; rebuilding as offline AutoRound MXFP%d.",
-            qc_kwargs.get("bits", getattr(quant_config, "weight_bits", 0)),
-        )
-        return build_quant_config(qc_method, **qc_kwargs)
+        logger.info("config.json declares data_type='mx_fp'; rebuilding as offline AutoRound MXFP8.")
+        return build_quantization_config(qc_method, qc_kwargs)
 
     if (
         "ignored_layers" in qc_kwargs
@@ -550,6 +482,6 @@ def resolve_quant_config_from_disk(
         and set(qc_kwargs.get("ignored_layers") or []) != set(quant_config.ignored_layers or [])
     ):
         logger.info("config.json ignored_layers differs from active config; rebuilding quant_config.")
-        return build_quant_config(qc_method, **qc_kwargs)
+        return build_quantization_config(qc_method, qc_kwargs)
 
     return quant_config
