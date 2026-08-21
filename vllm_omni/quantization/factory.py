@@ -459,10 +459,10 @@ def build_quantization_config(
     if method not in QUANTIZATION_METHODS:
         raise ValueError(f"Unknown quantization method: {method!r}. Supported: {SUPPORTED_QUANTIZATION_METHODS}")
 
-    if quant_config is None:
-        raise ValueError(f"Cannot build quantization config for {method!r}: no quantization metadata provided.")
-
     quant_cls = get_quantization_config(method)
+    # This is the case for some online types, e.g., FP8
+    if quant_config is None:
+        return quant_cls()
     return quant_cls.from_config(quant_config)
 
 
