@@ -5,14 +5,14 @@
 Delegates to vLLM's quantization registry (35+ methods, all platforms).
 Adds per-component quantization for multi-stage models.
 
-    from vllm_omni.quantization import build_quant_config
+    from vllm_omni.quantization.factory import build_quantization_config
 
-    config = build_quant_config("fp8")
-    config = build_quant_config({"transformer": {"method": "fp8"}, "vae": None})
+    config = build_quantization_config("fp8", None)
+    config = build_quantization_config({"transformer": {"method": "fp8"}, "vae": None}, None)
 """
 
 from .component_config import ComponentQuantizationConfig, resolve_component_quant_config
-from .factory import SUPPORTED_QUANTIZATION_METHODS, build_quant_config, register_quantization_override
+from .factory import SUPPORTED_QUANTIZATION_METHODS, build_quantization_config, register_quantization_override
 from .inc_config import OmniINCConfig
 
 # Heavy configs are NOT imported here to avoid pulling in
@@ -21,7 +21,7 @@ from .inc_config import OmniINCConfig
 #   from vllm_omni.quantization.mxfp8_config import DiffusionMXFP8Config
 
 __all__ = [
-    "build_quant_config",
+    "build_quantization_config",
     "ComponentQuantizationConfig",
     "resolve_component_quant_config",
     "OmniINCConfig",
