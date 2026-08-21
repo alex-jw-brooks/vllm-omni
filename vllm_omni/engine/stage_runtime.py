@@ -660,6 +660,7 @@ class StageRuntime:
                 inject_kv_stage_info(plan.stage_cfg, plan.metadata.stage_id, self._stage_configs)
                 client, resources = launch_diffusion_stage_replica(
                     model=self._model,
+                    hf_config=self._hf_config,
                     stage_config=plan.stage_cfg,
                     metadata=plan.metadata,
                     stage_init_timeout=stage_init_timeout,

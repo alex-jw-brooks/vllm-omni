@@ -16,6 +16,7 @@ from typing import Any
 import msgspec
 import zmq
 from omegaconf import OmegaConf
+from transformers import PretrainedConfig
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
 from vllm.utils.network_utils import get_open_ports_list, zmq_socket_ctx
@@ -1460,6 +1461,7 @@ def launch_headless_replica_group(
 def launch_headless_diffusion_replicas(
     *,
     model: str,
+    hf_config: PretrainedConfig | None,
     stage_cfg: Any,
     stage_configs: list[Any],
     stage_id: int,
@@ -1487,7 +1489,7 @@ def launch_headless_diffusion_replicas(
     # from the loaded deploy config so heterogeneous KV routing keys match the
     # head process (e.g. from_tp=2, to_tp=1).
     stage_init_utils.inject_kv_stage_info(stage_cfg, stage_id, stage_configs)
-    od_config = stage_init_utils.build_diffusion_config(model, stage_cfg, metadata)
+    od_config = stage_init_utils.build_diffusion_config(model, hf_config, stage_cfg, metadata)
 
     logger.info(
         "[Headless] Launching %d diffusion replica(s) for stage %d via OmniMasterServer at %s:%d",
@@ -1527,6 +1529,7 @@ def launch_headless_diffusion_replicas(
 def launch_diffusion_stage_replica(
     *,
     model: str,
+    hf_config: PretrainedConfig | None,
     stage_config: Any,
     metadata: Any,
     stage_init_timeout: int,
@@ -1546,6 +1549,7 @@ def launch_diffusion_stage_replica(
         client = initialize_diffusion_stage(
             metadata.stage_id,
             model,
+            hf_config,
             stage_config,
             metadata,
             stage_init_timeout=stage_init_timeout,
@@ -1557,7 +1561,7 @@ def launch_diffusion_stage_replica(
     from vllm_omni.diffusion import stage_diffusion_proc
     from vllm_omni.diffusion.stage_diffusion_client import StageDiffusionClient
 
-    od_config = build_diffusion_config(model, stage_config, metadata)
+    od_config = build_diffusion_config(model, hf_config, stage_config, metadata)
     od_config.max_num_seqs = batch_size
     parallel_config = getattr(od_config, "parallel_config", None)
     world_size = getattr(parallel_config, "world_size", 1)
