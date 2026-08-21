@@ -205,6 +205,7 @@ class AsyncOmniEngine:
         # restriction path below loads the top-level HF config via vLLM's
         # ``get_config``, which needs a real bool, so collapse ``None`` to the
         # default ``False`` here (#5495).
+        self.hf_config = StageConfigFactory.get_hf_config(model, bool(trust_remote_code))
         pipeline_config = StageConfigFactory.get_pipeline_config(
             model=model,
             trust_remote_code=bool(trust_remote_code),
@@ -321,6 +322,7 @@ class AsyncOmniEngine:
             stage_configs=self.stage_configs,
             model=self.model,
             config_path=self.config_path,
+            hf_config=self.hf_config,
             single_stage_mode=self.single_stage_mode,
             stage_init_timeout=stage_init_timeout,
             async_chunk=self.async_chunk,
