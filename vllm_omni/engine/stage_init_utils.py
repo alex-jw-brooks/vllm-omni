@@ -1499,8 +1499,7 @@ def build_vllm_config(
     )
     executor_class = Executor.get_class(vllm_config)
 
-    # TODO: add test that INC/AutoRound checkpoints resolve to OmniINCConfig
-    # and not INCConfig to make sure we don't break behaviors with quant OVERRIDES
+    # INC/AutoRound checkpoints must resolve to OmniINCConfig
     if quant_config is not None:
         vllm_config = replace(vllm_config, quant_config=quant_config)
 
