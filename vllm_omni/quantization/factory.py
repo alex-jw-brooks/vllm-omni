@@ -391,11 +391,12 @@ def build_quantization_config(
     if method == "none":
         return None
 
-    # FIXME: _OVERRIDES maps to builder functions, not classes. When
-    # quant_config is a checkpoint dict (has quant_method), kwarg expansion
-    # can break builders that don't accept it. PR 2 fixes this by
-    # registering classes directly with vLLM's registry.
+    # A checkpoint dict carries quant_method as routing metadata, not a config
+    # param the omni configs' __init__ accept. Strip it before expanding into the
+    # builder. The registry/from_config path below still needs it, so we only pop
+    # here. PR 2 will register classes directly with vLLM's registry.
     if method in _OVERRIDES:
+        spec.pop("quant_method", None)
         return _OVERRIDES[method](**spec)
 
     if method not in QUANTIZATION_METHODS:
@@ -405,6 +406,50 @@ def build_quantization_config(
     if "quant_method" in spec:
         return quant_cls.from_config(spec)
     return quant_cls(**spec)
+
+
+def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: object) -> bool:
+    """Return True when config.json says serialized but the active quant_config does not.
+
+    Matches any flag following the is_checkpoint_*_serialized naming convention,
+    so new quant methods don't require updating an explicit allowlist.
+    """
+    for key, val in qc_kwargs.items():
+        if key.startswith("is_checkpoint_") and key.endswith("_serialized"):
+            if val and hasattr(quant_config, key) and not getattr(quant_config, key):
+                return True
+    return False
+
+
+def maybe_rebuild_quantization_config(quant_config: QuantizationConfig, disk_qc: dict[str, Any]) -> QuantizationConfig:
+    """Produce the final quantization config, which will either be a newly built config ,
+    or a handle to the original if we can reuse it. Currently this is only applicable for
+    models that need to consider that case where we may have multiple quantization configs,
+    E.g., wan2_2.
+    """
+    qc_method: str = disk_qc["quant_method"]
+    qc_kwargs: dict[str, Any] = {k: v for k, v in disk_qc.items() if k != "quant_method"}
+    if _disk_marks_serialized(qc_kwargs, quant_config):
+        logger.info(
+            "config.json marks checkpoint as serialized; switching to offline %s mode.",
+            qc_method,
+        )
+        return build_quantization_config(qc_method, disk_qc)
+
+    # AutoRound MXFP8 checkpoints use data_type="mx_fp" instead of
+    # is_checkpoint_*_serialized; rebuild so the offline path is selected.
+    if qc_kwargs.get("data_type") == "mx_fp":
+        logger.info("config.json declares data_type='mx_fp'; rebuilding as offline AutoRound MXFP8.")
+        return build_quantization_config(qc_method, disk_qc)
+
+    if (
+        "ignored_layers" in qc_kwargs
+        and hasattr(quant_config, "ignored_layers")
+        and set(qc_kwargs.get("ignored_layers") or []) != set(quant_config.ignored_layers or [])
+    ):
+        logger.info("config.json ignored_layers differs from active config; rebuilding quant_config.")
+        return build_quantization_config(qc_method, disk_qc)
+    return quant_config
 
 
 def resolve_quant_config_from_disk(
@@ -437,4 +482,4 @@ def resolve_quant_config_from_disk(
             f"but the active quantization config is {quant_config.get_name()!r}."
         )
 
-    return build_quantization_config(disk_method, disk_qc)
+    return maybe_rebuild_quantization_config(quant_config, disk_qc)
