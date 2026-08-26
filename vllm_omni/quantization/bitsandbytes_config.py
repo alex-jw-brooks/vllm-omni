@@ -15,7 +15,10 @@ from vllm.model_executor.layers.linear import (
     LinearMethodBase,
     UnquantizedLinearMethod,
 )
-from vllm.model_executor.layers.quantization import QuantizationMethods
+from vllm.model_executor.layers.quantization import (
+    QuantizationMethods,
+    register_quantization_config,
+)
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
     QuantizeMethodBase,
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
     from vllm.model_executor.models.utils import WeightsMapper
 
 
+@register_quantization_config("bitsandbytes")
 class DiffusionBitsAndBytesConfig(QuantizationConfig):
     """BitsAndBytes 4-bit weight-only config for diffusion transformers.
 

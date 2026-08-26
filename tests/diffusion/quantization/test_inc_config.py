@@ -20,7 +20,7 @@ _AUTOROUND_CKPT = {
     "group_size": 128,
     "sym": True,
     "packing_format": "auto_round:auto_gptq",
-    #  _build_inc should filter these fields out.
+    # from_config should ignore these fields.
     "autoround_version": "0.12.0",
     "batch_size": 1,
     "iters": 0,
@@ -40,9 +40,24 @@ def test_checkpoint_resolves_to_omni_inc_config(quant_method):
 
 def test_bits_mapped_to_weight_bits():
     """The 'bits' key from checkpoints should be mapped to 'weight_bits'."""
-    config = build_quantization_config({"quant_method": "auto-round", "bits": 4, "group_size": 128})
+    config = build_quantization_config({"quant_method": "auto-round", "bits": 4, "group_size": 128, "sym": True})
     assert type(config) is OmniINCConfig
     assert config.weight_bits == 4
+
+
+def test_initializer_folds_bits_alias():
+    """__init__ folds 'bits' -> 'weight_bits' (accepts either spelling), but they need to agree."""
+    # Check direct initialization
+    assert OmniINCConfig(bits=4, group_size=128).weight_bits == 4
+    assert OmniINCConfig(weight_bits=4, group_size=128).weight_bits == 4
+    # Check init through build_quantization_config
+    assert build_quantization_config({"method": "inc", "bits": 4, "group_size": 128}).weight_bits == 4
+
+
+def test_initializer_folds_bits_alias_must_match():
+    """Ensure bits and weight_bits cannot be different."""
+    with pytest.raises(ValueError, match="Conflicting bit widths"):
+        OmniINCConfig(bits=4, weight_bits=8, group_size=128)
 
 
 def test_checkpoint_metadata_filtered():
