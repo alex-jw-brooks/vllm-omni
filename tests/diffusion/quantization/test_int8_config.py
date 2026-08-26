@@ -48,6 +48,12 @@ def test_int8_config_with_custom_params():
     assert "proj_out" in config.ignored_layers
 
 
+def test_checkpoint_dict_resolves_via_from_config():
+    """from_config needs quant_method, so the factory must restore it after popping."""
+    config = build_quantization_config({"quant_method": "int8"})
+    assert config.is_checkpoint_int8_serialized
+
+
 def test_supported_methods():
     """Test that supported methods list is correct."""
     assert "int8" in SUPPORTED_QUANTIZATION_METHODS

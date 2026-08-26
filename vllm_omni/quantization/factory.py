@@ -2,16 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Factory for building quantization configs.
 
-build_quantization_config() delegates to vLLM's quantization registry.
-Out-of-tree integrations can register Omni-specific builders with
-register_quantization_override().
+build_quantization_config() delegates to vLLM's quantization registry. Omni
+configs are registered into that registry by register_omni_quantization_configs().
 """
 
 from __future__ import annotations
 
-import inspect
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from types import ModuleType
 from typing import Any
 
@@ -81,69 +79,26 @@ from .component_config import ComponentQuantizationConfig  # noqa: E402
 logger = init_logger(__name__)
 
 
-def _build_int8(**kw: Any) -> QuantizationConfig:
-    """Lazy import for Int8 diffusion config (supports CUDA + NPU)."""
-    from .int8_config import DiffusionInt8Config
-
-    return DiffusionInt8Config(**kw)
-
-
-def _build_bitsandbytes(**kw: Any) -> QuantizationConfig:
-    """Lazy import for BitsAndBytes 4-bit diffusion config (CUDA only)."""
-    from .bitsandbytes_config import DiffusionBitsAndBytesConfig
-
-    return DiffusionBitsAndBytesConfig(**kw)
-
-
-def _build_mxfp8(**kw: Any) -> QuantizationConfig:
-    """Lazy import for W8A8 MXFP8 diffusion config (NPU only)."""
-    from .mxfp8_config import DiffusionMXFP8Config
-
-    return DiffusionMXFP8Config(**kw)
-
-
-def _build_mxfp4(**kw: Any) -> QuantizationConfig:
-    """Lazy import for W4A4 MXFP4 diffusion config (NPU only)."""
-    from .mxfp4_config import DiffusionMXFP4Config
-
-    return DiffusionMXFP4Config(**kw)
-
-
-def _build_mxfp4_dualscale(**kw: Any) -> QuantizationConfig:
-    """Lazy import for MXFP4 DualScale + BF16 mixed diffusion config (NPU only).
-
-    Offline mode (is_checkpoint_serialized=True):
-        ignored_layers from config.json marks interleaved BF16 fallback layers.
-        All other linear layers use W4A4 MXFP4 DualScale.
-
-    Online mode (is_checkpoint_serialized=False):
-        num_bf16_fallback_layers leading transformer blocks use BF16 original weights
-        (default 5 when not specified). Remaining blocks use W4A4 MXFP4 DualScale online.
+def register_omni_quantization_configs() -> None:
+    """Import omni quant config modules so their @register_quantization_config
+    decorators fire. This ensures that Omni's quantization definitions are registered
+    over vLLM's quantization definitions, which ensures that the same quantization
+    definitions are used in vLLM's ModelConfig.get_quantization_config() path (i.e.,
+    for AR) as in the diffusion factory lookup.
     """
-    from .mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
-
-    return DiffusionMXFP4DualScaleMixedConfig(**kw)
-
-
-def _build_svdquant(**kw: Any) -> QuantizationConfig:
-    """Build the serialized SVDQuant diffusion checkpoint loader."""
-    from .svdquant_config import DiffusionSVDQuantConfig
-
-    return DiffusionSVDQuantConfig.from_config(kw)
+    from . import (  # noqa: F401  (import side-effect = decorator registration)
+        bitsandbytes_config,
+        inc_config,
+        int8_config,
+        mxfp4_config,
+        mxfp8_config,
+    )
 
 
-def _build_inc(**kw: Any) -> QuantizationConfig:
-    """Lazy import for INC/AutoRound config with checkpoint kwarg normalization."""
-    from .inc_config import OmniINCConfig
-
-    # Map checkpoint key 'bits' to INCConfig's 'weight_bits'
-    if "bits" in kw and "weight_bits" not in kw:
-        kw["weight_bits"] = kw.pop("bits")
-
-    # Filter to only valid INCConfig params
-    valid = set(inspect.signature(OmniINCConfig.__init__).parameters) - {"self"}
-    filtered = {k: v for k, v in kw.items() if k in valid}
-    return OmniINCConfig(**filtered)
+# Omni configs registered into vLLM's registry. Static so membership/count is
+# independent of when registration fires; auto-round spellings alias to inc.
+'''
+TODO: We need to handle torchao builders properly
 
 
 def _build_torchao(**kw: Any) -> QuantizationConfig:
@@ -165,77 +120,20 @@ def _build_torchao_float8_weight_only(**kw: Any) -> QuantizationConfig:
         ),
         is_checkpoint_torchao_serialized=True,
     )
+'''
+_OMNI_QUANT_METHODS = ("int8", "bitsandbytes", "mxfp8", "mxfp4", "mxfp4_dualscale", "svdquant", "inc", "auto-round", "auto_round", "torchao", "torchao_float8_weight_only")
+SUPPORTED_QUANTIZATION_METHODS: list[str] = list(dict.fromkeys([*QUANTIZATION_METHODS, *_OMNI_QUANT_METHODS]))
+
+_QUANT_METHOD_ALIASES = {"auto-round": "inc", "auto_round": "inc"}
 
 
-_OVERRIDES: dict[str, Callable[..., QuantizationConfig]] = {
-    "int8": _build_int8,
-    "bitsandbytes": _build_bitsandbytes,
-    "mxfp8": _build_mxfp8,
-    "mxfp4": _build_mxfp4,
-    "mxfp4_dualscale": _build_mxfp4_dualscale,
-    "svdquant": _build_svdquant,
-    "inc": _build_inc,
-    "auto-round": _build_inc,
-    "auto_round": _build_inc,
-    "torchao": _build_torchao,
-    "torchao_float8_weight_only": _build_torchao_float8_weight_only,
-}
-
-
-def _compute_supported_quantization_methods() -> list[str]:
-    return list(dict.fromkeys(QUANTIZATION_METHODS + list(_OVERRIDES.keys())))
-
-
-SUPPORTED_QUANTIZATION_METHODS: list[str] = _compute_supported_quantization_methods()
-
-
-def _refresh_registered_methods() -> None:
-    SUPPORTED_QUANTIZATION_METHODS[:] = _compute_supported_quantization_methods()
-    global _CACHED_ALIAS_MAP
-    _CACHED_ALIAS_MAP = None
-
-
-def register_quantization_override(method: str, builder: Callable[..., QuantizationConfig]) -> None:
-    """Register an Omni-specific quantization config builder."""
-    _OVERRIDES[_normalize_method_name(method)] = builder
-    _refresh_registered_methods()
-
-
-def _build_reverse_alias_map() -> dict[str, str]:
-    """Build a mapping from normalized method aliases to canonical names.
-
-    All keys in _OVERRIDES that share the same builder function are considered
-    aliases of each other. The canonical name is the first key (in definition
-    order) that maps to a given builder — i.e. the one returned by
-    builder().get_name().
-    """
-    builder_to_first_key: dict[Callable[..., QuantizationConfig], str] = {}
-    for key in _OVERRIDES:
-        builder = _OVERRIDES[key]
-        if builder not in builder_to_first_key:
-            builder_to_first_key[builder] = key
-
-    result: dict[str, str] = {}
-    for key, builder in _OVERRIDES.items():
-        canonical = builder_to_first_key[builder]
-        result[key.lower().replace("-", "_")] = canonical
-    return result
-
-
-_CACHED_ALIAS_MAP: dict[str, str] | None = None
 
 
 def _normalize_quant_method_alias(method: str | None) -> str | None:
-    """Map a method name (or any of its aliases) to its canonical internal name.
-    Returns the input unchanged if it is not a known alias.
-    """
+    """Fold known aliases (auto-round/auto_round to inc); pass everything else through."""
     if method is None:
         return None
-    global _CACHED_ALIAS_MAP
-    if _CACHED_ALIAS_MAP is None:
-        _CACHED_ALIAS_MAP = _build_reverse_alias_map()
-    normalized = method.lower().replace("-", "_")
-    return _CACHED_ALIAS_MAP.get(normalized, normalized)
+    return _QUANT_METHOD_ALIASES.get(method, method)
 
 
 _MODEL_OPT_METHODS = {
@@ -259,6 +157,8 @@ def _normalize_method_name(method: Any) -> str:
     return str(method).lower().replace("-", "_")
 
 
+# TODO(Alex): vLLM's ModelOpt configs probably already detect this with
+# override_quantization_method, so we may be able to leverage the upstream code for this.
 def _detect_modelopt_method(config: Mapping[str, Any]) -> str | None:
     quantization = config.get("quantization")
     if isinstance(quantization, Mapping):
@@ -369,12 +269,19 @@ def build_quantization_config(
     if isinstance(quantization, QuantizationConfig) or quantization is None:
         return quantization
 
+    # If a quantization config is provided, ensure Omni's quantization configs are registered.
+    register_omni_quantization_configs()
+
     if isinstance(quantization, Mapping):
         spec = dict(quantization)
         component_cfg = _maybe_build_component_quant_config(spec, quant_config)
         if component_cfg is not None:
             return component_cfg
 
+        # HF checkpoint dicts carry "quant_method"; inline specs carry "method".
+        # FIXME, quant_method/method shouldn't matter for choice, but currently
+        # it does, which messes up int8.
+        from_checkpoint = "quant_method" in spec
         quantization = _pop_method_name(spec)
         if quantization is None:
             raise ValueError(
@@ -386,24 +293,21 @@ def build_quantization_config(
             return _build_modelopt_from_config(modelopt_method, {"quant_method": quantization, **spec})
     else:
         spec = dict(quant_config) if isinstance(quant_config, dict) else {}
+        from_checkpoint = "quant_method" in spec
 
-    method = _normalize_method_name(quantization)
+    method = _normalize_quant_method_alias(quantization)
     if method == "none":
         return None
-
-    # A checkpoint dict carries quant_method as routing metadata, not a config
-    # param the omni configs' __init__ accept. Strip it before expanding into the
-    # builder. The registry/from_config path below still needs it, so we only pop
-    # here. PR 2 will register classes directly with vLLM's registry.
-    if method in _OVERRIDES:
-        spec.pop("quant_method", None)
-        return _OVERRIDES[method](**spec)
 
     if method not in QUANTIZATION_METHODS:
         raise ValueError(f"Unknown quantization method: {method!r}. Supported: {SUPPORTED_QUANTIZATION_METHODS}")
 
+    # Checkpoint dicts go through from_config (plucks only wanted keys); inline
+    # specs construct directly. Restore quant_method popped above, since some
+    # from_config impls read it (e.g. int8 derives is_checkpoint_*_serialized).
     quant_cls = get_quantization_config(method)
-    if "quant_method" in spec:
+    if from_checkpoint:
+        spec.setdefault("quant_method", quantization)
         return quant_cls.from_config(spec)
     return quant_cls(**spec)
 
