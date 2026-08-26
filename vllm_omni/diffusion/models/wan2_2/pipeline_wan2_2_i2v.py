@@ -49,7 +49,7 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch, split_diffusion_output_by_request
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.quantization.factory import build_quantization_config
+from vllm_omni.quantization.factory import build_quantization_config, get_quantization_method
 
 logger = logging.getLogger(__name__)
 DEBUG_PERF = False
@@ -313,7 +313,7 @@ class Wan22I2VPipeline(
             transformer_2_config = load_transformer_config(model, "transformer_2", local_files_only)
             t2_disk_qc = transformer_2_config.get("quantization_config", {})
             t2_quant = build_quantization_config(
-                t2_disk_qc.get("quant_method"),
+                get_quantization_method(t2_disk_qc),
                 t2_disk_qc,
             )
             self.transformer_2 = create_transformer_from_config(

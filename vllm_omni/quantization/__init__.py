@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Unified quantization framework for vLLM-OMNI.
 
 Delegates to vLLM's quantization registry (35+ methods, all platforms).
@@ -12,7 +12,11 @@ Adds per-component quantization for multi-stage models.
 """
 
 from .component_config import ComponentQuantizationConfig, resolve_component_quant_config
-from .factory import SUPPORTED_QUANTIZATION_METHODS, build_quantization_config, register_quantization_override
+from .factory import (
+    SUPPORTED_QUANTIZATION_METHODS,
+    build_quantization_config,
+    register_omni_quantization_configs,
+)
 from .inc_config import OmniINCConfig
 
 # Heavy configs are NOT imported here to avoid pulling in
@@ -26,5 +30,5 @@ __all__ = [
     "resolve_component_quant_config",
     "OmniINCConfig",
     "SUPPORTED_QUANTIZATION_METHODS",
-    "register_quantization_override",
+    "register_omni_quantization_configs",
 ]

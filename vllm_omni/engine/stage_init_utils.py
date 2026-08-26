@@ -26,8 +26,9 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import regex as re
-from transformers import PretrainedConfig
+from vllm.config import VllmConfig
 from vllm.logger import init_logger
+from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import BaseRenderer
 from vllm.sampling_params import SamplingParams
@@ -62,7 +63,6 @@ from vllm_omni.inputs.preprocess import build_omni_renderer, omni_renderer_cls
 from vllm_omni.outputs.output_processor import MultimodalOutputProcessor
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.transformers_utils.repo_utils import hf_api
-from vllm_omni.quantization.factory import build_quantization_config
 
 logger = init_logger(__name__)
 
@@ -78,9 +78,20 @@ class ReplicaInitPlan:
     metadata: Any
     stage_connector_spec: dict[str, Any]
     omni_kv_connector: tuple[dict[str, Any] | None, str | None, str | None]
-    stage_vllm_config: Any | None = None
+    stage_vllm_config: VllmConfig | None = None
     executor_class: type | None = None
     engine_args_dict: dict[str, Any] | None = None
+    # TODO (Alex): A lot of the ReplicaInitPlan, including quantization_config,
+    # and stage_vllm_config, should be folded into the OmniModelConfig.
+    quantization_config: QuantizationConfig | None = None
+
+    def __post_init__(self):
+        # The vLLM Config contains the quantization config for the LLM case, so we need to make sure
+        # it aligns with self.quantization_config, since diffusion and the LLM case now use the same
+        # init path for quantization config. This is a precondition because build_vllm_config
+        # also builds the quantization config internally.
+        if self.stage_vllm_config is not None and self.stage_vllm_config.quant_config is not self.quantization_config:
+            raise RuntimeError("vLLM Config and quantization config must be the same object")
 
 
 @dataclass
@@ -1443,10 +1454,10 @@ def _check_stage_device_layout(stage_config: Any, engine_args_dict: dict[str, An
 def build_vllm_config(
     stage_config: Any,
     model: str,
-    hf_config: PretrainedConfig | None,
     stage_connector_spec: dict[str, Any] | None = None,
     engine_args_dict: dict[str, Any] | None = None,
     headless: bool = False,
+    quantization_config: QuantizationConfig | None = None,
 ) -> tuple[Any, type]:
     """Build engine args, then create VllmConfig and executor_class.
 
@@ -1461,10 +1472,21 @@ def build_vllm_config(
         )
 
     filtered_engine_args_dict = filter_dataclass_kwargs(OmniEngineArgs, engine_args_dict)
+    has_quant = (
+        filtered_engine_args_dict.get("quantization_config") is not None
+        or filtered_engine_args_dict.get("quantization") is not None
+    )
+    # This is an invariant now that we have moved quantization config to be on the common path
+    # with diffusion; we expect the QuantizationConfig to be preconstructed and .replace it on
+    # the vLLM config for now.
+    if has_quant and quantization_config is None:
+        raise RuntimeError("Engine args require quantization, but no quantization_config was provided.")
 
-    quant_method = filtered_engine_args_dict.pop("quantization", None)
-    quant_dict = getattr(hf_config, "quantization_config", None) if hf_config else None
-    quant_config = build_quantization_config(quant_method, quant_dict)
+    # Pop quantization related configs from engine args, since if we have a
+    # quantization config, we already have it, and we can't pass the pre-initialized
+    # config to vLLM's initializer. Then we'll .replace() the config on the final object.
+    filtered_engine_args_dict.pop("quantization_config", None)
+    filtered_engine_args_dict.pop("quantization", None)
 
     # _to_dict serializes dataclass fields (e.g. StructuredOutputsConfig) into
     # plain dicts.  When OmniEngineArgs is instantiated with the dict, these
@@ -1509,9 +1531,11 @@ def build_vllm_config(
     )
     executor_class = Executor.get_class(vllm_config)
 
-    # INC/AutoRound checkpoints must resolve to OmniINCConfig
-    if quant_config is not None:
-        vllm_config = replace(vllm_config, quant_config=quant_config)
+    # Update with the externally initialized quantization config
+    if quantization_config is not None:
+        # Replace the quantization config & model config quantization str to ensure alignment
+        vllm_config = replace(vllm_config, quant_config=quantization_config)
+        vllm_config.model_config.quantization = quantization_config.get_name()
 
     custom_voice_dir = engine_args_dict.get("custom_voice_dir")
     if custom_voice_dir:
@@ -1927,17 +1951,14 @@ def get_stage_connector_spec(
 
 def build_diffusion_config(
     model: str,
-    hf_config: PretrainedConfig | None,
     stage_cfg: Any,
     metadata: StageMetadata,
+    quantization_config: QuantizationConfig | None,
 ) -> Any:
     """Build diffusion config for a stage."""
 
     engine_args_dict = build_engine_args_dict(stage_cfg, model)
-
-    quant_method = engine_args_dict.pop("quantization_config", None) or engine_args_dict.pop("quantization", None)
-    quant_dict = getattr(hf_config, "quantization_config", None) if hf_config else None
-    engine_args_dict["quantization_config"] = build_quantization_config(quant_method, quant_dict)
+    engine_args_dict["quantization_config"] = quantization_config
 
     od_config = OmniDiffusionConfig.from_kwargs(**engine_args_dict)
 
@@ -1965,17 +1986,16 @@ def build_diffusion_config(
 def initialize_diffusion_stage(
     stage_id: int,
     model: str,
-    hf_config: PretrainedConfig | None,
     stage_cfg: Any,
     metadata: StageMetadata,
     stage_init_timeout: int,
-    use_inline: bool = False,
+    use_inline: bool,
+    quantization_config: QuantizationConfig | None,
 ) -> Any:
     """Build a diffusion stage client.
 
     Args:
         model: Model name or path.
-        hf_config: Cached HF PretrainedConfig for early quant resolution.
         stage_cfg: Stage configuration.
         metadata: Extracted stage metadata.
         stage_init_timeout: Timeout in seconds for stage initialization handshake
@@ -1983,7 +2003,7 @@ def initialize_diffusion_stage(
     """
     from vllm_omni.diffusion.stage_diffusion_client import create_diffusion_client
 
-    od_config = build_diffusion_config(model, hf_config, stage_cfg, metadata)
+    od_config = build_diffusion_config(model, stage_cfg, metadata, quantization_config)
     return create_diffusion_client(model, od_config, metadata, stage_init_timeout, use_inline)
 
 
