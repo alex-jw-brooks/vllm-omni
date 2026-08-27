@@ -18,9 +18,9 @@ from vllm_omni.model_executor.models.registry import _OMNI_MODELS
 from vllm_omni.outputs.output_modality import OutputModality
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.plugins import load_omni_general_plugins
-from vllm_omni.worker.omni_connector_validation import validate_worker_omni_connector
 from vllm_omni.quantization.factory import register_omni_quantization_configs
 from vllm_omni.reasoning import register_omni_reasoning_parsers
+from vllm_omni.worker.omni_connector_validation import validate_worker_omni_connector
 
 logger = init_logger(__name__)
 
