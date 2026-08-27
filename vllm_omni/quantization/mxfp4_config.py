@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """W4A4 MXFP4 (Microscaling FP4) online/offline quantization for diffusion transformers.
 
 Architecture mirrors mxfp8_config.py:
