@@ -16,6 +16,8 @@ from vllm.model_executor.models.utils import WeightsMapper
 from vllm.model_executor.parameter import ModelWeightParameter
 from vllm.model_executor.utils import replace_parameter
 
+from vllm_omni.quantization.factory import get_quantization_method
+
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import (
         QuantizationConfig,
@@ -90,7 +92,7 @@ class OmniINCConfig(INCConfig):
 
         Ref: https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/model_executor/layers/quantization/inc/inc.py#L253
         """
-        if hf_quant_cfg.get("quant_method") == "auto_round":
+        if get_quantization_method(hf_quant_cfg) == "auto_round":
             return cls.get_name()
         # Canonical "auto-round" (and anything else) is delegated to the parent.
         return super().override_quantization_method(hf_quant_cfg, user_quant, hf_config)

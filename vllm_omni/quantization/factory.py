@@ -78,6 +78,33 @@ from .component_config import ComponentQuantizationConfig  # noqa: E402
 
 logger = init_logger(__name__)
 
+# Aliased spec keys for the quant method HF. In the future, we should consider
+# deprecating one of these; for now we use get/set utils below to that if we do,
+# it is easy to rip the deprecated one out.
+METHOD_KEY = "method"
+QUANT_METHOD_KEY = "quant_method"
+
+
+def get_quantization_method(spec: Mapping[str, Any]) -> str | None:
+    """Read the method from a quant spec, accepting either key spelling.
+
+    Raises when both keys are present but disagree: they are aliases, so a spec
+    declaring method="int8" and quant_method="fp8" is contradictory input.
+    """
+    method = spec.get(METHOD_KEY)
+    quant_method = spec.get(QUANT_METHOD_KEY)
+    if method is not None and quant_method is not None and method != quant_method:
+        raise ValueError(
+            f"Conflicting quantization method keys: {METHOD_KEY}={method!r} vs "
+            f"{QUANT_METHOD_KEY}={quant_method!r}. They are aliases and must agree."
+        )
+    return method if method is not None else quant_method
+
+
+def set_quantization_method(spec: dict[str, Any], method: str) -> None:
+    """Record the method under the checkpoint key, without clobbering an existing one."""
+    spec.setdefault(QUANT_METHOD_KEY, method)
+
 
 def register_omni_quantization_configs() -> None:
     """Import omni quant config modules so their @register_quantization_config
@@ -136,25 +163,13 @@ def _normalize_quant_method_alias(method: str | None) -> str | None:
     return _QUANT_METHOD_ALIASES.get(method, method)
 
 
-_MODEL_OPT_METHODS = {
-    "modelopt",
-    "modelopt_fp4",
-    "modelopt_mixed",
+_MODEL_OPT_METHODS = {"modelopt", "modelopt_fp4", "modelopt_mixed"}
+_MODEL_OPT_ALGO_TO_METHOD = {
+    "FP8": "modelopt",
+    "FP8_PER_CHANNEL_PER_TOKEN": "modelopt",
+    "NVFP4": "modelopt_fp4",
+    "MIXED_PRECISION": "modelopt_mixed",
 }
-_MODEL_OPT_FP8_ALGOS = {
-    "FP8",
-    "FP8_PER_CHANNEL_PER_TOKEN",
-}
-_MODEL_OPT_NVFP4_ALGOS = {
-    "NVFP4",
-}
-_MODEL_OPT_MIXED_ALGOS = {
-    "MIXED_PRECISION",
-}
-
-
-def _normalize_method_name(method: Any) -> str:
-    return str(method).lower().replace("-", "_")
 
 
 # TODO(Alex): vLLM's ModelOpt configs probably already detect this with
@@ -166,8 +181,11 @@ def _detect_modelopt_method(config: Mapping[str, Any]) -> str | None:
     else:
         quant_algo = str(config.get("quant_algo", "")).upper()
 
-    method = config.get("method", config.get("quant_method"))
-    normalized_method = _normalize_method_name(method) if method is not None else None
+    method = get_quantization_method(config)
+    # NOTE: We normalize by replacing hyphens with underscores inline here
+    # instead of doing it generally, since in other cases this may create
+    # an invalid method.
+    normalized_method = str(method).lower().replace("-", "_") if method is not None else None
 
     producer = config.get("producer")
     is_modelopt_config = normalized_method in _MODEL_OPT_METHODS or (
@@ -178,34 +196,32 @@ def _detect_modelopt_method(config: Mapping[str, Any]) -> str | None:
         return None
 
     if quant_algo:
-        if quant_algo in _MODEL_OPT_FP8_ALGOS:
-            return "modelopt"
-        if quant_algo in _MODEL_OPT_NVFP4_ALGOS:
-            return "modelopt_fp4"
-        if quant_algo in _MODEL_OPT_MIXED_ALGOS:
-            return "modelopt_mixed"
-        return None
+        return _MODEL_OPT_ALGO_TO_METHOD.get(quant_algo)
 
-    if method is not None:
-        if normalized_method in _MODEL_OPT_METHODS:
-            return normalized_method
+    if normalized_method in _MODEL_OPT_METHODS:
+        return normalized_method
 
     return None
 
 
-def _build_modelopt_from_config(method: str, config: Mapping[str, Any]) -> QuantizationConfig:
+def maybe_build_modelopt_from_config(config: Mapping[str, Any]) -> QuantizationConfig | None:
+    """Build a ModelOpt config when config is a ModelOpt checkpoint, else None."""
+    method = _detect_modelopt_method(config)
+    if method is None:
+        return None
     config_cls = get_quantization_config(method)
     normalized_config = dict(config)
-    normalized_config.setdefault("quant_method", method)
+    set_quantization_method(normalized_config, method)
     return config_cls.from_config(normalized_config)
 
 
 def _pop_method_name(spec: dict[str, Any]) -> str | None:
-    method = spec.pop("method", None)
-    if method is None:
-        method = spec.pop("quant_method", None)
+    """Pops the method key (including for aliases) from the quantization config dict."""
+    method = get_quantization_method(spec)  # validates the aliases agree before we drop them
+    spec.pop(METHOD_KEY, None)
+    spec.pop(QUANT_METHOD_KEY, None)
     if method is not None and not isinstance(method, str):
-        raise TypeError(f"'method'/'quant_method' must be a string, got {type(method).__name__}")
+        raise TypeError(f"{METHOD_KEY!r}/{QUANT_METHOD_KEY!r} must be a string, got {type(method).__name__}")
     return method
 
 
@@ -218,11 +234,11 @@ def _is_per_component_dict(spec: dict[str, Any]) -> bool:
     require at least one value to be None or a dict with "method" /
     "quant_method".
     """
-    if "method" in spec or "quant_method" in spec:
+    if METHOD_KEY in spec or QUANT_METHOD_KEY in spec:
         return False
     if not all(isinstance(v, (dict, str, type(None))) for v in spec.values()):
         return False
-    return any(v is None or (isinstance(v, dict) and ("method" in v or "quant_method" in v)) for v in spec.values())
+    return any(v is None or (isinstance(v, dict) and (METHOD_KEY in v or QUANT_METHOD_KEY in v)) for v in spec.values())
 
 
 def _maybe_build_component_quant_config(
@@ -278,22 +294,33 @@ def build_quantization_config(
         if component_cfg is not None:
             return component_cfg
 
-        # HF checkpoint dicts carry "quant_method"; inline specs carry "method".
-        # FIXME, quant_method/method shouldn't matter for choice, but currently
-        # it does, which messes up int8.
-        from_checkpoint = "quant_method" in spec
+        # Provenance proxy: a spec carrying the checkpoint key ("quant_method")
+        # is checkpoint metadata (-> from_config); the inline "method" form is a
+        # user request (-> constructor). Same rule for every method.
+        from_checkpoint = QUANT_METHOD_KEY in spec
         quantization = _pop_method_name(spec)
         if quantization is None:
             raise ValueError(
-                "Dict quantization config must have a 'method' or 'quant_method' key "
+                f"Dict quantization config must have a {METHOD_KEY!r} or {QUANT_METHOD_KEY!r} key "
                 "or be a per-component config with component prefixes as keys."
             )
-        modelopt_method = _detect_modelopt_method({"quant_method": quantization, **spec})
-        if modelopt_method is not None:
-            return _build_modelopt_from_config(modelopt_method, {"quant_method": quantization, **spec})
+        # A dict spec may inline the modelopt algo (even under the "method" key),
+        # so always check it; a bare method string can't, hence the else gate.
+        detect_modelopt = True
     else:
         spec = dict(quant_config) if isinstance(quant_config, dict) else {}
-        from_checkpoint = "quant_method" in spec
+        from_checkpoint = QUANT_METHOD_KEY in spec
+        # Only a checkpoint carries an algo to disambiguate; a bare method string
+        # (no quant_config) is a user request and constructs directly below.
+        detect_modelopt = from_checkpoint
+
+    # ModelOpt records its algo (FP8/NVFP4/mixed) separately from
+    # quant_method="modelopt"; disambiguate on the effective checkpoint dict so
+    # the right class is picked no matter which arg carried the checkpoint.
+    if detect_modelopt:
+        modelopt = maybe_build_modelopt_from_config({QUANT_METHOD_KEY: quantization, **spec})
+        if modelopt is not None:
+            return modelopt
 
     method = _normalize_quant_method_alias(quantization)
     if method == "none":
@@ -307,7 +334,7 @@ def build_quantization_config(
     # from_config impls read it (e.g. int8 derives is_checkpoint_*_serialized).
     quant_cls = get_quantization_config(method)
     if from_checkpoint:
-        spec.setdefault("quant_method", quantization)
+        set_quantization_method(spec, quantization)
         return quant_cls.from_config(spec)
     return quant_cls(**spec)
 
@@ -331,8 +358,8 @@ def maybe_rebuild_quantization_config(quant_config: QuantizationConfig, disk_qc:
     models that need to consider that case where we may have multiple quantization configs,
     E.g., wan2_2.
     """
-    qc_method: str = disk_qc["quant_method"]
-    qc_kwargs: dict[str, Any] = {k: v for k, v in disk_qc.items() if k != "quant_method"}
+    qc_method = get_quantization_method(disk_qc)
+    qc_kwargs = {k: v for k, v in disk_qc.items() if k not in (METHOD_KEY, QUANT_METHOD_KEY)}
     if _disk_marks_serialized(qc_kwargs, quant_config):
         logger.info(
             "config.json marks checkpoint as serialized; switching to offline %s mode.",
@@ -356,7 +383,7 @@ def maybe_rebuild_quantization_config(quant_config: QuantizationConfig, disk_qc:
     return quant_config
 
 
-def resolve_quant_config_from_disk(
+def resolve_quantization_config_from_disk(
     quant_config: QuantizationConfig | None,
     disk_qc: dict[str, Any] | str | None,
 ) -> QuantizationConfig | None:
@@ -375,14 +402,16 @@ def resolve_quant_config_from_disk(
     if isinstance(disk_qc, str):
         return quant_config
 
-    if not isinstance(disk_qc, Mapping) or "quant_method" not in disk_qc:
+    disk_method = get_quantization_method(disk_qc)
+
+    if not disk_method:
         return quant_config
 
-    disk_method = _normalize_quant_method_alias(disk_qc["quant_method"])
+    disk_method = _normalize_quant_method_alias(disk_method)
     active_method = _normalize_quant_method_alias(quant_config.get_name())
     if active_method != disk_method:
         raise ValueError(
-            f"Checkpoint config.json declares quant_method={disk_qc['quant_method']!r} "
+            f"Checkpoint config.json declares quant_method={disk_method!r} "
             f"but the active quantization config is {quant_config.get_name()!r}."
         )
 
