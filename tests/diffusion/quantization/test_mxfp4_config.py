@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Tests for MXFP4 quantization configs and the MXFP4 DualScale + BF16 mixed config."""
 
 from types import SimpleNamespace
