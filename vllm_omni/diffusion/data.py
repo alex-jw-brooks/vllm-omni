@@ -31,7 +31,7 @@ from vllm_omni.diffusion.lora.manager import LoRABackend
 from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.diffusion.utils.network_utils import is_port_available
 from vllm_omni.errors import client_error_metadata
-from vllm_omni.quantization.factory import build_quantization_config
+from vllm_omni.quantization.factory import build_quantization_config, get_quantization_method
 
 if TYPE_CHECKING:
     from vllm.config import KVTransferConfig, ProfilerConfig
@@ -453,7 +453,7 @@ class TransformerConfig:
         quant_config: QuantizationConfig | None = None
         disk_qc = params.get("quantization_config")
         if isinstance(disk_qc, dict):
-            raw_quant_method = disk_qc.get("quant_method", disk_qc.get("method"))
+            raw_quant_method = get_quantization_method(disk_qc)
             quant_config = build_quantization_config(disk_qc)
             if quant_config is not None:
                 quant_method = raw_quant_method if raw_quant_method is not None else quant_config.get_name()

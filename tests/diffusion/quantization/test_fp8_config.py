@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from torch import nn
 from vllm.model_executor.layers.quantization.fp8 import Fp8Config
-from vllm.model_executor.layers.quantization.modelopt import ModelOptFp8Config
+from vllm.model_executor.layers.quantization.modelopt import ModelOptFp8Config, ModelOptNvFp4Config
 
 from vllm_omni.config.model import OmniModelArchConfigConvertor
 from vllm_omni.diffusion.data import OmniDiffusionConfig, TransformerConfig
@@ -68,6 +68,15 @@ def test_build_quantization_config_modelopt_fp8_config_json():
     assert config.is_checkpoint_fp8_serialized
 
 
+def test_build_quantization_config_modelopt_nvfp4_from_str_and_dict():
+    """Ensure (str method, chkpt dict) disambiguates NVFP4 like the dict-only form."""
+    config = build_quantization_config(
+        "modelopt",
+        {"quant_method": "modelopt", "quant_algo": "NVFP4", "producer": {"name": "modelopt"}},
+    )
+    assert isinstance(config, ModelOptNvFp4Config)
+
+
 def test_build_quantization_config_per_component():
     config = build_quantization_config({"transformer": {"method": "fp8"}, "vae": None})
     assert isinstance(config, ComponentQuantizationConfig)
@@ -94,6 +103,12 @@ def test_flat_dict_not_misdetected_as_per_component():
     a per-component dict — it should raise ValueError for missing 'method'."""
     with pytest.raises(ValueError, match="must have a 'method' or 'quant_method' key"):
         build_quantization_config({"activation_scheme": "static"})
+
+
+def test_build_quantization_config_conflicting_method_keys_raise():
+    """Ensure a dict declaring both aliases with different values raises."""
+    with pytest.raises(ValueError):
+        build_quantization_config({"method": "int8", "quant_method": "fp8"})
 
 
 def test_build_quantization_config_passthrough():

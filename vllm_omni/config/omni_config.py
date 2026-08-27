@@ -51,6 +51,7 @@ from vllm_omni.config.stage_config import (
     reconcile_diffusion_attention_overrides,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
+from vllm_omni.quantization.factory import get_quantization_method
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
     StageExecutionType.LLM_AR: (StageType.LLM, "ar"),
@@ -918,7 +919,7 @@ class _DiffusionConfigProjection:
         if isinstance(quant_config, str):
             return quant_config.lower() == "fp8"
         if isinstance(quant_config, Mapping):
-            method = quant_config.get("method", quant_config.get("quant_method"))
+            method = get_quantization_method(quant_config)
             return isinstance(method, str) and method.lower() == "fp8"
         if hasattr(quant_config, "get_name"):
             return quant_config.get_name() == "fp8"
@@ -929,7 +930,7 @@ class _DiffusionConfigProjection:
         if isinstance(quant_config, str):
             return quant_config.lower() in {"fp4", "nvfp4", "modelopt_fp4"}
         if isinstance(quant_config, Mapping):
-            method = quant_config.get("method", quant_config.get("quant_method"))
+            method = get_quantization_method(quant_config)
             return isinstance(method, str) and method.lower() in {"fp4", "nvfp4", "modelopt_fp4"}
         if hasattr(quant_config, "get_name"):
             return quant_config.get_name() == "modelopt_fp4"
