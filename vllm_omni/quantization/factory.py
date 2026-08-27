@@ -294,9 +294,9 @@ def build_quantization_config(
         if component_cfg is not None:
             return component_cfg
 
-        # Provenance proxy: a spec carrying the checkpoint key ("quant_method")
-        # is checkpoint metadata (-> from_config); the inline "method" form is a
-        # user request (-> constructor). Same rule for every method.
+        # NOTE: This is explicitly using 'quant_method' instead of the getters and
+        # setters with the alias because int & fp8, the latter of which lives in vLLM,
+        # derive is_checkpoint_*_serialized based on the method name.
         from_checkpoint = QUANT_METHOD_KEY in spec
         quantization = _pop_method_name(spec)
         if quantization is None:
