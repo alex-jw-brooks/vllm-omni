@@ -31,7 +31,11 @@ from vllm_omni.diffusion.lora.manager import LoRABackend
 from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.diffusion.utils.network_utils import is_port_available
 from vllm_omni.errors import client_error_metadata
-from vllm_omni.quantization.factory import build_quantization_config, get_quantization_method
+from vllm_omni.quantization.factory import (
+    build_quantization_config,
+    get_quantization_method,
+    should_adopt_checkpoint_quant_config,
+)
 
 if TYPE_CHECKING:
     from vllm.config import KVTransferConfig, ProfilerConfig
@@ -1204,6 +1208,14 @@ class OmniDiffusionConfig:
             # If it's neither dict nor DiffusionCacheConfig, convert to empty config
             self.cache_config = DiffusionCacheConfig()
 
+        # Normalize the incoming quant spec (legacy "quantization" str / dict)
+        # into a real QuantizationConfig so the field matches its declared type,
+        # which ensure sthat we actually have a quantization config here.
+        # FIXME - this is probably not the best way to do this; i.e., we should prebuild
+        # the config directly on the common path, which if true, makes this a no-op.
+        # We should remove this and also the tf propagation once types are safe everywhere.
+        self.quantization_config = build_quantization_config(self.quantization_config)
+
         # Auto-detect quantization from TransformerConfig if not explicitly set.
         # This covers the case where tf_model_config is passed at construction
         # time. For late (post-construction) assignment, callers should use
@@ -1251,44 +1263,15 @@ class OmniDiffusionConfig:
                 )
 
     def _propagate_quantization_from_tf_config(self, tf_config: "TransformerConfig") -> None:
-        if tf_config.quant_config is None:
+        checkpoint = tf_config.quant_config
+        if checkpoint is None:
             return
-
-        is_checkpoint_fp8 = bool(getattr(tf_config.quant_config, "is_checkpoint_fp8_serialized", False))
-        is_checkpoint_nvfp4 = bool(getattr(tf_config.quant_config, "is_checkpoint_nvfp4_serialized", False))
-        should_use_checkpoint_config = (
-            self.quantization_config is None
-            or (is_checkpoint_fp8 and self._is_generic_fp8_quant_config(self.quantization_config))
-            or (is_checkpoint_nvfp4 and self._is_generic_nvfp4_quant_config(self.quantization_config))
-        )
-        if should_use_checkpoint_config:
-            self.quantization_config = tf_config.quant_config
+        if should_adopt_checkpoint_quant_config(self.quantization_config, checkpoint):
+            self.quantization_config = checkpoint
             logger.info(
                 "Auto-detected quantization '%s' from model config",
                 tf_config.quant_method,
             )
-
-    @staticmethod
-    def _is_generic_fp8_quant_config(quant_config: object) -> bool:
-        if isinstance(quant_config, str):
-            return quant_config.lower() == "fp8"
-        if isinstance(quant_config, Mapping):
-            method = quant_config.get("method", quant_config.get("quant_method"))
-            return isinstance(method, str) and method.lower() == "fp8"
-        if hasattr(quant_config, "get_name"):
-            return quant_config.get_name() == "fp8"
-        return False
-
-    @staticmethod
-    def _is_generic_nvfp4_quant_config(quant_config: object) -> bool:
-        if isinstance(quant_config, str):
-            return quant_config.lower() in {"fp4", "nvfp4", "modelopt_fp4"}
-        if isinstance(quant_config, Mapping):
-            method = quant_config.get("method", quant_config.get("quant_method"))
-            return isinstance(method, str) and method.lower() in {"fp4", "nvfp4", "modelopt_fp4"}
-        if hasattr(quant_config, "get_name"):
-            return quant_config.get_name() == "modelopt_fp4"
-        return False
 
     def set_tf_model_config(self, tf_config: "TransformerConfig") -> None:
         """Assign `tf_model_config` and propagate quantization if detected.

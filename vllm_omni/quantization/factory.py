@@ -73,6 +73,11 @@ from vllm.model_executor.layers.quantization import (  # noqa: E402
 from vllm.model_executor.layers.quantization.base_config import (  # noqa: E402
     QuantizationConfig,
 )
+from vllm.model_executor.layers.quantization.fp8 import Fp8Config  # noqa: E402
+from vllm.model_executor.layers.quantization.modelopt import (  # noqa: E402
+    ModelOptFp8Config,
+    ModelOptNvFp4Config,
+)
 
 from .component_config import ComponentQuantizationConfig  # noqa: E402
 
@@ -154,6 +159,38 @@ SUPPORTED_QUANTIZATION_METHODS: list[str] = list(dict.fromkeys([*QUANTIZATION_ME
 _QUANT_METHOD_ALIASES = {"auto-round": "inc", "auto_round": "inc"}
 
 
+####### FIXME - this is not amazing, for now moving this here as a hack since it's duplicated
+_GENERIC_FP8_NAMES = frozenset({"fp8"})
+_GENERIC_NVFP4_NAMES = frozenset({"fp4", "nvfp4", "modelopt_fp4"})
+
+
+def should_adopt_checkpoint_quant_config(active: QuantizationConfig | None, checkpoint: QuantizationConfig) -> bool:
+    """Decide whether a checkpoint's own quant config should replace the active one.
+
+    Adopt when nothing is set yet, or when the active config is a generic online
+    request (bare "fp8"/fp4) but the checkpoint carries serialized weights of the
+    same family — those must load with is_checkpoint_*_serialized=True.
+
+    vLLM records serialized-checkpoint provenance only on the concrete fp8/nvfp4
+    config classes (never on the QuantizationConfig base), so we isinstance-narrow
+    to the carriers and read the flag as a typed property.
+    """
+    if active is None:
+        return True
+    name = active.get_name()
+    if (
+        isinstance(checkpoint, (Fp8Config, ModelOptFp8Config))
+        and checkpoint.is_checkpoint_fp8_serialized
+        and name in _GENERIC_FP8_NAMES
+    ):
+        return True
+    if (
+        isinstance(checkpoint, ModelOptNvFp4Config)
+        and checkpoint.is_checkpoint_nvfp4_serialized
+        and name in _GENERIC_NVFP4_NAMES
+    ):
+        return True
+    return False
 
 
 def _normalize_quant_method_alias(method: str | None) -> str | None:
@@ -339,7 +376,7 @@ def build_quantization_config(
     return quant_cls(**spec)
 
 
-def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: object) -> bool:
+def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: QuantizationConfig) -> bool:
     """Return True when config.json says serialized but the active quant_config does not.
 
     Matches any flag following the is_checkpoint_*_serialized naming convention,

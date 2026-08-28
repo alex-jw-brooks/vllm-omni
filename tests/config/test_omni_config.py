@@ -1376,15 +1376,12 @@ def test_diffusion_config_field_classification_covers_current_fields():
     assert "prompt_file_path" in omni_config_module._DIFFUSION_RUNTIME_CONFIG_FIELDS
 
 
-def test_diffusion_config_projection_keeps_mapping_quantization_config_serializable():
-    quantization_config = {
-        "method": "example_quant",
-        "weights": "weights.bin",
-    }
-
-    cfg = omni_config_module._DiffusionConfigProjection.from_kwargs(quantization_config=quantization_config)
-
-    assert cfg.quantization_config == quantization_config
+def test_diffusion_config_projection_rejects_unregistered_quantization_method():
+    """Ensure config projection requires a valid quantization method when built from kwargss."""
+    with pytest.raises(ValidationError, match="Unknown quantization method"):
+        omni_config_module._DiffusionConfigProjection.from_kwargs(
+            quantization_config={"method": "example_quant", "weights": "weights.bin"},
+        )
 
 
 def test_diffusion_quantization_mapping_reaches_terminal_config(monkeypatch):

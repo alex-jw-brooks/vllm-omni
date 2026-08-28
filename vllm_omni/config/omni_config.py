@@ -50,8 +50,9 @@ from vllm_omni.config.stage_config import (
     normalize_pipeline_cli_overrides,
     reconcile_diffusion_attention_overrides,
 )
+from vllm_omni.diffusion.data import TransformerConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-from vllm_omni.quantization.factory import get_quantization_method
+from vllm_omni.quantization.factory import should_adopt_checkpoint_quant_config
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
     StageExecutionType.LLM_AR: (StageType.LLM, "ar"),
@@ -780,7 +781,7 @@ class _DiffusionConfigProjection:
     kv_transfer_config: KVTransferConfig | None = None
     enable_stage_verification: bool = True
     prompt_file_path: str | None = None
-    quantization_config: _QuantizationConfigType = None
+    quantization_config: QuantizationConfig | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     @field_validator("kv_transfer_config", mode="before")
@@ -851,9 +852,10 @@ class _DiffusionConfigProjection:
         elif not isinstance(self.cache_config, DiffusionCacheConfig):
             self.cache_config = DiffusionCacheConfig()
 
+        # FIXME - this is essentially a duplicated issue of what we have in diffusion / data,
+        # so if init always just gets an optional quant config, we do not need to redo this here.
+        self.quantization_config = build_quantization_config(self.quantization_config)
         self._propagate_quantization_from_tf_config(self.tf_model_config)
-        if self.quantization_config is not None and not isinstance(self.quantization_config, QuantizationConfig):
-            self.quantization_config = build_quantization_config(self.quantization_config)
 
         if self.diffusion_attention_config is None or isinstance(
             self.diffusion_attention_config,
@@ -897,46 +899,16 @@ class _DiffusionConfigProjection:
                 "valid together with diffusion_load_format=diffusers"
             )
 
-    def _propagate_quantization_from_tf_config(self, tf_config: Any) -> None:
-        quant_config = getattr(tf_config, "quant_config", None)
-        if quant_config is None:
+    def _propagate_quantization_from_tf_config(self, tf_config: TransformerConfig) -> None:
+        checkpoint_quant_config = tf_config.quant_config
+        if checkpoint_quant_config is None:
             return
-        quant_method = getattr(tf_config, "quant_method", None)
-        is_checkpoint_fp8 = bool(getattr(quant_config, "is_checkpoint_fp8_serialized", False))
-        is_checkpoint_nvfp4 = bool(getattr(quant_config, "is_checkpoint_nvfp4_serialized", False))
-        should_use_checkpoint_config = (
-            self.quantization_config is None
-            or (is_checkpoint_fp8 and self._is_generic_fp8_quant_config(self.quantization_config))
-            or (is_checkpoint_nvfp4 and self._is_generic_nvfp4_quant_config(self.quantization_config))
-        )
-        if should_use_checkpoint_config:
-            self.quantization_config = quant_config
-            if quant_method is not None:
-                self.additional_config.setdefault("auto_detected_quant_method", quant_method)
+        if should_adopt_checkpoint_quant_config(self.quantization_config, checkpoint_quant_config):
+            self.quantization_config = checkpoint_quant_config
+            if tf_config.quant_method is not None:
+                self.additional_config.setdefault("auto_detected_quant_method", tf_config.quant_method)
 
-    @staticmethod
-    def _is_generic_fp8_quant_config(quant_config: object) -> bool:
-        if isinstance(quant_config, str):
-            return quant_config.lower() == "fp8"
-        if isinstance(quant_config, Mapping):
-            method = get_quantization_method(quant_config)
-            return isinstance(method, str) and method.lower() == "fp8"
-        if hasattr(quant_config, "get_name"):
-            return quant_config.get_name() == "fp8"
-        return False
-
-    @staticmethod
-    def _is_generic_nvfp4_quant_config(quant_config: object) -> bool:
-        if isinstance(quant_config, str):
-            return quant_config.lower() in {"fp4", "nvfp4", "modelopt_fp4"}
-        if isinstance(quant_config, Mapping):
-            method = get_quantization_method(quant_config)
-            return isinstance(method, str) and method.lower() in {"fp4", "nvfp4", "modelopt_fp4"}
-        if hasattr(quant_config, "get_name"):
-            return quant_config.get_name() == "modelopt_fp4"
-        return False
-
-    def set_tf_model_config(self, tf_config: Any) -> None:
+    def set_tf_model_config(self, tf_config: TransformerConfig) -> None:
         self.tf_model_config = tf_config
         self._propagate_quantization_from_tf_config(tf_config)
 
