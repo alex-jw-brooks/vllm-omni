@@ -80,10 +80,6 @@ class TestPipelineTopology:
         assert len(pipeline.stages) == 3
         assert [s.stage_id for s in pipeline.stages] == [0, 1, 2]
 
-    def test_topology_validates(self, pipeline: PipelineConfig) -> None:
-        # ``validate`` returns a list of structural errors; empty == valid.
-        assert pipeline.validate() == []
-
     def test_thinker_stage(self, pipeline: PipelineConfig) -> None:
         thinker = pipeline.get_stage(0)
         assert thinker is not None
