@@ -302,6 +302,11 @@ class PipelineConfig:
     # Global CLI spelling -> (stage id, stage-local spelling).
     stage_cli_aliases: dict[str, tuple[int, str]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        err_str = self.maybe_get_validation_errors_as_str()
+        if err_str is not None:
+            raise ValueError(err_str)
+
     def get_stage(self, stage_id: int) -> StagePipelineConfig | None:
         """Look up a stage by its ID."""
         for stage in self.stages:
@@ -309,7 +314,7 @@ class PipelineConfig:
                 return stage
         return None
 
-    def validate(self) -> list[str]:
+    def get_validation_errors(self) -> list[str]:
         """Return list of topology errors (empty if valid)."""
         errors: list[str] = []
         if not self.stages:
@@ -333,6 +338,14 @@ class PipelineConfig:
         if not any(s.final_output for s in self.stages):
             errors.append("No terminal stage (stage with final_output=True)")
         return errors
+
+    def maybe_get_validation_errors_as_str(self) -> str | None:
+        """Get the validation errors for this pipeline config as a string."""
+        errors = self.get_validation_errors()
+        if errors:
+            error_str = "\n\t".join(errors)
+            return f"PipelineConfig initialization failed with the following error(s): \n{error_str}"
+        return None
 
 
 @dataclass
