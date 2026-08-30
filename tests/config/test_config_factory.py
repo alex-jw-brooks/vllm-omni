@@ -43,6 +43,8 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 ####
 NO_STAGES_MATCH_STR = "no stages"
+NO_TERMINAL_STAGE_MATCH_STR = "No terminal stage"
+SINGLE_STAGE_PIPE_CFG = (StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),)
 
 
 @pytest.fixture(autouse=True)
@@ -621,7 +623,7 @@ class TestPipelineDiscovery:
         p = PipelineConfig(
             model_type="custom_collide",
             hf_architectures=("SomeCollidingArch",),
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         assert p.hf_architectures == ("SomeCollidingArch",)
 
@@ -648,14 +650,14 @@ class TestPipelineConfigNew:
         PipelineConfig(
             model_type="t",
             model_arch="A",
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
 
     def test_frozen(self):
         p = PipelineConfig(
             model_type="t",
             model_arch="A",
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         with pytest.raises(AttributeError):
             p.model_type = "changed"
@@ -666,19 +668,19 @@ class TestPipelineConfigNew:
 
     def test_validate_no_terminal_stage(self):
         """A pipeline with no ``final_output`` stage can never emit a result."""
-        p = PipelineConfig(
-            model_type="t",
-            model_arch="A",
-            stages=(
-                StagePipelineConfig(stage_id=0, model_stage="a"),
-                StagePipelineConfig(stage_id=1, model_stage="b", input_sources=(0,)),
-            ),
-        )
-        assert any("no terminal stage" in e.lower() for e in p.validate())
+        with pytest.raises(ValueError, match=NO_TERMINAL_STAGE_MATCH_STR):
+            PipelineConfig(
+                model_type="t",
+                model_arch="A",
+                stages=(
+                    StagePipelineConfig(stage_id=0, model_stage="a"),
+                    StagePipelineConfig(stage_id=1, model_stage="b", input_sources=(0,)),
+                ),
+            )
 
-    def test_validate_terminal_stage_need_not_be_last(self):
-        """The check is cycle-agnostic: any stage may carry ``final_output``."""
-        p = PipelineConfig(
+    def test_pipeline_can_have_final_output_in_any_stage(self):
+        """Ensure any stage may carry ``final_output``."""
+        PipelineConfig(
             model_type="t",
             model_arch="A",
             stages=(
@@ -686,7 +688,6 @@ class TestPipelineConfigNew:
                 StagePipelineConfig(stage_id=1, model_stage="b", input_sources=(0,)),
             ),
         )
-        assert p.validate() == []
 
 
 class TestPipelineRegistration:
@@ -695,11 +696,11 @@ class TestPipelineRegistration:
         model_type_key = "hf_model_type_pipeline"
         deploy_pipe = PipelineConfig(
             model_type=deploy_key,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         model_type_pipe = PipelineConfig(
             model_type=model_type_key,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(deploy_pipe)
         register_pipeline(model_type_pipe)
@@ -728,7 +729,7 @@ class TestPipelineRegistration:
         model_type_key = "registered_model_type_pipeline"
         pipeline_cfg = PipelineConfig(
             model_type=model_type_key,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(pipeline_cfg)
 
@@ -765,7 +766,7 @@ class TestPipelineRegistration:
         pipe_cfg = PipelineConfig(
             model_type=pipeline_key,
             hf_architectures=("ArchitectureFallbackForTest",),
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(pipe_cfg)
 
@@ -796,18 +797,18 @@ class TestPipelineRegistration:
             model_type="rejected_by_predicate",
             hf_architectures=(shared_arch,),
             hf_config_predicate=rejecting_predicate,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         raises_cfg = PipelineConfig(
             model_type="raises_in_predicate",
             hf_architectures=(shared_arch,),
             hf_config_predicate=raising_predicate,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         accept_cfg = PipelineConfig(
             model_type="accepted_by_predicate",
             hf_architectures=(shared_arch,),
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(reject_cfg)
         register_pipeline(raises_cfg)
@@ -841,7 +842,7 @@ class TestPipelineRegistration:
             model_type="predicate_without_arch_match",
             hf_architectures=("DifferentArchitectureForTest",),
             hf_config_predicate=predicate,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(pipe_cfg)
 
@@ -865,7 +866,7 @@ class TestPipelineRegistration:
         resolved_cfg = PipelineConfig(
             model_type="callable_resolved_pipeline",
             hf_architectures=("CallableArchitectureForTest",),
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         seen_hf_configs = []
 
@@ -941,7 +942,7 @@ class TestPipelineRegistration:
         new_model_type = "new_model_type"
         pipe_cfg = PipelineConfig(
             model_type=new_model_type,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
 
         # Register the new PipelineConfig
@@ -987,7 +988,7 @@ class TestPipelineRegistration:
         ) -> PipelineConfig:
             return PipelineConfig(
                 model_type=resolved_type,
-                stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+                stages=SINGLE_STAGE_PIPE_CFG,
             )
 
         # Register the new PipelineConfig
@@ -1045,7 +1046,7 @@ class TestPipelineRegistration:
         pipe_cfg = PipelineConfig(
             model_type=pipeline_key,
             model_arch="DeployOnlyArch",
-            stages=(StagePipelineConfig(stage_id=0, model_stage="diffusion"),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(pipe_cfg)
 
@@ -1080,7 +1081,7 @@ class TestPipelineRegistration:
         pipeline_key = "single_load_pipeline"
         pipeline_cfg = PipelineConfig(
             model_type=pipeline_key,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(pipeline_cfg)
         deploy_path = tmp_path / "single_load.yaml"
@@ -1112,7 +1113,7 @@ class TestPipelineRegistration:
         pipeline = PipelineConfig(
             model_type="pipeline_with_default",
             default_deploy_config_name=default_name,
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
 
         with patch(
@@ -1135,12 +1136,12 @@ class TestPipelineRegistration:
         pipe_a = PipelineConfig(
             model_type="detect_type",
             endpoint_restrictions=(restriction,),
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         pipe_b = PipelineConfig(
             model_type="override_type",
             endpoint_restrictions=(),
-            stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),),
+            stages=SINGLE_STAGE_PIPE_CFG,
         )
         register_pipeline(pipe_a)
         register_pipeline(pipe_b)
@@ -1681,6 +1682,7 @@ stages:
                     model_stage="ar",
                     execution_type=StageExecutionType.LLM_AR,
                     requires_multimodal_data=True,
+                    final_output=True,
                 ),
             ),
         )
@@ -1701,6 +1703,7 @@ stages:
                     model_stage="ar",
                     execution_type=StageExecutionType.LLM_AR,
                     scheduler_cls=scheduler_cls,
+                    final_output=True,
                 ),
             ),
         )
