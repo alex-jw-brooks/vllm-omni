@@ -41,10 +41,10 @@ from vllm_omni.engine.arg_utils import SHARED_FIELDS, internal_blacklist_keys
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
-####
+SINGLE_STAGE_PIPE_CFG = (StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),)
+# Validation strings to match against in post init
 NO_STAGES_MATCH_STR = "no stages"
 NO_TERMINAL_STAGE_MATCH_STR = "No terminal stage"
-SINGLE_STAGE_PIPE_CFG = (StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),)
 
 
 @pytest.fixture(autouse=True)
