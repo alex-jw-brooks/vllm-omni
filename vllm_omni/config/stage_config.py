@@ -344,7 +344,7 @@ class PipelineConfig:
         errors = self.get_validation_errors()
         if errors:
             error_str = "\n\t".join(errors)
-            return f"PipelineConfig initialization failed with the following error(s): \n{error_str}"
+            return f"PipelineConfig initialization failed with the following error(s): \n\t{error_str}"
         return None
 
 
