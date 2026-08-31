@@ -26,6 +26,7 @@ from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
 from vllm_omni.config.stage_config import (
     PipelineConfig,
     StageExecutionType,
+    StagePipelineConfig,
     _apply_platform_overrides,
     load_deploy_config,
     merge_pipeline_deploy,
@@ -65,7 +66,9 @@ class TestRegistryDeclaration:
         assert not hasattr(pipeline, "max_native_duplex_sessions")
 
     def test_ordinary_pipeline_defaults_to_no_duplex_control(self) -> None:
-        pipeline = PipelineConfig(model_type="ordinary")
+        pipeline = PipelineConfig(
+            model_type="ordinary", stages=(StagePipelineConfig(stage_id=0, model_stage="a", final_output=True),)
+        )
         assert pipeline.duplex_control_enabled is False
         assert pipeline.duplex_serving_adapter is None
         assert not hasattr(pipeline, "max_native_duplex_sessions")

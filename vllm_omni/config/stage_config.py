@@ -339,12 +339,15 @@ class PipelineConfig:
             errors.append("No terminal stage (stage with final_output=True)")
         return errors
 
-    def maybe_get_validation_errors_as_str(self) -> str | None:
+    def maybe_get_validation_errors_as_str(self, multi_sep: str = "\n\t") -> str | None:
         """Get the validation errors for this pipeline config as a string."""
         errors = self.get_validation_errors()
+
         if errors:
-            error_str = "\n\t".join(errors)
-            return f"PipelineConfig initialization failed with the following error(s): \n\t{error_str}"
+            error_str = multi_sep.join(errors)
+            if len(errors) > 1:
+                error_str = f"{multi_sep}{error_str}"
+            return f"PipelineConfig initialization failed with the following error(s): {error_str}"
         return None
 
 
