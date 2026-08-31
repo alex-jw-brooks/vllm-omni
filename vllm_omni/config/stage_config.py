@@ -303,9 +303,15 @@ class PipelineConfig:
     stage_cli_aliases: dict[str, tuple[int, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        err_str = self.maybe_get_validation_errors_as_str()
-        if err_str is not None:
-            raise ValueError(err_str)
+        errors = self.get_validation_errors()
+
+        if errors:
+            # If we have multiple errors, put them on separate indented lines for readability
+            multi_sep = "\n\t"
+            error_str = multi_sep.join(errors)
+            if len(errors) > 1:
+                error_str = f"{multi_sep}{error_str}"
+            raise ValueError(f"PipelineConfig initialization failed with the following error(s): {error_str}")
 
     def get_stage(self, stage_id: int) -> StagePipelineConfig | None:
         """Look up a stage by its ID."""
@@ -338,17 +344,6 @@ class PipelineConfig:
         if not any(s.final_output for s in self.stages):
             errors.append("No terminal stage (stage with final_output=True)")
         return errors
-
-    def maybe_get_validation_errors_as_str(self, multi_sep: str = "\n\t") -> str | None:
-        """Get the validation errors for this pipeline config as a string."""
-        errors = self.get_validation_errors()
-
-        if errors:
-            error_str = multi_sep.join(errors)
-            if len(errors) > 1:
-                error_str = f"{multi_sep}{error_str}"
-            return f"PipelineConfig initialization failed with the following error(s): {error_str}"
-        return None
 
 
 @dataclass
