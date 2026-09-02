@@ -22,6 +22,7 @@ from omegaconf import OmegaConf
 from transformers import PretrainedConfig
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
+from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.utils.network_utils import get_open_ports_list, zmq_socket_ctx
 from vllm.v1.engine.coordinator import DPCoordinator
 from vllm.v1.engine.utils import (
@@ -1567,8 +1568,9 @@ def launch_diffusion_stage_replica(
     stage_init_timeout: int,
     use_inline: bool,
     replica_id: int = 0,
-    omni_master_server: OmniMasterServer | None = None,
-    omni_coordinator_address: str | None = None,
+    omni_master_server: OmniMasterServer | None,
+    omni_coordinator_address: str | None,
+    quantization_config: QuantizationConfig | None,
 ) -> tuple[Any, StageReplicaResources]:
     """Launch a local diffusion stage replica.
 
@@ -1585,13 +1587,14 @@ def launch_diffusion_stage_replica(
             metadata,
             stage_init_timeout=stage_init_timeout,
             use_inline=use_inline,
+            quantization_config=quantization_config,
         )
         return client, StageReplicaResources()
 
     from vllm_omni.diffusion import stage_diffusion_proc
     from vllm_omni.diffusion.stage_diffusion_client import StageDiffusionClient
 
-    od_config = build_diffusion_config(model, hf_config, stage_config, metadata)
+    od_config = build_diffusion_config(model, hf_config, stage_config, metadata, quantization_config)
     parallel_config = getattr(od_config, "parallel_config", None)
     world_size = getattr(parallel_config, "world_size", 1)
     try:
