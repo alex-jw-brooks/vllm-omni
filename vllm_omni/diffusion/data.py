@@ -48,9 +48,9 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-def normalize_omni_diffusion_kwargs(raw_kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize legacy diffusion kwargs before config construction."""
-    config_kwargs = dict(raw_kwargs)
+def normalize_omni_kwargs(kwargs: dict[str, Any], is_diffusion: bool) -> dict[str, Any]:
+    """Normalize legacy kwargs before config construction."""
+    config_kwargs = dict(kwargs)
 
     dtype = config_kwargs.get("dtype")
     if dtype is None:
@@ -60,6 +60,16 @@ def normalize_omni_diffusion_kwargs(raw_kwargs: Mapping[str, Any]) -> dict[str, 
     elif not isinstance(dtype, str):
         raise TypeError(f"Provided dtype must be a string or torch.dtype, got {type(dtype).__name__}")
 
+    # For quantization, map quantization -> quantization_config, regardless of type,
+    # so that we can can build out of the same field later.
+    if "quantization" in normalized and normalized.get("quantization_config", None) is None:
+        normalized["quantization_config"] = normalized.pop("quantization")
+    else:
+        normalized.pop("quantization", None)
+    if not is_diffusion:
+        return normalized
+
+    ### Diffusion specific
     # Backwards-compatibility: older callers may use a diffusion-specific
     # "static_lora_scale" kwarg. Normalize it to the canonical "lora_scale".
     if "static_lora_scale" in config_kwargs:
@@ -71,6 +81,7 @@ def normalize_omni_diffusion_kwargs(raw_kwargs: Mapping[str, Any]) -> dict[str, 
     if config_kwargs.get("quantization_config") is None and diffusion_quantization is not None:
         config_kwargs["quantization_config"] = diffusion_quantization
 
+<<<<<<< HEAD
     # Backwards-compatibility: map "quantization" to "quantization_config"
     # so callers using the old field name still work.
     if "quantization" in config_kwargs and config_kwargs.get("quantization_config", None) is None:
@@ -78,6 +89,8 @@ def normalize_omni_diffusion_kwargs(raw_kwargs: Mapping[str, Any]) -> dict[str, 
     else:
         config_kwargs.pop("quantization", None)
 
+=======
+>>>>>>> 619077925 (fix engine arg building)
     # Renamed from kv_cache_* to avoid clashing with vLLM's --kv-cache-dtype.
     if config_kwargs.get("diffusion_kv_cache_dtype") is None and "kv_cache_dtype" in config_kwargs:
         config_kwargs["diffusion_kv_cache_dtype"] = config_kwargs.pop("kv_cache_dtype")
@@ -1579,8 +1592,10 @@ class OmniDiffusionConfig:
                     raise
 
     @classmethod
-    def normalize_init_kwargs(cls, raw_kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        config_kwargs = normalize_omni_diffusion_kwargs(raw_kwargs)
+    def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":
+        config_kwargs = normalize_omni_kwargs(kwargs, is_diffusion=True)
+
+        # Filter kwargs to only include valid fields
         valid_fields = {f.name for f in fields(cls)}
         # Remaining ``None`` values mean "unset" at the CLI/deploy boundary.
         # Drop them so non-optional dataclass defaults are not overwritten.
