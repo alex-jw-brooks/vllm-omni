@@ -375,13 +375,15 @@ class StageRuntime:
             launch_mode = self._get_launch_mode(stage_id)
 
             # TODO: (Alex) This should be folded into the VllmOmniConfig.
-            ##### FIXME ---- This is not quite right, engine args seems to pop quantization_config prior to
-            # this point; fix this.
-            engine_args_dict = stage_cfg.engine_args
-            quant_method = engine_args_dict.get("quantization", None)
-            quant_dict = getattr(self._hf_config, "quantization_config", None) if self._hf_config else None
-            raise ValueError(quant_dict, quant_method)
-            quantization_config = build_quantization_config(quant_method, quant_dict)
+            # Build the quantization config early so both the LLM and diffusion
+            # init paths share one instance. Quantization is already normalized
+            # to `quantization_config` for all engine types before this point.
+            quantization_config = build_quantization_config(
+                quantization=stage_cfg.engine_args.get("quantization_config", None),
+                quant_config=getattr(self._hf_config, "quantization_config", None) if self._hf_config else None,
+            )
+            if quantization_config is not None:
+                logger.info("created quantization config of type: %s", type(quantization_config).__name__)
 
             replicas: list[ReplicaInitPlan] = []
             stage_vllm_config = None
@@ -739,8 +741,9 @@ class StageRuntime:
         stage_init_timeout: int,
     ) -> StagePoolClient:
         """Initialize one local LLM replica using vLLM's launch/attach pattern."""
-        # This should not happen since vLLM config.
-        if plan.stage_vllm_config is not plan.quantization_config:
+        # This should not happen because build_vllm_config .replace()s the plan's
+        # quantization_config onto the vLLM config, so they must be identical.
+        if plan.stage_vllm_config is not None and plan.stage_vllm_config.quant_config is not plan.quantization_config:
             logger.warning(
                 "LLM replica vLLM config's quantization config does not match the plan's quantization config"
             )

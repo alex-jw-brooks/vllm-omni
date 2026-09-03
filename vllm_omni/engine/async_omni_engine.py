@@ -1317,47 +1317,9 @@ class AsyncOmniEngine:
         # rather than as a per-stage config field.
         self._apply_strategy_lb_policy(strategy_lb_policy, kwargs)
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-        # Inject diffusion LoRA-related knobs from kwargs if not present in the stage config.
         for cfg in stage_configs:
-            try:
-              
-                global_sleep_mode = kwargs.get("enable_sleep_mode")
-                if global_sleep_mode is not None:
-                    if not hasattr(cfg.engine_args, "enable_sleep_mode") or cfg.engine_args.enable_sleep_mode is None:
-                        cfg.engine_args.enable_sleep_mode = global_sleep_mode
-                if getattr(cfg, "stage_type", None) != "diffusion":
-                    continue
+            cfg["engine_args"] = _apply_stage_engine_arg_overrides(cfg, kwargs)
 
-
-                if (
-                    kwargs.get("diffusion_attention_config") is not None
-                    or kwargs.get("diffusion_attention_backend") is not None
-                    or kwargs.get("fastvideo_vsa_topk") is not None
-                ):
-                    has_stage_attention = (
-                        getattr(cfg.engine_args, "diffusion_attention_config", None) is not None
-                        or getattr(cfg.engine_args, "diffusion_attention_backend", None) is not None
-                    )
-                    if not has_stage_attention:
-                        cfg.engine_args.diffusion_attention_config = parse_attention_config(
-                            kwargs.get("diffusion_attention_config"),
-                            attention_backend=kwargs.get("diffusion_attention_backend"),
-                            fastvideo_vsa_topk=kwargs.get("fastvideo_vsa_topk"),
-                        )
-
-                      
-            except Exception as e:
-                logger.warning("Failed to inject LoRA config for stage: %s", e)
-
-=======
->>>>>>> 030f65bf9 (wip simplifying engine arg building)
-=======
-        for cfg in stage_configs:
-            _apply_stage_engine_arg_overrides(cfg, kwargs)
-
->>>>>>> 1efdd642b (integrate stage overrides)
         return config_path, stage_configs
 
     # ==================== Public API ====================

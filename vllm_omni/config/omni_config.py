@@ -796,7 +796,7 @@ class _DiffusionConfigProjection:
         from vllm_omni.diffusion.data import normalize_omni_diffusion_kwargs
         from vllm_omni.diffusion.offloader.config import parse_diffusion_offload_config
 
-        normalized_kwargs = normalize_omni_diffusion_kwargs(kwargs)
+        normalized_kwargs = normalize_omni_kwargs(kwargs, is_diffusion=True)
         # Validate before stage construction while retaining the raw mapping
         # needed by dataclass/config serialization across process boundaries.
         parse_diffusion_offload_config(normalized_kwargs.get("diffusion_offload_config"))

@@ -46,23 +46,27 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-def normalize_omni_diffusion_kwargs(kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize legacy diffusion kwargs before config construction."""
+def normalize_omni_kwargs(kwargs: dict[str, Any], is_diffusion: bool) -> dict[str, Any]:
+    """Normalize legacy diffusion kwargs before config construction and return
+    a handle to the normalized kwargs. If in_place is False, the dict will be copied."""
     normalized = dict(kwargs)
 
+    # For quantization, map quantization -> quantization_config, regardless of type,
+    # so that we can can build out of the same field later.
+    if "quantization" in normalized and normalized.get("quantization_config", None) is None:
+        normalized["quantization_config"] = normalized.pop("quantization")
+    else:
+        normalized.pop("quantization", None)
+    if not is_diffusion:
+        return normalized
+
+    ### Diffusion specific
     # Backwards-compatibility: older callers may use a diffusion-specific
     # "static_lora_scale" kwarg. Normalize it to the canonical "lora_scale".
     if "static_lora_scale" in normalized:
         if "lora_scale" not in normalized:
             normalized["lora_scale"] = normalized["static_lora_scale"]
         normalized.pop("static_lora_scale", None)
-
-    # Backwards-compatibility: map "quantization" to "quantization_config"
-    # so callers using the old field name still work.
-    if "quantization" in normalized and normalized.get("quantization_config", None) is None:
-        normalized["quantization_config"] = normalized.pop("quantization")
-    else:
-        normalized.pop("quantization", None)
 
     # Renamed from kv_cache_* to avoid clashing with vLLM's --kv-cache-dtype.
     if normalized.get("diffusion_kv_cache_dtype") is None and "kv_cache_dtype" in normalized:
@@ -1512,7 +1516,7 @@ class OmniDiffusionConfig:
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":
-        kwargs = normalize_omni_diffusion_kwargs(kwargs)
+        kwargs = normalize_omni_kwargs(kwargs, is_diffusion=True)
 
         # Filter kwargs to only include valid fields
         valid_fields = {f.name for f in fields(cls)}

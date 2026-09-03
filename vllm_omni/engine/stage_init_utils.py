@@ -1464,12 +1464,21 @@ def build_vllm_config(
         )
 
     filtered_engine_args_dict = filter_dataclass_kwargs(OmniEngineArgs, engine_args_dict)
-    has_quant = filtered_engine_args_dict.pop("filtered_engine_args_dict", None) is not None
+    has_quant = (
+        filtered_engine_args_dict.get("quantization_config") is not None
+        or filtered_engine_args_dict.get("quantization") is not None
+    )
     # This is an invariant now that we have moved quantization config to be on the common path
     # with diffusion; we expect the QuantizationConfig to be preconstructed and .replace it on
     # the vLLM config for now.
     if has_quant and quantization_config is None:
         raise RuntimeError("Engine args require quantization, but no quantization_config was provided.")
+
+    # Pop quantization related configs from engine args, since if we have a
+    # quantization config, we already have it, and we can't pass the pre-initialized
+    # config to vLLM's initializer. Then we'll .replace() the config on the final object.
+    filtered_engine_args_dict.pop("quantization_config", None)
+    filtered_engine_args_dict.pop("quantization", None)
 
     # _to_dict serializes dataclass fields (e.g. StructuredOutputsConfig) into
     # plain dicts.  When OmniEngineArgs is instantiated with the dict, these
@@ -1516,7 +1525,9 @@ def build_vllm_config(
 
     # Update with the externally initialized quantization config
     if quantization_config is not None:
+        # Replace the quantization config & model config quantization str to ensure alignment
         vllm_config = replace(vllm_config, quant_config=quantization_config)
+        vllm_config.model_config.quantization = quantization_config.get_name()
 
     custom_voice_dir = engine_args_dict.get("custom_voice_dir")
     if custom_voice_dir:
