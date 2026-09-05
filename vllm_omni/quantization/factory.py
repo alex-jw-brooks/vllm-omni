@@ -319,10 +319,17 @@ def build_quantization_config(
             config.json ``quantization_config`` field). Passed to ``from_config()``
             for checkpoint-quantized models. Omit for online quantization.
     """
-    if isinstance(quantization, QuantizationConfig) or quantization is None:
+    if isinstance(quantization, QuantizationConfig):
         return quantization
 
-    # If a quantization config is provided, ensure Omni's quantization configs are registered.
+    # If we don't pass quantization, we can still grab it from the checkpoint's config
+    if quantization is None:
+        if isinstance(quant_config, Mapping):
+            quantization = get_quantization_method(quant_config)
+        if quantization is None:
+            return None
+
+    # Since we need to build a quant config, ensure Omni quant defs are registered
     register_omni_quantization_configs()
 
     if isinstance(quantization, Mapping):
