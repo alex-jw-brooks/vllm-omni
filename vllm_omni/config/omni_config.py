@@ -50,9 +50,8 @@ from vllm_omni.config.stage_config import (
     normalize_pipeline_cli_overrides,
     reconcile_diffusion_attention_overrides,
 )
-from vllm_omni.diffusion.data import TransformerConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-from vllm_omni.quantization.factory import should_adopt_checkpoint_quant_config
+from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
     StageExecutionType.LLM_AR: (StageType.LLM, "ar"),
@@ -822,7 +821,6 @@ class _DiffusionConfigProjection:
             validate_host_weight_runtime_options,
         )
         from vllm_omni.diffusion.diffusion_kv.config import parse_diffusion_kv_cache_mode
-        from vllm_omni.quantization.factory import build_quantization_config
 
         if self.tf_model_config is None:
             self.tf_model_config = TransformerConfig()
@@ -911,19 +909,6 @@ class _DiffusionConfigProjection:
                 "diffusers_load_kwargs and diffusers_call_kwargs are only "
                 "valid together with diffusion_load_format=diffusers"
             )
-
-    def _propagate_quantization_from_tf_config(self, tf_config: TransformerConfig) -> None:
-        checkpoint_quant_config = tf_config.quant_config
-        if checkpoint_quant_config is None:
-            return
-        if should_adopt_checkpoint_quant_config(self.quantization_config, checkpoint_quant_config):
-            self.quantization_config = checkpoint_quant_config
-            if tf_config.quant_method is not None:
-                self.additional_config.setdefault("auto_detected_quant_method", tf_config.quant_method)
-
-    def set_tf_model_config(self, tf_config: TransformerConfig) -> None:
-        self.tf_model_config = tf_config
-        self._propagate_quantization_from_tf_config(tf_config)
 
     def enrich_config(self) -> None:
         from vllm_omni.diffusion.data import OmniDiffusionConfig
@@ -1336,7 +1321,7 @@ class BaseVllmOmniStageConfig:
     parallel_config: OmniStageParallelConfig = field(default_factory=OmniStageParallelConfig)
     compilation_config: VllmCompilationConfig | None = None
     profiler_config: VllmProfilerConfig | None = None
-    quantization_config: _QuantizationConfigType = None
+    quantization_config: QuantizationConfig | None = None
 
     @property
     def stage_id(self) -> int:
@@ -1451,9 +1436,9 @@ def _build_common_stage_config_kwargs(
     parallel_config_cls: type[OmniStageParallelConfig] = OmniStageParallelConfig,
     *,
     model: str | None,
+    quantization_config: QuantizationConfig | None,
 ) -> tuple[dict[str, Any], str | None, str | None]:
     input_proc, next_stage_proc = _select_processor_funcs(topology, bool(deploy.async_chunk))
-    quantization_config = _build_quantization_config(deploy, engine.quantization)
     parallel_config = _build_parallel_config(deploy, engine.parallel, parallel_config_cls)
 
     return (
@@ -1518,6 +1503,7 @@ def _build_ar_stage_config(
     engine: _StageEngineValues,
     *,
     model: str | None,
+    quantization_config: QuantizationConfig | None,
 ) -> VllmOmniARStageConfig:
     common_kwargs, input_proc, next_stage_proc = _build_common_stage_config_kwargs(
         pipeline,
@@ -1526,6 +1512,7 @@ def _build_ar_stage_config(
         stage_deploy,
         engine,
         model=model,
+        quantization_config=quantization_config,
     )
     return cast(
         VllmOmniARStageConfig,
@@ -1545,6 +1532,7 @@ def _build_generation_stage_config(
     engine: _StageEngineValues,
     *,
     model: str | None,
+    quantization_config: QuantizationConfig | None,
 ) -> VllmOmniGenerationStageConfig:
     common_kwargs, input_proc, next_stage_proc = _build_common_stage_config_kwargs(
         pipeline,
@@ -1553,6 +1541,7 @@ def _build_generation_stage_config(
         stage_deploy,
         engine,
         model=model,
+        quantization_config=quantization_config,
     )
     return cast(
         VllmOmniGenerationStageConfig,
@@ -1572,6 +1561,7 @@ def _build_diffusion_stage_config(
     engine: _StageEngineValues,
     *,
     model: str | None,
+    quantization_config: QuantizationConfig | None,
 ) -> VllmOmniDiffusionStageConfig:
     common_kwargs, input_proc, next_stage_proc = _build_common_stage_config_kwargs(
         pipeline,
@@ -1581,6 +1571,7 @@ def _build_diffusion_stage_config(
         engine,
         OmniStageDiffusionParallelConfig,
         model=model,
+        quantization_config=quantization_config,
     )
     common_kwargs["diffusion_config"] = _build_diffusion_config_projection(
         pipeline,
@@ -1615,6 +1606,7 @@ def _build_stage_config(
     engine: _StageEngineValues,
     *,
     model: str | None,
+    quantization_config: QuantizationConfig | None,
 ) -> StageConfigType:
     try:
         builder = _STAGE_CONFIG_BUILDERS[topology.execution_type]
@@ -1629,18 +1621,8 @@ def _build_stage_config(
             stage_deploy,
             engine,
             model=model,
+            quantization_config=quantization_config,
         ),
-    )
-
-
-def _build_quantization_config(
-    deploy: DeployConfig,
-    engine: _QuantizationEngineOverrides,
-) -> _QuantizationConfigType:
-    return _first_defined(
-        engine.get("quantization_config"),
-        engine.get("quantization"),
-        deploy.quantization,
     )
 
 
@@ -1828,7 +1810,7 @@ def _build_diffusion_config_projection(
     engine: _DiffusionEngineOverrides,
     *,
     model: str | None,
-    quantization_config: _QuantizationConfigType,
+    quantization_config: QuantizationConfig | None,
 ) -> _DiffusionConfigProjection:
     diffusion_kwargs = engine.to_kwargs()
     diffusion_kwargs["stage_id"] = topology.stage_id
@@ -1901,6 +1883,16 @@ class VllmOmniConfig:
         deploy_by_id = {stage.stage_id: stage for stage in deploy.stages}
         model = cli_overrides.get("model")
 
+        # Quantization is pipeline-wide, so just build it upfront and pass it stage initializations.
+        quantization_config = build_quantization_config(
+            _first_defined(
+                cli_overrides.get("quantization_config"),
+                cli_overrides.get("quantization"),
+                deploy.quantization,
+            ),
+            read_checkpoint_quantization_config(model) if model else None,
+        )
+
         stage_configs = tuple(
             _build_stage_config(
                 pipeline_cfg,
@@ -1917,6 +1909,7 @@ class VllmOmniConfig:
                     ),
                 ),
                 model=model,
+                quantization_config=quantization_config,
             )
             for topology in pipeline_cfg.stages
         )

@@ -8,12 +8,16 @@ configs are registered into that registry by register_omni_quantization_configs(
 
 from __future__ import annotations
 
+import functools
 import sys
 from collections.abc import Mapping
 from types import ModuleType
 from typing import Any
 
 from vllm.logger import init_logger
+from vllm.transformers_utils.repo_utils import file_or_path_exists, get_hf_file_to_dict
+
+from vllm_omni.utils.model_source import materialize_object_storage_configs
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +385,23 @@ def build_quantization_config(
         set_quantization_method(spec, quantization)
         return quant_cls.from_config(spec)
     return quant_cls(**spec)
+
+
+@functools.cache
+def read_checkpoint_quantization_config(model: str) -> dict[str, Any] | None:
+    """Read a checkpoint's serialized quantization_config from config.json, or the
+    hf_quant_config.json sidecar (ModelOpt<=0.29)."""
+    source = materialize_object_storage_configs(model)
+    quant = None
+    if file_or_path_exists(source, "config.json", None):
+        quant = get_hf_file_to_dict("config.json", source, revision=None).get("quantization_config")
+    # See: https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/transformers_utils/config.py#L765
+    if quant is None and file_or_path_exists(source, "hf_quant_config.json", None):
+        quant = get_hf_file_to_dict("hf_quant_config.json", source, revision=None)
+
+    if quant is not None and not isinstance(quant, dict):
+        raise TypeError(f"quantization_config for {model!r} must be a dict or None, got {type(quant).__name__}")
+    return quant
 
 
 def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: QuantizationConfig) -> bool:
