@@ -67,7 +67,7 @@ from vllm_omni.entrypoints.stage_utils import resolve_stage_physical_devices
 from vllm_omni.entrypoints.utils import inject_omni_kv_config
 from vllm_omni.outputs.output_metadata import FinalOutputModalityType
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.quantization.factory import build_quantization_config
+from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
 
 logger = init_logger(__name__)
 
@@ -380,7 +380,7 @@ class StageRuntime:
             # to `quantization_config` for all engine types before this point.
             quantization_config = build_quantization_config(
                 quantization=stage_cfg.engine_args.get("quantization_config", None),
-                quant_config=getattr(self._hf_config, "quantization_config", None) if self._hf_config else None,
+                quant_config=read_checkpoint_quantization_config(self._model),
             )
             if quantization_config is not None:
                 logger.info("created quantization config of type: %s", type(quantization_config).__name__)
