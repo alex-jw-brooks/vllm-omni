@@ -11,12 +11,9 @@ from omegaconf import DictConfig, OmegaConf
 from vllm.logger import init_logger
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 
-<<<<<<< HEAD
-=======
 from vllm_omni.diffusion.data import parse_attention_config
 from vllm_omni.config.config_factory import (
     StageConfigFactory,
-    _materialize_object_storage_configs,
     _name_match_candidate,
     with_trust_remote_code_override,
 )
@@ -29,9 +26,13 @@ from vllm_omni.diffusion.utils.hf_utils import (
     get_diffusion_model_index,
     resolve_native_diffusion_model_class,
 )
->>>>>>> 9bd96d308 (integrate stage overrides)
 from vllm_omni.entrypoints.stage_utils import _to_dict
 from vllm_omni.inputs.data import OmniSamplingParams
+from vllm_omni.platforms import current_omni_platform
+from vllm_omni.utils.model_source import materialize_object_storage_configs
+
+# Get the project root directory (2 levels up from this file)
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 logger = init_logger(__name__)
 
@@ -281,7 +282,7 @@ def resolve_model_config_path(model: str) -> str | None:
     # each stage builds its ModelConfig, so config resolution here reads the
     # local copy that vLLM-Omni materializes for such URIs. Name-based
     # fallbacks keep the original string (the materialized path is a hash).
-    config_source = _materialize_object_storage_configs(model)
+    config_source = materialize_object_storage_configs(model)
     # Try to get config from standard transformers format first
     try:
         hf_config = get_config(config_source, trust_remote_code=True)

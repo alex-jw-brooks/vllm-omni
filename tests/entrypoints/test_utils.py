@@ -294,11 +294,156 @@ class TestFilterDataclassKwargs:
         assert result["cache_config"]["rel_l1_thresh"] == 0.3
         assert "extra_param" not in result["cache_config"]
 
+class TestResolveModelConfigPath:
+    """Test suite for resolve_model_config_path function with diffusers format models."""
 
-class TestResolveOmniConfig:
-    def test_bare_deploy_name_returns_packaged_resolved_path(self, tmp_path, mocker: MockerFixture):
-        deploy_name = "qwen3_omni_moe.yaml"
-        deploy_path = tmp_path / deploy_name
+    def test_glm_image_diffusers_format_resolution(self, mocker: MockerFixture):
+        """Test GlmImagePipeline diffusers class resolves to glm_image config."""
+        mocker.patch(
+            "vllm_omni.entrypoints.utils.file_or_path_exists",
+            return_value=True,
+        )
+        mocker.patch(
+            "vllm_omni.entrypoints.utils._try_get_class_name_from_diffusers_config",
+            return_value="GlmImagePipeline",
+        )
+        mocker.patch(
+            "vllm_omni.entrypoints.utils.current_omni_platform.get_default_stage_config_path",
+            return_value="vllm_omni/model_executor/stage_configs",
+        )
+
+        original_exists = os.path.exists
+
+        def mock_exists(path):
+            if "glm_image.yaml" in str(path):
+                return True
+            return original_exists(path)
+
+        mocker.patch("os.path.exists", side_effect=mock_exists)
+
+        result = resolve_model_config_path("zai-org/GLM-Image")
+
+        assert result is not None
+        assert "glm_image.yaml" in result
+
+    def test_uses_registry_default_deploy_when_hf_model_type_differs(
+        self,
+        mocker: MockerFixture,
+        tmp_path,
+    ):
+        from vllm_omni.config.stage_config import _DEPLOY_DIR as _REAL_DEPLOY_DIR
+        from vllm_omni.entrypoints import utils as utils_mod
+
+        hf_config = SimpleNamespace(
+            model_type="minicpmo",
+            architectures=["MiniCPMO"],
+            version="4.5",
+        )
+        model = "local/minicpmo-registry-default-test"
+        mocker.patch(
+            "vllm_omni.entrypoints.utils.get_config",
+            return_value=hf_config,
+        )
+        mocker.patch(
+            "vllm_omni.config.config_factory.get_config",
+            return_value=hf_config,
+        )
+        # A bare deploy/<hf_model_type>.yaml must not win over the registered
+        # pipeline default when HF model_type is not an OMNI_PIPELINES key.
+        (tmp_path / "minicpmo.yaml").write_text("stages: []\n", encoding="utf-8")
+        (tmp_path / "minicpmo_4_5.yaml").write_bytes((_REAL_DEPLOY_DIR / "minicpmo_4_5.yaml").read_bytes())
+        mocker.patch.object(utils_mod, "_DEPLOY_DIR", tmp_path)
+
+        result = resolve_model_config_path(model)
+
+        assert result is not None
+        assert Path(result).as_posix().endswith("minicpmo_4_5.yaml")
+        assert Path(result).name == "minicpmo_4_5.yaml"
+        transfer_config = load_omni_transfer_config_for_model(model, result)
+        assert transfer_config is not None
+
+        sender = get_stage_connector_spec(
+            omni_transfer_config=transfer_config,
+            stage_id=1,
+            async_chunk=True,
+        )
+        receiver = get_stage_connector_spec(
+            omni_transfer_config=transfer_config,
+            stage_id=2,
+            async_chunk=True,
+        )
+        assert sender["extra"]["role"] == "sender"
+        assert receiver["extra"]["role"] == "receiver"
+        assert sender["extra"]["connector_get_sleep_s"] == 0.01
+        assert sender["extra"]["connector_get_max_wait_first_chunk"] == 3000
+        assert sender["extra"]["connector_get_max_wait"] == 300
+
+    def test_object_storage_uri_resolves_via_materialized_configs(
+        self,
+        mocker: MockerFixture,
+        tmp_path,
+    ):
+        """An object-storage URI must not reach HF helpers; resolution reads the
+        locally materialized config files instead."""
+        hf_config = SimpleNamespace(
+            model_type="qwen3_omni_moe",
+            architectures=["Qwen3OmniMoeForConditionalGeneration"],
+        )
+        uri = "s3://qwen3-tts-models/Qwen3-Omni-30B-A3B-Instruct"
+        materialize = mocker.patch(
+            "vllm_omni.entrypoints.utils.materialize_object_storage_configs",
+            return_value=str(tmp_path),
+        )
+        get_config = mocker.patch(
+            "vllm_omni.entrypoints.utils.get_config",
+            return_value=hf_config,
+        )
+
+        result = resolve_model_config_path(uri)
+
+        materialize.assert_called_once_with(uri)
+        get_config.assert_called_once()
+        assert get_config.call_args[0][0] == str(tmp_path)
+        assert result is not None
+        assert Path(result).as_posix().endswith("qwen3_omni_moe.yaml")
+
+
+class TestTryResolveOmniModelType:
+    """Name matching must only scan the last path component."""
+
+    def test_uri_bucket_name_cannot_hijack_pipeline(self):
+        # "qwen3-tts-models" normalizes to "qwen3ttsmodels", which contains the
+        # registered key "qwen3tts" — only the basename may participate, so a
+        # misleadingly named bucket selects nothing.
+        assert _try_resolve_omni_model_type("s3://qwen3-tts-models/plain-checkpoint") is None
+
+    def test_basename_still_matches_pipeline(self):
+        assert _try_resolve_omni_model_type("gs://any-bucket/Fun-CosyVoice3-0.5B-2512") == "cosyvoice3"
+
+
+class TestLoadAndResolveStageConfigs:
+    def test_load_and_resolve_with_kwargs(self, mocker: MockerFixture):
+        """Ensure that kwargs survive default stage creation."""
+        engine_backend = "vllm_omni.experimental.ar_diffusion.engine.ARDiffusionEngine"
+        kwargs = {"dtype": torch.float32, "engine_backend": engine_backend}
+        kwargs["revision"] = "pinned-revision"
+        mocker.patch("vllm_omni.entrypoints.utils.resolve_model_config_path", return_value=None)
+        mocker.patch("vllm_omni.entrypoints.utils.load_stage_configs_from_model", return_value=([], None))
+
+        config_path, stage_configs, _ = load_and_resolve_stage_configs(
+            model="black-forest-labs/FLUX.2-klein-4B",
+            kwargs=kwargs,
+            trust_remote_code=False,
+            default_stage_cfg_factory=lambda: AsyncOmniEngine._create_default_diffusion_stage_cfg(kwargs),
+        )
+        assert config_path is None
+        assert len(stage_configs) == 1
+        assert "dtype" in stage_configs[0]["engine_args"]
+        assert stage_configs[0]["engine_args"]["engine_backend"] == engine_backend
+        assert stage_configs[0]["engine_args"]["revision"] == "pinned-revision"
+
+    def test_deploy_config_preserves_cli_overrides_and_replicas(self, tmp_path, mocker: MockerFixture):
+        deploy_path = tmp_path / "qwen3_multi.yaml"
         deploy_path.write_text(
             "duplex_session:\n  server_vad_model_path: /models/silero_vad.onnx\nstages: []\n",
             encoding="utf-8",
