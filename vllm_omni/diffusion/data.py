@@ -49,19 +49,24 @@ logger = init_logger(__name__)
 
 
 def normalize_omni_kwargs(kwargs: dict[str, Any], is_diffusion: bool) -> dict[str, Any]:
-    """Normalize legacy kwargs before config construction."""
-    config_kwargs = dict(kwargs)
+    """Normalize legacy diffusion kwargs before config construction and return a handle to the
+    normalized kwargs.
 
-    dtype = config_kwargs.get("dtype")
+    NOTE: This should be the only place we handle kwarg fallbacks/aliases so that we can
+    easily deprecate them for removal in future releases if needed.
+    """
+    normalized = dict(kwargs)
+
+    dtype = normalized.get("dtype")
     if dtype is None:
-        config_kwargs["dtype"] = "auto"
+        normalized["dtype"] = "auto"
     elif isinstance(dtype, torch.dtype):
-        config_kwargs["dtype"] = str(dtype).removeprefix("torch.")
+        normalized["dtype"] = str(dtype).removeprefix("torch.")
     elif not isinstance(dtype, str):
         raise TypeError(f"Provided dtype must be a string or torch.dtype, got {type(dtype).__name__}")
 
     # For quantization, map quantization -> quantization_config, regardless of type,
-    # so that we can can build out of the same field later.
+    # so that we can build out of the same field later.
     if "quantization" in normalized and normalized.get("quantization_config", None) is None:
         normalized["quantization_config"] = normalized.pop("quantization")
     else:
