@@ -1377,7 +1377,7 @@ def test_diffusion_config_field_classification_covers_current_fields():
 
 
 def test_diffusion_config_projection_rejects_unregistered_quantization_method():
-    """Ensure config projection requires a valid quantization method when built from kwargss."""
+    """Ensure config projection requires a valid quantization method when built from kwargs."""
     with pytest.raises(ValidationError, match="Unknown quantization method"):
         omni_config_module._DiffusionConfigProjection.from_kwargs(
             quantization_config={"method": "example_quant", "weights": "weights.bin"},

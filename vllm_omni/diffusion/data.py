@@ -47,12 +47,16 @@ logger = init_logger(__name__)
 
 
 def normalize_omni_kwargs(kwargs: dict[str, Any], is_diffusion: bool) -> dict[str, Any]:
-    """Normalize legacy diffusion kwargs before config construction and return
-    a handle to the normalized kwargs. If in_place is False, the dict will be copied."""
+    """Normalize legacy diffusion kwargs before config construction and return a handle to the
+    normalized kwargs.
+
+    NOTE: This should be the only place we handle kwarg fallbacks/aliases so that we can
+    easily deprecate them for removal in future releases if needed.
+    """
     normalized = dict(kwargs)
 
     # For quantization, map quantization -> quantization_config, regardless of type,
-    # so that we can can build out of the same field later.
+    # so that we can build out of the same field later.
     if "quantization" in normalized and normalized.get("quantization_config", None) is None:
         normalized["quantization_config"] = normalized.pop("quantization")
     else:
