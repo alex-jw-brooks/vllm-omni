@@ -1503,6 +1503,7 @@ def launch_headless_diffusion_replicas(
     omni_dp_size_local: int,
     per_replica_devices: list[str | None],
     config_path: str,
+    quantization_config: QuantizationConfig | None,
     replica_bind_address: str | None = None,
 ) -> None:
     """Prepare diffusion config, launch replicas, monitor, and clean up."""
@@ -1522,7 +1523,13 @@ def launch_headless_diffusion_replicas(
     # from the loaded deploy config so heterogeneous KV routing keys match the
     # head process (e.g. from_tp=2, to_tp=1).
     stage_init_utils.inject_kv_stage_info(stage_cfg, stage_id, stage_configs)
-    od_config = stage_init_utils.build_diffusion_config(model, hf_config, stage_cfg, metadata)
+    od_config = stage_init_utils.build_diffusion_config(
+        model,
+        hf_config,
+        stage_cfg,
+        metadata,
+        quantization_config,
+    )
 
     logger.info(
         "[Headless] Launching %d diffusion replica(s) for stage %d via OmniMasterServer at %s:%d",

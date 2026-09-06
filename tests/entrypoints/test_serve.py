@@ -9,6 +9,7 @@ import argparse
 from types import SimpleNamespace
 
 import pytest
+from omegaconf import DictConfig, OmegaConf
 from pytest_mock import MockerFixture
 
 from vllm_omni.config.resolver import OmniConfigResolution
@@ -178,6 +179,7 @@ def _make_headless_args(*, explicit_keys: frozenset[str] | None = None, **kwargs
         "disable_log_stats": False,
         "stage_init_timeout": 600,
         "tokenizer": None,
+        "trust_remote_code": False,
     }
     ns_kwargs = {**defaults, **kwargs}
     ns = argparse.Namespace(**ns_kwargs)
@@ -389,20 +391,22 @@ def test_run_headless_raises_when_stage_id_not_in_configs(mocker: MockerFixture)
 # ---------------------------------------------------------------------------
 
 
-def _make_stage_cfg(stage_id: int, stage_type: str) -> SimpleNamespace:
+def _make_stage_cfg(stage_id: int, stage_type: str) -> DictConfig:
     """Build a stage config that satisfies every attribute run_headless reads.
 
     Notably ``engine_args`` is a real dict (not a Mock) so
     ``get_stage_devices_per_replica`` can call ``.get("tensor_parallel_size")``
     and feed the result through ``int()`` without TypeError.
     """
-    return SimpleNamespace(
-        stage_id=stage_id,
-        stage_type=stage_type,
-        # No "devices" key -> split_devices_for_replicas skipped, each replica
-        # inherits the launcher's CUDA_VISIBLE_DEVICES.
-        runtime=None,
-        engine_args={},
+    return OmegaConf.create(
+        {
+            "stage_id": stage_id,
+            "stage_type": stage_type,
+            # No "devices" key -> split_devices_for_replicas skipped, each replica
+            # inherits the launcher's CUDA_VISIBLE_DEVICES.
+            "runtime": None,
+            "engine_args": {},
+        }
     )
 
 
@@ -427,6 +431,7 @@ def test_run_headless_llm_registers_with_auto_assigned_replica_id(mocker: Mocker
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
+    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -507,6 +512,7 @@ def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(mocker: Mo
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
+    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -566,6 +572,7 @@ def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture)
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
+    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -646,6 +653,7 @@ def test_run_headless_diffusion_raises_on_nonzero_proc_exit(mocker: MockerFixtur
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
+    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(

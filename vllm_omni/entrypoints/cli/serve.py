@@ -25,6 +25,8 @@ from vllm.logger import init_logger
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
 from vllm_omni.entrypoints.utils import parse_stage_overrides
+from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides
+from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 logger = init_logger(__name__)
@@ -1065,6 +1067,13 @@ def run_headless(args: TrackingNamespace) -> None:
             f"No stage config found for stage_id={stage_id}. Available stage ids: {[c.stage_id for c in stage_configs]}"
         ) from None
 
+    # TODO: We can probably unify this a bit more cleanly with the non-headless path
+    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(stage_cfg, args_dict)
+    quantization_config = build_quantization_config(
+        stage_cfg.engine_args.get("quantization_config"),
+        read_checkpoint_quantization_config(model),
+    )
+
     prepare_engine_environment()
     per_replica_devices = get_headless_replica_devices(stage_cfg, stage_id, omni_dp_size_local)
     # NOTE: We need to get the hf config early to resolve the pipeline config anyway,
@@ -1084,6 +1093,7 @@ def run_headless(args: TrackingNamespace) -> None:
             omni_dp_size_local=omni_dp_size_local,
             per_replica_devices=per_replica_devices,
             config_path=cast(str, config_path),
+            quantization_config=quantization_config,
             replica_bind_address=omni_replica_address,
         )
         return
@@ -1119,6 +1129,7 @@ def run_headless(args: TrackingNamespace) -> None:
         stage_connector_spec=stage_connector_spec,
         engine_args_dict=engine_args_dict,
         headless=True,
+        quantization_config=quantization_config,
     )
     parallel_config = vllm_config.parallel_config
 
