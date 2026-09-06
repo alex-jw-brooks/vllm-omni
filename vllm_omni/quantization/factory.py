@@ -128,42 +128,30 @@ def register_omni_quantization_configs() -> None:
         int8_config,
         mxfp4_config,
         mxfp8_config,
+        torchao_config,
     )
 
 
 # Omni configs registered into vLLM's registry. Static so membership/count is
 # independent of when registration fires; auto-round spellings alias to inc.
-'''
-TODO: We need to handle torchao builders properly
-
-
-def _build_torchao(**kw: Any) -> QuantizationConfig:
-    """Build a TorchAO runtime or serialized-checkpoint config."""
-    from vllm.model_executor.layers.quantization.torchao import TorchAOConfig
-
-    if "quant_type" in kw:
-        return TorchAOConfig.from_config({**kw, "quant_method": "torchao"})
-    return TorchAOConfig(**kw)
-
-
-def _build_torchao_float8_weight_only(**kw: Any) -> QuantizationConfig:
-    """Build the serialized TorchAO FP8 weight-only checkpoint config."""
-    from torchao.quantization import Float8WeightOnlyConfig
-
-    return _build_torchao(
-        torchao_config=Float8WeightOnlyConfig(
-            set_inductor_config=False,
-        ),
-        is_checkpoint_torchao_serialized=True,
-    )
-'''
-_OMNI_QUANT_METHODS = ("int8", "bitsandbytes", "mxfp8", "mxfp4", "mxfp4_dualscale", "svdquant", "inc", "auto-round", "auto_round", "torchao", "torchao_float8_weight_only")
+_OMNI_QUANT_METHODS = (
+    "int8",
+    "bitsandbytes",
+    "mxfp8",
+    "mxfp4",
+    "mxfp4_dualscale",
+    "svdquant",
+    "inc",
+    "auto-round",
+    "auto_round",
+    "torchao",
+    "torchao_float8_weight_only",
+)
 SUPPORTED_QUANTIZATION_METHODS: list[str] = list(dict.fromkeys([*QUANTIZATION_METHODS, *_OMNI_QUANT_METHODS]))
 
 _QUANT_METHOD_ALIASES = {"auto-round": "inc", "auto_round": "inc"}
 
 
-####### FIXME - this is not amazing, for now moving this here as a hack since it's duplicated
 _GENERIC_FP8_NAMES = frozenset({"fp8"})
 _GENERIC_NVFP4_NAMES = frozenset({"fp4", "nvfp4", "modelopt_fp4"})
 

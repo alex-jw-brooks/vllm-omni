@@ -792,7 +792,7 @@ class _DiffusionConfigProjection:
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> _DiffusionConfigProjection:
-        from vllm_omni.diffusion.data import normalize_omni_diffusion_kwargs
+        from vllm_omni.diffusion.data import normalize_omni_kwargs
         from vllm_omni.diffusion.offloader.config import parse_diffusion_offload_config
 
         normalized_kwargs = normalize_omni_kwargs(kwargs, is_diffusion=True)

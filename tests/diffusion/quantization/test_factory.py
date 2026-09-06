@@ -22,6 +22,7 @@ from vllm_omni.quantization.mxfp4_config import (
     DiffusionMXFP4DualScaleMixedConfig,
 )
 from vllm_omni.quantization.mxfp8_config import DiffusionMXFP8Config
+from vllm_omni.quantization.torchao_config import OmniTorchAOConfig, OmniTorchAOFloat8WeightOnlyConfig
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
@@ -34,6 +35,8 @@ _CANONICAL_METHOD_TO_CLASS = {
     "mxfp4": DiffusionMXFP4Config,
     "mxfp4_dualscale": DiffusionMXFP4DualScaleMixedConfig,
     "inc": OmniINCConfig,
+    "torchao": OmniTorchAOConfig,
+    "torchao_float8_weight_only": OmniTorchAOFloat8WeightOnlyConfig,
 }
 
 # AutoRound checkpoints are NOT registered as names (matching vLLM, which keeps

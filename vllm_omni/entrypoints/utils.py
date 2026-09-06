@@ -15,7 +15,6 @@ from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.transformers_utils.config import get_config, get_hf_file_to_dict
 from vllm.transformers_utils.repo_utils import file_or_path_exists
 
-from vllm_omni.diffusion.data import parse_attention_config
 from vllm_omni.config.config_factory import (
     StageConfigFactory,
     _name_match_candidate,
@@ -24,7 +23,7 @@ from vllm_omni.config.config_factory import (
 from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
 from vllm_omni.config.stage_config import _DEPLOY_DIR
 from vllm_omni.config.yaml_util import create_config, load_yaml_config
-from vllm_omni.diffusion.data import normalize_omni_kwargs
+from vllm_omni.diffusion.data import normalize_omni_kwargs, parse_attention_config
 from vllm_omni.diffusion.utils.hf_utils import (
     _looks_like_dreamzero,
     get_diffusion_model_index,
@@ -671,6 +670,7 @@ def load_and_resolve_stage_configs(
 
     return config_path, stage_configs, omni_lb_policy
 
+
 # Kwargs for diffusion to directly copy over into the engine args;
 # Note that this excludes kwargs that have any kind of builder utils,
 # e.g., for attention.
@@ -697,12 +697,11 @@ def _apply_stage_engine_arg_overrides(
     since we already have the HF config from resolving the PipelineConfig, and just pass the
     quant config per type to the engine args.
     """
-    is_diffusion = getattr(stage_config, "stage_type", None) == "diffusion"
+    is_diffusion = stage_config.stage_type == "diffusion"
 
     if is_diffusion:
         if stage_config.engine_args is None:
             stage_config.engine_args = OmegaConf.create({})
-
 
         diff_attn_config = getattr(stage_config.engine_args, "diffusion_attention_config", None)
         diff_attn_backend = getattr(stage_config.engine_args, "diffusion_attention_backend", None)
