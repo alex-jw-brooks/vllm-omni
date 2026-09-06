@@ -676,7 +676,9 @@ def _apply_stage_engine_arg_overrides(
                 stage_config.engine_args[name] = val
 
         # TODO (Alex) deprecate static_lora_scale alias
-        lora_scale = kwargs.get("lora_scale") or kwargs.get("static_lora_scale")
+        lora_scale = kwargs.get("lora_scale")
+        if lora_scale is None:
+            lora_scale = kwargs.get("static_lora_scale")
         if lora_scale is not None and getattr(stage_config.engine_args, "lora_scale", None) is None:
             stage_config.engine_args.lora_scale = lora_scale
 

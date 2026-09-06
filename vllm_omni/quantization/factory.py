@@ -128,6 +128,7 @@ def register_omni_quantization_configs() -> None:
         int8_config,
         mxfp4_config,
         mxfp8_config,
+        svdquant_config,
         torchao_config,
     )
 
@@ -265,9 +266,33 @@ def _is_per_component_dict(spec: dict[str, Any]) -> bool:
     """
     if METHOD_KEY in spec or QUANT_METHOD_KEY in spec:
         return False
-    if not all(isinstance(v, (dict, str, type(None))) for v in spec.values()):
+    if not all(isinstance(v, (dict, str, QuantizationConfig, type(None))) for v in spec.values()):
         return False
-    return any(v is None or (isinstance(v, dict) and (METHOD_KEY in v or QUANT_METHOD_KEY in v)) for v in spec.values())
+    return any(
+        v is None
+        or isinstance(v, QuantizationConfig)
+        or (isinstance(v, dict) and (METHOD_KEY in v or QUANT_METHOD_KEY in v))
+        for v in spec.values()
+    )
+
+
+def _validate_method_consistency(
+    quantization: str | Mapping[str, Any],
+    quant_config: Mapping[str, Any] | None,
+) -> None:
+    """Reject disagreement between an explicit method and checkpoint metadata."""
+    if quant_config is None:
+        return
+    explicit = quantization if isinstance(quantization, str) else get_quantization_method(quantization)
+    checkpoint = get_quantization_method(quant_config)
+    if (
+        explicit is not None
+        and checkpoint is not None
+        and _normalize_quant_method_alias(explicit) != _normalize_quant_method_alias(checkpoint)
+    ):
+        raise ValueError(
+            f"Explicit quantization method {explicit!r} conflicts with checkpoint quantization method {checkpoint!r}."
+        )
 
 
 def _maybe_build_component_quant_config(
@@ -320,6 +345,9 @@ def build_quantization_config(
             quantization = get_quantization_method(quant_config)
         if quantization is None:
             return None
+    else:
+        # Otherwise, we need to make sure it agrees with potential quant info in the checkpoint
+        _validate_method_consistency(quantization, quant_config)
 
     # Since we need to build a quant config, ensure Omni quant defs are registered
     register_omni_quantization_configs()

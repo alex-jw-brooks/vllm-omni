@@ -91,6 +91,7 @@ def _runtime(parallel_stage_init: bool = False) -> StageRuntime:
         stage_configs=[],
         model="dummy",
         config_path="dummy",
+        hf_config=None,
         stage_init_timeout=5,
         async_chunk=False,
         parallel_stage_init=parallel_stage_init,
@@ -99,6 +100,7 @@ def _runtime(parallel_stage_init: bool = False) -> StageRuntime:
 
 def _fake_vllm_config(util: float, *, model="m", dtype="bf16", cudagraph_mode="FULL", capture_sizes=(1, 2, 4)):
     return types.SimpleNamespace(
+        quant_config=None,
         cache_config=types.SimpleNamespace(gpu_memory_utilization=util),
         model_config=types.SimpleNamespace(model=model, dtype=dtype, enforce_eager=False),
         compilation_config=types.SimpleNamespace(
@@ -522,6 +524,7 @@ def test_parallel_init_refuses_unguardable_parallel_config(use_ray, nnodes, reas
     """The config guard also covers non-Ray executors spread across nodes."""
     runtime = _runtime(parallel_stage_init=True)
     vllm_config = types.SimpleNamespace(
+        quant_config=None,
         parallel_config=types.SimpleNamespace(use_ray=use_ray, nnodes=nnodes),
     )
     replica = _llm_replica(0, 0, "0", vllm_config=vllm_config)
