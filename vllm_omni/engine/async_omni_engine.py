@@ -1071,15 +1071,10 @@ class AsyncOmniEngine:
         # rather than as a per-stage config field.
         self._apply_strategy_lb_policy(strategy_lb_policy, kwargs)
 
-<<<<<<< HEAD
-        # Inject diffusion LoRA-related knobs from kwargs if not present in the stage config.
-=======
->>>>>>> 619077925 (fix engine arg building)
         for cfg in stage_configs:
             cfg["engine_args"] = _apply_stage_engine_arg_overrides(cfg, kwargs)
 
         return config_path, stage_configs
->>>>>>> 340f31dfd (wip simplifying engine arg building)
 
     # ==================== Public API ====================
 

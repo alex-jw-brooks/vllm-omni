@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
-from types import SimpleNamespace
-
 import pytest
 import torch
 from pydantic import ValidationError
+from omegaconf import OmegaConf
 
 from vllm_omni.config.config_factory import StageConfigFactory
 from vllm_omni.config.resolver import OmniConfigResolution
@@ -503,9 +502,12 @@ def test_invalid_diffusion_offload_config_fails_before_model_loading(monkeypatch
         stage_init_utils.initialize_diffusion_stage(
             stage_id=0,
             model="test",
+            hf_config=None,
             stage_cfg=object(),
             metadata=mocker.Mock(),
             stage_init_timeout=30,
+            use_inline=False,
+            quantization_config=None,
         )
 
     create_client.assert_not_called()
@@ -680,6 +682,80 @@ def test_resolve_stage_configs_delegates_overrides_to_resolver(mocker):
             stage_configs=(fake_diffusion_stage,),
         ),
     )
+    assert stage_configs == [fake_diffusion_stage]
+    assert resolve_config.call_args.args == ("dummy-model",)
+    assert resolve_config.call_args.kwargs["deploy_config_path"] == "dummy.yaml"
+    assert resolve_config.call_args.kwargs["cli_overrides"]["additional_config"] is additional_config
+
+
+def test_default_stage_resolves_video_output_from_checkpoint(mocker):
+    captured = {}
+
+    def resolve_with_default(*args, default_stage_cfg_factory, **kwargs):
+        del args, kwargs
+        stage_configs = default_stage_cfg_factory()
+        captured.update(stage_configs[0])
+        return "", OmegaConf.create(stage_configs), None
+
+    resolver = mocker.patch(
+        "vllm_omni.engine.async_omni_engine.resolve_model_class_name",
+        return_value="MiniMaxH3Pipeline",
+    )
+    mocker.patch(
+        "vllm_omni.engine.async_omni_engine.load_and_resolve_stage_configs",
+        side_effect=resolve_with_default,
+    )
+    engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
+    engine._strip_single_engine_args = lambda kwargs: kwargs
+
+    engine._resolve_stage_configs(
+        "/models/MiniMax-H3/FL2VA",
+        {},
+        trust_remote_code=False,
+    )
+
+    resolver.assert_called_once_with("/models/MiniMax-H3/FL2VA", "default")
+    assert captured["final_output_type"] == "video"
+
+
+def test_default_diffusers_stage_preserves_video_model_identity(mocker):
+    captured = {}
+
+    def resolve_with_default(*args, default_stage_cfg_factory, **kwargs):
+        del args, kwargs
+        stage_configs = default_stage_cfg_factory()
+        captured.update(stage_configs[0])
+        return "", OmegaConf.create(stage_configs), None
+
+    mocker.patch(
+        "vllm_omni.diffusion.utils.hf_utils.get_diffusion_model_index",
+        return_value={"_class_name": "WanImageToVideoPipeline"},
+    )
+    mocker.patch(
+        "vllm_omni.engine.async_omni_engine.load_and_resolve_stage_configs",
+        side_effect=resolve_with_default,
+    )
+    engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
+    engine._strip_single_engine_args = lambda kwargs: kwargs
+
+    engine._resolve_stage_configs(
+        "/models/Wan2.2-I2V",
+        {"diffusion_load_format": "diffusers"},
+        trust_remote_code=False,
+    )
+
+    assert captured["engine_args"]["model_class_name"] == "WanImageToVideoPipeline"
+    assert captured["final_output_type"] == "video"
+
+
+def test_resolve_stage_configs_injects_additional_config_into_diffusion_stage(mocker):
+    """Ensure YAML/deploy stage resolution forwards top-level additional_config."""
+    fake_diffusion_stage = OmegaConf.create({"stage_type": "diffusion", "engine_args": {}})
+    fake_llm_stage = OmegaConf.create({"stage_type": "llm", "engine_args": {}})
+    mocker.patch(
+        "vllm_omni.engine.async_omni_engine.load_and_resolve_stage_configs",
+        return_value=("dummy.yaml", [fake_llm_stage, fake_diffusion_stage], None),
+    )
 
     engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
 
@@ -692,10 +768,8 @@ def test_resolve_stage_configs_delegates_overrides_to_resolver(mocker):
         trust_remote_code=False,
     )
 
-    assert stage_configs == [fake_diffusion_stage]
-    assert resolve_config.call_args.args == ("dummy-model",)
-    assert resolve_config.call_args.kwargs["deploy_config_path"] == "dummy.yaml"
-    assert resolve_config.call_args.kwargs["cli_overrides"]["additional_config"] is additional_config
+    assert "additional_config" not in stage_configs[0]["engine_args"]
+    assert stage_configs[1]["engine_args"]["additional_config"] == {"torchair_graph_config": {"enabled": True}}
 
 
 @pytest.mark.parametrize(
