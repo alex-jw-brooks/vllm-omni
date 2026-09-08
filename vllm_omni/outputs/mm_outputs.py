@@ -218,7 +218,11 @@ class MultimodalPayload(Mapping):
         return cls(tensors=tensors, metadata=metadata)
 
     @classmethod
-    def from_raw(cls, payload: Any, modality_key: str) -> MultimodalPayload | None:
+    def from_raw(
+        cls,
+        payload: MultimodalPayload | Mapping[str, object] | torch.Tensor,
+        modality_key: str,
+    ) -> MultimodalPayload | None:
         """Create a MultimodalPayload from a raw producer payload.
 
         Accepts a MultimodalPayload (returned as-is), a dict, or a bare
@@ -229,11 +233,10 @@ class MultimodalPayload(Mapping):
         """
         if isinstance(payload, MultimodalPayload):
             return payload
-
-        if not isinstance(payload, dict):
+        if isinstance(payload, torch.Tensor):
             return cls.from_dict({modality_key: _to_cpu(payload)})
 
-        remapped: dict[str, Any] = {}
+        remapped: dict[str, object] = {}
         for key, value in payload.items():
             is_producer_key = key == "model_outputs" or (key == "hidden" and modality_key != "hidden")
             remapped[modality_key if is_producer_key else key] = _to_cpu(value)

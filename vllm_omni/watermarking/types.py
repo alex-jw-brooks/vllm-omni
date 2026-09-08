@@ -8,7 +8,7 @@ import torch
 
 @dataclass(frozen=True)
 class AudioTensor:
-    """Normalized float audio shaped `[batch, channels, samples]`."""
+    """Normalized float audio with its sample rate."""
 
     samples: torch.Tensor
     sample_rate: int

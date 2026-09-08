@@ -256,6 +256,9 @@ class FakeOutputProcessor:
             reqs_to_abort=[],
         )
 
+    async def process_outputs_async(self, *args, **kwargs):
+        return self.process_outputs(*args, **kwargs)
+
     def abort_requests(self, request_ids, internal: bool = False):
         aborted_ids, _outputs = self.abort_requests_collecting_outputs(request_ids, internal=internal)
         return aborted_ids
@@ -283,6 +286,12 @@ class FakeOutputProcessor:
                 )
             )
         return ids, outputs
+
+    async def abort_requests_collecting_outputs_async(self, *args, **kwargs):
+        return self.abort_requests_collecting_outputs(*args, **kwargs)
+
+    async def commit_aborted_request_state_async(self, *_args, **_kwargs) -> None:
+        return None
 
     def update_scheduler_stats(self, _scheduler_stats) -> None:
         return None
@@ -2639,6 +2648,41 @@ async def test_stage_pool_process_llm_raw_outputs_mutates_iteration_stats() -> N
     await pool.process_llm_raw_outputs(0, raw_outputs, iteration_stats=iteration_stats)
 
     assert iteration_stats.num_generation_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_stage_pool_uses_async_output_processor_for_llm_stages() -> None:
+    """Ensure that we use async output processing where it's available."""
+
+    class AsyncOutputProcessor(FakeOutputProcessor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.async_called = False
+
+        def process_outputs(self, *_args, **_kwargs):
+            raise AssertionError("synchronous output processing used")
+
+        async def process_outputs_async(self, *_args, **_kwargs):
+            self.async_called = True
+            return SimpleNamespace(request_outputs=[], reqs_to_abort=[])
+
+    client = FakeStageClient(stage_type="llm", final_output=True)
+    processor = AsyncOutputProcessor()
+    pool = StagePool(
+        0,
+        [client],
+        output_processor=processor,
+        stage_vllm_config=SimpleNamespace(model_config=SimpleNamespace(max_model_len=64)),
+    )
+
+    await pool.process_llm_raw_outputs(
+        0,
+        SimpleNamespace(outputs=["raw"], timestamp=1.0, scheduler_stats=None),
+    )
+
+    # Ensure that we call the async output processor so that potentially heavy
+    # post processing, e.g., audio watermarking, does not block the output loop
+    assert processor.async_called
 
 
 @pytest.mark.asyncio

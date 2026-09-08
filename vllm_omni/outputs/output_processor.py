@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
-from collections.abc import Iterable
+import asyncio
+from collections.abc import Iterable, Mapping
 from dataclasses import fields as dataclass_fields
 from typing import Any
 
@@ -21,6 +22,7 @@ from vllm.v1.engine.parallel_sampling import ParentRequest
 from vllm.v1.metrics.stats import IterationStats, RequestStateStats
 
 from vllm_omni.data_entry_keys import unflatten_payload
+from vllm_omni.engine import OmniEngineCoreOutput
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.outputs.mm_outputs import MultimodalCompletionOutput, MultimodalPayload
 from vllm_omni.outputs.multimodal_accumulation import (
@@ -29,6 +31,7 @@ from vllm_omni.outputs.multimodal_accumulation import (
     replace_snapshot_keys,
 )
 from vllm_omni.outputs.output_modality import OutputModality, get_accumulation_strategy
+from vllm_omni.watermarking import AudioSealWatermarker
 
 logger = init_logger(__name__)
 
@@ -99,13 +102,16 @@ class OmniRequestState(RequestState):
         super().apply_streaming_update(update)
         self.native_text_stats = RequestStateStats(arrival_time=float(update.arrival_time or 0.0))
 
-    def add_multimodal_tensor(self, payload: Any | None, mm_type: str | None) -> None:
+    def add_multimodal_tensor(
+        self,
+        payload: MultimodalPayload | Mapping[str, object] | None,
+        mm_type: str | None,
+    ) -> None:
         """Accumulate a multimodal tensor payload into the request state.
 
-        Normalizes incoming payloads (dict or raw tensor) into a
-        MultimodalPayload and merges with any previously accumulated data.
-        Uses list-based deferred concatenation to avoid O(n²) repeated
-        torch.cat calls.
+        Normalizes incoming payload mappings into a MultimodalPayload and
+        merges with any previously accumulated data. Uses list-based deferred
+        concatenation to avoid O(n²) repeated torch.cat calls.
         """
         if payload is None:
             return
@@ -372,7 +378,8 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
 
     The data flow is:
     1. For each EngineCoreOutput with multimodal_output:
-       - Capture into OmniRequestState.add_multimodal_tensor()
+       - Normalize and watermark the generated media
+       - Capture it in OmniRequestState
     2. Base vLLM OutputProcessor handles text detokenization
     3. On finish, _consolidate_multimodal_tensors() concatenates accumulated
        tensors using strategy-based dispatch
@@ -416,6 +423,87 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
             self.output_modality = output_modality
         self.engine_core_output_type = engine_core_output_type
         self._native_text_metrics_by_request: dict[str, dict[str, Any]] = {}
+
+        # TODO: Initialize watermarkers with other model resources during engine load.
+        self._watermark_lock = asyncio.Lock()
+        self._watermarkers: dict[str, AudioSealWatermarker] = {}
+        if OutputModality.AUDIO in self.output_modality:
+            self._watermarkers["audio"] = AudioSealWatermarker()
+            logger.info("Audio watermarking enabled")
+
+    def _apply_watermark(
+        self,
+        request_id: str,
+        payload: MultimodalPayload | Mapping[str, object],
+        mm_type: str,
+    ) -> MultimodalPayload | None:
+        """Normalize and watermark one multimodal output chunk."""
+        incoming = MultimodalPayload.from_raw(payload, mm_type)
+        modality = mm_type.lower()
+        watermarker = self._watermarkers.get(modality)
+        if incoming is None or watermarker is None:
+            return incoming
+        if modality not in incoming.tensors:
+            raise ValueError(f"{modality} output is missing its media tensor")
+        incoming.tensors[modality] = watermarker.watermark_output(
+            request_id,
+            incoming.tensors[modality],
+            incoming,
+        )
+        return incoming
+
+    def _discard_watermark_state(self, request_id: str) -> None:
+        """Release per-request state from every configured watermarker."""
+        for watermarker in self._watermarkers.values():
+            watermarker.discard_request_state(request_id)
+
+    def _prepare_watermark_outputs(
+        self,
+        engine_core_outputs: list[EngineCoreOutput],
+        request_ids: set[str],
+    ) -> list[MultimodalPayload | None]:
+        """Watermark media without mutating output-processor request state."""
+        default_mm_type = _modality_to_type_string(self.output_modality)
+        prepared: list[MultimodalPayload | None] = [None] * len(engine_core_outputs)
+        for index, eco in enumerate(engine_core_outputs):
+            request_id = eco.request_id
+            if request_id not in request_ids:
+                continue
+            payload = eco.multimodal_output if isinstance(eco, OmniEngineCoreOutput) else None
+            if payload is None:
+                continue
+            try:
+                prepared[index] = self._apply_watermark(request_id, payload, default_mm_type)
+            except (RuntimeError, TypeError, ValueError):
+                logger.exception("Failed to watermark %s output for request %s", default_mm_type, request_id)
+                self._discard_watermark_state(request_id)
+                prepared[index] = MultimodalPayload.from_raw(payload, default_mm_type)
+        return prepared
+
+    def _finish_request(self, req_state: RequestState) -> None:
+        """Release watermarking state before upstream request cleanup."""
+        self._discard_watermark_state(req_state.request_id)
+        super()._finish_request(req_state)
+
+    async def abort_requests_collecting_outputs_async(
+        self,
+        request_ids: Iterable[str],
+        *,
+        internal: bool,
+        commit_state: bool = True,
+    ) -> tuple[list[str], list[RequestOutput | PoolingRequestOutput]]:
+        """Serialize request abort with asynchronous watermarking."""
+        async with self._watermark_lock:
+            return self.abort_requests_collecting_outputs(
+                request_ids,
+                internal=internal,
+                commit_state=commit_state,
+            )
+
+    async def commit_aborted_request_state_async(self, request_ids: Iterable[str], *, internal: bool) -> None:
+        """Serialize abort commit with asynchronous watermarking."""
+        async with self._watermark_lock:
+            self.commit_aborted_request_state(request_ids, internal=internal)
 
     def _native_text_metric_record(self, request_id: str) -> dict[str, Any]:
         return self._native_text_metrics_by_request.setdefault(
@@ -496,6 +584,7 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
             )
             if req_state is not None:
                 if commit_state:
+                    self._discard_watermark_state(request_id)
                     self.lora_states.request_finished(request_id, req_state.lora_name)
                 request_ids_to_abort.append(request_id)
                 original_kind = req_state.output_kind
@@ -572,6 +661,7 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
         for request_id in internal_req_ids:
             req_state = self.request_states.pop(request_id, None)
             if req_state is not None:
+                self._discard_watermark_state(request_id)
                 self.lora_states.request_finished(request_id, req_state.lora_name)
                 parent_req = req_state.parent_req
                 if parent_req is not None:
@@ -646,12 +736,37 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
         if parent_req is not None:
             self.parent_requests.pop(parent_req.request_id, None)
 
-    def process_outputs(
+    # NOTE: StagePool routes every LLM endpoint through this async entrypoint.
+    # Keep watermark inference off-loop; remaining state updates stay on-loop.
+    async def process_outputs_async(
         self,
         engine_core_outputs: list[EngineCoreOutput],
         engine_core_timestamp: float | None = None,
         iteration_stats: IterationStats | None = None,
     ) -> OutputProcessorOutput:
+        """Offload watermark inference while preserving output order."""
+        async with self._watermark_lock:
+            request_ids = set(self.request_states)
+            prepared = await asyncio.to_thread(
+                self._prepare_watermark_outputs,
+                engine_core_outputs,
+                request_ids,
+            )
+            return self._process_prepared_outputs(
+                engine_core_outputs,
+                prepared,
+                engine_core_timestamp,
+                iteration_stats,
+            )
+
+    def _process_prepared_outputs(
+        self,
+        engine_core_outputs: list[EngineCoreOutput],
+        prepared: list[MultimodalPayload | None],
+        engine_core_timestamp: float | None,
+        iteration_stats: IterationStats | None,
+    ) -> OutputProcessorOutput:
+        """Process outputs after watermark inference completes."""
         default_mm_type = _modality_to_type_string(self.output_modality)
 
         # Separate outputs that upstream can handle (has detokenizer or
@@ -660,17 +775,15 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
         upstream_outputs: list[EngineCoreOutput] = []
         mm_only_outputs: list[EngineCoreOutput] = []
 
-        for eco in engine_core_outputs:
+        for eco, incoming in zip(engine_core_outputs, prepared, strict=True):
             req_state = self.request_states.get(eco.request_id)
             if req_state is None:
                 continue
 
-            # Accumulate multimodal tensors regardless of path.
             if isinstance(req_state, OmniRequestState):
-                mm_output = getattr(eco, "multimodal_output", None)
+                mm_output = eco.multimodal_output if isinstance(eco, OmniEngineCoreOutput) else None
                 if mm_output is not None:
-                    mm_type = getattr(eco, "output_type", None) or default_mm_type
-                    req_state.add_multimodal_tensor(mm_output, mm_type)
+                    req_state.add_multimodal_tensor(incoming, default_mm_type)
 
             # Route: if no detokenizer and no pooling output, handle locally
             # to avoid upstream's assert on detokenizer.
@@ -717,7 +830,7 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
             finish_reason = eco.finish_reason
             stop_reason = eco.stop_reason
             kv_transfer_params = eco.kv_transfer_params
-            ec_transfer_params = getattr(eco, "ec_transfer_params", None)
+            ec_transfer_params = eco.ec_transfer_params
             routed_experts = eco.routed_experts
             self._update_stats_from_output(
                 req_state,
@@ -725,7 +838,7 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
                 engine_core_timestamp,
                 iteration_stats,
             )
-            prefill_stats = getattr(eco, "prefill_stats", None)
+            prefill_stats = eco.prefill_stats
             if prefill_stats is not None:
                 req_state.num_cached_tokens = prefill_stats.num_cached_tokens
                 req_state.num_cache_creation_tokens = prefill_stats.num_cache_creation_tokens
@@ -750,7 +863,7 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
                 else:
                     request_outputs.append(request_output)
 
-            is_segment_finished = bool(getattr(eco, "is_segment_finished", False))
+            is_segment_finished = isinstance(eco, OmniEngineCoreOutput) and bool(eco.is_segment_finished)
             if finish_reason is not None and not is_segment_finished and not is_non_final_audio_chunk:
                 self._finish_request(req_state)
                 self._update_stats_from_finished(

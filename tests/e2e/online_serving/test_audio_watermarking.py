@@ -9,7 +9,6 @@ import pytest
 import requests
 import soundfile
 import torch
-import torchaudio
 
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServerParams
@@ -73,8 +72,5 @@ def test_tts_audio_is_watermarked(
 
     audio, sample_rate = soundfile.read(BytesIO(content), dtype="float32", always_2d=True)
     samples = torch.from_numpy(audio.T.copy()).unsqueeze(0)
-    if sample_rate != 16_000:
-        samples = torchaudio.functional.resample(samples, sample_rate, 16_000)
-        sample_rate = 16_000
 
     assert audio_watermarker.is_watermarked(AudioTensor(samples, sample_rate))

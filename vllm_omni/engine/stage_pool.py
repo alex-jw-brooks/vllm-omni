@@ -1140,7 +1140,7 @@ class StagePool:
             return []
         client = cast(StagePoolLLMClient, raw_client)
         processor = self.output_processor
-        processed = processor.process_outputs(
+        processed = await processor.process_outputs_async(
             raw_outputs.outputs,
             raw_outputs.timestamp,
             iteration_stats,
@@ -1152,6 +1152,7 @@ class StagePool:
 
         if processed.reqs_to_abort:
             await client.abort_requests_async(processed.reqs_to_abort)
+            await processor.commit_aborted_request_state_async(processed.reqs_to_abort, internal=True)
 
         if raw_outputs.scheduler_stats is not None:
             processor.update_scheduler_stats(raw_outputs.scheduler_stats)
@@ -1231,33 +1232,28 @@ class StagePool:
             # still surface EngineCore/internal ids and would drop the prefix.
             engine_abort_ids = list(replica_request_ids)
             if not is_diffusion and self._output_processor is not None:
-                collect = getattr(self._output_processor, "abort_requests_collecting_outputs", None)
-                if collect is not None:
-                    engine_abort_ids = []
-                    for orch_req_id in replica_request_ids:
-                        collected_ids, stage_outputs = collect(
-                            [orch_req_id],
-                            internal=False,
-                            commit_state=False,
-                        )
-                        for req_out in stage_outputs:
-                            abort_outputs.append((orch_req_id, req_out))
-                        if collected_ids:
-                            engine_abort_ids.extend(collected_ids)
-                        else:
-                            engine_abort_ids.append(orch_req_id)
-                else:
-                    aborted = self._output_processor.abort_requests(replica_request_ids, internal=False)
-                    if aborted:
-                        engine_abort_ids = list(aborted)
+                engine_abort_ids = []
+                for orch_req_id in replica_request_ids:
+                    collected_ids, stage_outputs = await self._output_processor.abort_requests_collecting_outputs_async(
+                        [orch_req_id],
+                        internal=False,
+                        commit_state=False,
+                    )
+                    for req_out in stage_outputs:
+                        abort_outputs.append((orch_req_id, req_out))
+                    if collected_ids:
+                        engine_abort_ids.extend(collected_ids)
+                    else:
+                        engine_abort_ids.append(orch_req_id)
             client = self.clients[replica_id]
             if client is None:
                 continue
             await client.abort_requests_async(engine_abort_ids)
             if not is_diffusion and self._output_processor is not None:
-                commit = getattr(self._output_processor, "commit_aborted_request_state", None)
-                if callable(commit):
-                    commit(replica_request_ids, internal=False)
+                await self._output_processor.commit_aborted_request_state_async(
+                    replica_request_ids,
+                    internal=False,
+                )
 
         return abort_outputs
 
