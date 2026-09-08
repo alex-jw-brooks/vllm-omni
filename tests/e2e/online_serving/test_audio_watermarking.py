@@ -23,7 +23,7 @@ SERVER_PARAMS = [
         OmniServerParams(
             model=MODEL,
             stage_config_path=get_deploy_config_path("qwen3_tts.yaml"),
-            server_args=["--trust-remote-code"],
+            server_args=["--trust-remote-code", "--watermark-outputs"],
         ),
         id="qwen3-tts-0.6b",
     )

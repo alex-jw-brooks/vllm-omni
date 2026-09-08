@@ -526,6 +526,9 @@ class OrchestratorArgs:
     # === Mode Switches (orchestrator reads, DeployConfig redistributes) ===
     async_chunk: bool | None = None
 
+    # === Output Processing ===
+    watermark_outputs: bool = False
+
     # === Forced aligner (orchestrator injects a pooling stage; never a per-stage knob) ===
     forced_aligner: str | None = None
     forced_aligner_config: str | None = None

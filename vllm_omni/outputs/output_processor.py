@@ -104,12 +104,12 @@ class OmniRequestState(RequestState):
 
     def add_multimodal_tensor(
         self,
-        payload: MultimodalPayload | Mapping[str, object] | None,
+        payload: MultimodalPayload | Mapping[str, object] | torch.Tensor | None,
         mm_type: str | None,
     ) -> None:
         """Accumulate a multimodal tensor payload into the request state.
 
-        Normalizes incoming payload mappings into a MultimodalPayload and
+        Normalizes incoming payloads into a MultimodalPayload and
         merges with any previously accumulated data. Uses list-based deferred
         concatenation to avoid O(n²) repeated torch.cat calls.
         """

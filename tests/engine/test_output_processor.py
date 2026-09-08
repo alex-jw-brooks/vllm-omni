@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Regression tests for OmniRequestState multimodal DELTA drain and consolidation guard."""
 
+import asyncio
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -16,7 +18,7 @@ from vllm.v1.metrics.stats import IterationStats, PrefillStats
 
 from vllm_omni.engine import OmniEngineCoreOutput
 from vllm_omni.outputs import output_processor
-from vllm_omni.outputs.output_modality import OutputModality, OutputModalityNames
+from vllm_omni.outputs.output_modality import OutputModalityNames
 from vllm_omni.outputs.output_processor import MultimodalOutputProcessor, OmniRequestState
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -458,7 +460,8 @@ def test_no_detokenizer_make_request_output():
     assert AUDIO in result.outputs[0].multimodal_output
 
 
-def test_no_detokenizer_process_outputs_returns_nonterminal_audio_chunk(monkeypatch):
+@pytest.mark.asyncio
+async def test_no_detokenizer_process_outputs_returns_nonterminal_audio_chunk():
     """Generation-stage MM-only chunks must reach the orchestrator.
 
     StagePool registers generation requests without a per-request collector,
@@ -466,50 +469,87 @@ def test_no_detokenizer_process_outputs_returns_nonterminal_audio_chunk(monkeypa
     Orchestrator._handle_processed_outputs().
     """
     state = _make_no_detok_state(RequestOutputKind.DELTA)
-    processor = object.__new__(MultimodalOutputProcessor)
-    processor.output_modality = OutputModality.AUDIO
+    processor = MultimodalOutputProcessor(tokenizer=None, log_stats=False, engine_core_output_type=AUDIO)
     processor.request_states = {"r": state}
-    upstream_result = SimpleNamespace(request_outputs=[], reqs_to_abort=[])
-    monkeypatch.setattr(
-        VLLMOutputProcessor,
-        "process_outputs",
-        lambda *_args, **_kwargs: upstream_result,
-    )
-    engine_output = SimpleNamespace(
+    engine_output = OmniEngineCoreOutput(
         request_id="r",
+        new_token_ids=[],
         multimodal_output={
             "model_outputs": torch.arange(8, dtype=torch.float32),
             "sr": torch.tensor(24000, dtype=torch.int32),
         },
-        output_type="audio",
-        pooling_output=None,
-        new_token_ids=[],
-        finish_reason=None,
-        stop_reason=None,
-        kv_transfer_params=None,
-        routed_experts=None,
-        num_cached_tokens=0,
     )
 
-    result = processor.process_outputs([engine_output])
+    result = await processor.process_outputs_async([engine_output])
 
     assert len(result.request_outputs) == 1
     assert result.request_outputs[0].request_id == "r"
     assert AUDIO in result.request_outputs[0].outputs[0].multimodal_output
 
 
-def _make_mm_only_output_processor(monkeypatch):
-    processor = object.__new__(MultimodalOutputProcessor)
-    processor.output_modality = OutputModality.AUDIO
-    processor.request_states = {"r": _make_no_detok_state(RequestOutputKind.DELTA)}
-    monkeypatch.setattr(
-        VLLMOutputProcessor,
-        "process_outputs",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            request_outputs=[],
-            reqs_to_abort=[],
-        ),
+@pytest.mark.asyncio
+async def test_watermark_cancellation_waits_before_abort() -> None:
+    """Ensure cancellation waits for watermark work before releasing the lock."""
+    worker_started = Event()
+    release_worker = Event()
+    worker_finished = Event()
+
+    def watermark_output(_request_id, samples, _metadata):
+        worker_started.set()
+        try:
+            release_worker.wait()
+            return samples
+        finally:
+            worker_finished.set()
+
+    watermarker = MagicMock()
+    watermarker.watermark_output.side_effect = watermark_output
+    processor = MultimodalOutputProcessor(
+        tokenizer=None,
+        log_stats=False,
+        engine_core_output_type=AUDIO,
+        watermarkers={AUDIO: watermarker},
     )
+    # Create a request state on the processor & example output to fake
+    request_state = _make_no_detok_state(RequestOutputKind.DELTA)
+    processor.request_states[request_state.request_id] = request_state
+    output = OmniEngineCoreOutput(
+        request_id="r",
+        new_token_ids=[],
+        multimodal_output={"model_outputs": torch.zeros(8), "sr": torch.tensor(24_000)},
+    )
+
+    # Async post process with the blocking watermarker and cancel the task after
+    # stalling to ensure we actually sent the task to_thread
+    processing = asyncio.create_task(processor.process_outputs_async([output]))
+    await asyncio.wait_for(asyncio.to_thread(worker_started.wait), timeout=5)
+    processing.cancel()
+    aborting = asyncio.create_task(processor.abort_requests_collecting_outputs_async(["r"], internal=True))
+    loop_progress = asyncio.Event()
+
+    async def signal_progress():
+        loop_progress.set()
+
+    asyncio.create_task(signal_progress())
+    # Ensure the event loop remains responsive, but abort waits for watermarking.
+    await asyncio.wait_for(loop_progress.wait(), timeout=5)
+    assert not aborting.done()
+    assert not worker_finished.is_set()
+
+    # Releasing lets cancellation propagate, then abort completes.
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await processing
+    assert worker_finished.is_set()
+    aborted, _ = await aborting
+    assert aborted == ["r"]
+    watermarker.watermark_output.assert_called_once()
+    watermarker.discard_request_state.assert_called_once_with("r")
+
+
+def _make_mm_only_output_processor(monkeypatch):
+    processor = MultimodalOutputProcessor(tokenizer=None, log_stats=False, engine_core_output_type=AUDIO)
+    processor.request_states = {"r": _make_no_detok_state(RequestOutputKind.DELTA)}
 
     def finish_request(req_state):
         processor.request_states.pop(req_state.request_id, None)
@@ -519,60 +559,65 @@ def _make_mm_only_output_processor(monkeypatch):
 
 
 def _audio_engine_output(*, is_segment_finished: bool, is_last_chunk: bool):
-    return SimpleNamespace(
+    return OmniEngineCoreOutput(
         request_id="r",
+        new_token_ids=[],
         multimodal_output={
             "model_outputs": torch.arange(8, dtype=torch.float32),
             "meta.tts_is_last_chunk": torch.tensor([int(is_last_chunk)]),
         },
-        output_type="audio",
-        pooling_output=None,
-        new_token_ids=[],
         finish_reason=FinishReason.STOP,
-        stop_reason=None,
-        kv_transfer_params=None,
-        routed_experts=None,
-        num_cached_tokens=0,
         is_segment_finished=is_segment_finished,
     )
 
 
-def test_mm_only_segment_finish_retains_request_state_for_next_audio_chunk(monkeypatch):
+@pytest.mark.asyncio
+async def test_mm_only_segment_finish_retains_request_state_for_next_audio_chunk(monkeypatch):
     processor = _make_mm_only_output_processor(monkeypatch)
 
-    first = processor.process_outputs([_audio_engine_output(is_segment_finished=True, is_last_chunk=False)])
+    first = await processor.process_outputs_async([_audio_engine_output(is_segment_finished=True, is_last_chunk=False)])
 
     assert "r" in processor.request_states
     assert len(first.request_outputs) == 1
     assert first.request_outputs[0].finished is False
 
-    second = processor.process_outputs([_audio_engine_output(is_segment_finished=False, is_last_chunk=True)])
+    second = await processor.process_outputs_async(
+        [_audio_engine_output(is_segment_finished=False, is_last_chunk=True)]
+    )
 
     assert len(second.request_outputs) == 1
     assert second.request_outputs[0].finished is True
     assert "r" not in processor.request_states
 
 
-def test_mm_only_nonfinal_audio_retains_state_without_segment_marker(monkeypatch):
+@pytest.mark.asyncio
+async def test_mm_only_nonfinal_audio_retains_state_without_segment_marker(monkeypatch):
     processor = _make_mm_only_output_processor(monkeypatch)
 
-    first = processor.process_outputs([_audio_engine_output(is_segment_finished=False, is_last_chunk=False)])
+    first = await processor.process_outputs_async(
+        [_audio_engine_output(is_segment_finished=False, is_last_chunk=False)]
+    )
 
     assert "r" in processor.request_states
     assert len(first.request_outputs) == 1
     assert first.request_outputs[0].finished is False
 
-    second = processor.process_outputs([_audio_engine_output(is_segment_finished=False, is_last_chunk=True)])
+    second = await processor.process_outputs_async(
+        [_audio_engine_output(is_segment_finished=False, is_last_chunk=True)]
+    )
 
     assert len(second.request_outputs) == 1
     assert second.request_outputs[0].finished is True
     assert "r" not in processor.request_states
 
 
-def test_mm_only_terminal_finish_removes_request_state(monkeypatch):
+@pytest.mark.asyncio
+async def test_mm_only_terminal_finish_removes_request_state(monkeypatch):
     processor = _make_mm_only_output_processor(monkeypatch)
 
-    result = processor.process_outputs([_audio_engine_output(is_segment_finished=False, is_last_chunk=True)])
+    result = await processor.process_outputs_async(
+        [_audio_engine_output(is_segment_finished=False, is_last_chunk=True)]
+    )
 
     assert len(result.request_outputs) == 1
     assert result.request_outputs[0].finished is True
@@ -620,7 +665,8 @@ def test_no_detokenizer_final_only():
     assert AUDIO in result.outputs[0].multimodal_output
 
 
-def test_mm_only_outputs_update_iteration_stats():
+@pytest.mark.asyncio
+async def test_mm_only_outputs_update_iteration_stats():
     processor = MultimodalOutputProcessor(
         tokenizer=None,
         log_stats=True,
@@ -649,7 +695,7 @@ def test_mm_only_outputs_update_iteration_stats():
     )
     iteration_stats = IterationStats()
 
-    processor.process_outputs(
+    await processor.process_outputs_async(
         [output],
         engine_core_timestamp=3.0,
         iteration_stats=iteration_stats,
@@ -704,6 +750,7 @@ def test_num_cache_creation_tokens_reaches_direct_request_output():
 
 def _abort_processor_with_parent(child_ids: list[str]):
     processor = object.__new__(MultimodalOutputProcessor)
+    processor._watermarkers = {}
     processor.request_states = {}
     processor.external_req_ids = {}
     processor.parent_requests = {}

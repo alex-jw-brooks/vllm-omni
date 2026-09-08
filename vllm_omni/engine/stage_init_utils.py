@@ -1510,6 +1510,7 @@ def build_llm_stage_output_processor(
     plan: LogicalStageInitPlan,
     stage_vllm_config: Any,
     log_stats: bool = False,
+    watermark_outputs: bool = False,
 ) -> Any | None:
     """Build one output processor per logical LLM stage.
 
@@ -1527,7 +1528,7 @@ def build_llm_stage_output_processor(
             model_config=stage_vllm_config.model_config,
         )
     output_modality = OutputModality.from_string(metadata.engine_output_type)
-    watermarkers = MultimodalOutputProcessor.initialize_watermarkers(output_modality)
+    watermarkers = MultimodalOutputProcessor.initialize_watermarkers(output_modality) if watermark_outputs else {}
     return MultimodalOutputProcessor(
         tokenizer=tokenizer,
         log_stats=log_stats,

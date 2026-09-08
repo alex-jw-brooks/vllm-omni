@@ -220,6 +220,12 @@ class OmniServeCommand(CLISubcommand):
             action="store_true",
             help="Enable vLLM-Omni mode for multi-modal and diffusion models",
         )
+        omni_config_group.add_argument(
+            "--watermark-outputs",
+            action="store_true",
+            default=False,
+            help="Apply registered watermarks to generated outputs (currently only supported for audio).",
+        )
 
         try:
             omni_config_group.add_argument(
