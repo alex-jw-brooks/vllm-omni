@@ -125,6 +125,7 @@ class OmniEngineBase:
     _enable_orch_monitor: bool = False
     _client_config: OmniClientConfig | None = None
     _output_sink: OutputQueueSink | None = None
+    _watermark_outputs: bool = False
 
     def __init__(
         self,
@@ -136,6 +137,7 @@ class OmniEngineBase:
         prom_metrics: Any = None,
         log_stats: bool = False,
         collect_stage_metrics: bool = True,
+        watermark_outputs: bool = False,
         tokenizer: str | None = None,
         trust_remote_code: bool | None = None,
         client_config: OmniClientConfig | None = None,
@@ -158,6 +160,7 @@ class OmniEngineBase:
         # --log-stats CLI flag set by the user via OmniBase.
         self._log_stats = log_stats
         self._collect_stage_metrics = collect_stage_metrics
+        self._watermark_outputs = watermark_outputs
         self._enable_orch_monitor = bool(kwargs.pop("enable_orch_monitor", False))
         self._client_config = client_config
 
@@ -403,6 +406,7 @@ class OmniEngineBase:
             request_queue=self.request_queue,
             log_stats=self._log_stats,
             client_config=self._client_config,
+            watermark_outputs=self._watermark_outputs,
         )
         self._runtime.initialize()
 
