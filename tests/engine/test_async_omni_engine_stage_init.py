@@ -9,6 +9,7 @@ import os
 import time
 import types
 from dataclasses import dataclass, field
+from unittest.mock import MagicMock
 
 import pytest
 from omegaconf import OmegaConf
@@ -22,12 +23,14 @@ from vllm_omni.engine.stage_engine_startup import StageReplicaResources
 from vllm_omni.engine.stage_init_utils import (
     LogicalStageInitPlan,
     ReplicaInitPlan,
+    build_llm_stage_output_processor,
     build_stage0_input_processor,
     compute_replica_layout,
     split_devices_for_replicas,
     stage_runtime_env,
 )
 from vllm_omni.engine.stage_runtime import StageRuntime
+from vllm_omni.outputs.output_processor import MultimodalOutputProcessor
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -66,6 +69,26 @@ def test_stage_runtime_env_accepts_typed_runtime_config(monkeypatch):
         assert os.environ[env_key] == "typed-value"
 
     assert env_key not in os.environ
+
+
+def test_build_llm_stage_output_processor_initializes_one_audio_watermarker(monkeypatch):
+    """Ensure audio watermarking is constructed once during stage assembly."""
+    watermarker = object()
+    constructor = MagicMock(return_value=watermarker)
+    monkeypatch.setitem(MultimodalOutputProcessor._watermarker_registry, "audio", constructor)
+    config = types.SimpleNamespace(model_config=types.SimpleNamespace(skip_tokenizer_init=True))
+    audio_plan = _make_llm_plan(0, stage_id=0, vllm_config=config)
+    audio_plan.replicas[0].metadata.engine_output_type = "audio"
+
+    processor = build_llm_stage_output_processor(audio_plan, config)
+
+    constructor.assert_called_once_with()
+    assert processor._watermarkers == {"audio": watermarker}
+
+    text_plan = _make_llm_plan(1, stage_id=1, vllm_config=config)
+    text_plan.replicas[0].metadata.engine_output_type = "token_ids"
+    build_llm_stage_output_processor(text_plan, config)
+    assert constructor.call_count == 1
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):
