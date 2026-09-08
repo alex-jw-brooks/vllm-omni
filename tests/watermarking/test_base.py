@@ -62,7 +62,7 @@ def test_watermarker_closes_finished_requests() -> None:
     watermarker.watermark("request-1", True)
     watermarker.watermark("request-2", True)
 
-    watermarker.finish_request("request-1")
+    watermarker.discard_request_state("request-1")
     watermarker.watermark("request-1", True)
     watermarker.close()
 
