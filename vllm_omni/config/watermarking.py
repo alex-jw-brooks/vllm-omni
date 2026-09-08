@@ -23,5 +23,5 @@ class WatermarkConfig:
             if not isinstance(algorithm, str) or algorithm not in registered_algorithms:
                 valid_algorithms = ", ".join(sorted(registered_algorithms))
                 raise ValueError(
-                    f"unsupported watermark algorithm {algorithm} for modality {modality} supported: {valid_algorithms}"
+                    f"unsupported watermark algorithm {algorithm} for {modality}; supported: {valid_algorithms}"
                 )
