@@ -71,8 +71,8 @@ def test_stage_runtime_env_accepts_typed_runtime_config(monkeypatch):
     assert env_key not in os.environ
 
 
-def test_build_llm_stage_output_processor_initializes_one_audio_watermarker(monkeypatch):
-    """Ensure audio watermarking is constructed once during stage assembly."""
+def test_build_llm_stage_output_processor_initializes_audio_watermarker_only_when_enabled(monkeypatch):
+    """Ensure stage assembly initializes audio watermarking only when enabled."""
     watermarker = object()
     constructor = MagicMock(return_value=watermarker)
     monkeypatch.setitem(MultimodalOutputProcessor._watermarker_registry, "audio", constructor)
@@ -80,14 +80,19 @@ def test_build_llm_stage_output_processor_initializes_one_audio_watermarker(monk
     audio_plan = _make_llm_plan(0, stage_id=0, vllm_config=config)
     audio_plan.replicas[0].metadata.engine_output_type = "audio"
 
+    # Ensure that init with watermark false doesn't init any watermarkers
     processor = build_llm_stage_output_processor(audio_plan, config)
+    constructor.assert_not_called()
+    assert processor._watermarkers == {}
 
+    # Ensure that init with watermark true does init an audio watermarker
+    processor = build_llm_stage_output_processor(audio_plan, config, watermark_outputs=True)
     constructor.assert_called_once_with()
     assert processor._watermarkers == {"audio": watermarker}
 
     text_plan = _make_llm_plan(1, stage_id=1, vllm_config=config)
     text_plan.replicas[0].metadata.engine_output_type = "token_ids"
-    build_llm_stage_output_processor(text_plan, config)
+    build_llm_stage_output_processor(text_plan, config, watermark_outputs=True)
     assert constructor.call_count == 1
 
 
@@ -271,6 +276,7 @@ def test_async_omni_engine_initialize_stages_passes_log_stats_and_client_config_
     engine.request_queue = types.SimpleNamespace()
     engine._log_stats = True
     engine._client_config = engine_mod.OmniClientConfig(client_count=2, client_index=1, stage_addresses={})
+    engine._watermark_outputs = True
     engine._parallel_stage_init = False
 
     captured: dict[str, object] = {}
@@ -287,6 +293,7 @@ def test_async_omni_engine_initialize_stages_passes_log_stats_and_client_config_
     assert captured["stage_init_timeout"] == 7
     assert captured["log_stats"] is True
     assert captured["client_config"] is engine._client_config
+    assert captured["watermark_outputs"] is True
 
 
 def test_async_omni_engine_initialize_stages_retains_stage0_prompt_transform(monkeypatch):
@@ -1193,10 +1200,11 @@ def test_stage_runtime_passes_log_stats_to_output_processor(monkeypatch):
     captured: dict[str, object] = {}
     output_processor = object()
 
-    def _capture_build_llm_stage_output_processor(plan, stage_vllm_config, *, log_stats=False):
+    def _capture_build_llm_stage_output_processor(plan, stage_vllm_config, *, log_stats=False, watermark_outputs=False):
         captured["plan"] = plan
         captured["stage_vllm_config"] = stage_vllm_config
         captured["log_stats"] = log_stats
+        captured["watermark_outputs"] = watermark_outputs
         return output_processor
 
     monkeypatch.setattr(
@@ -1212,6 +1220,7 @@ def test_stage_runtime_passes_log_stats_to_output_processor(monkeypatch):
         "plan": stage_plan,
         "stage_vllm_config": cfg,
         "log_stats": True,
+        "watermark_outputs": False,
     }
 
 
