@@ -15,11 +15,7 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 def test_missing_audioseal_names_install_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure missing AudioSeal reports the required install extra."""
-    monkeypatch.setattr(
-        audio_seal,
-        "loader",
-        PlaceholderModule("missing_audioseal_for_test"),
-    )
+    monkeypatch.setattr(audio_seal, "loader", PlaceholderModule("audioseal"))
 
     with pytest.raises(ImportError, match=r"vllm-omni\[watermarking\]"):
         AudioSealWatermarker()
@@ -28,15 +24,16 @@ def test_missing_audioseal_names_install_extra(monkeypatch: pytest.MonkeyPatch) 
 @pytest.mark.local_model
 @pytest.mark.slow
 @pytest.mark.tts
-def test_audioseal_rejects_unsupported_input() -> None:
-    """Ensure AudioSeal rejects unsupported sample rates and channel layouts."""
+def test_audioseal_rejects_unsupported_channel_layout() -> None:
+    """Ensure AudioSeal rejects unsupported channel layouts."""
     pytest.importorskip("audioseal")
     watermarker = AudioSealWatermarker()
 
-    with pytest.raises(ValueError, match="16 kHz"):
-        watermarker.watermark("request", AudioTensor(torch.zeros((1, 1, 22_050)), 22_050))
     with pytest.raises(ValueError, match="channel dimension must be axis 1"):
-        watermarker.watermark("request", AudioTensor(torch.zeros((1, 100, 2)), 16_000))
+        watermarker.watermark(
+            "request",
+            AudioTensor(torch.zeros((1, 100, 2)), audio_seal._AUDIOSEAL_SAMPLE_RATE),
+        )
 
     watermarker.close()
 
@@ -62,7 +59,7 @@ def test_audioseal_survives_pcm16_wav_encoding(
 ) -> None:
     """Ensure mono and stereo watermarks survive PCM16 quantization."""
     pytest.importorskip("audioseal")
-    sample_rate = 16_000
+    sample_rate = audio_seal._AUDIOSEAL_SAMPLE_RATE
     generator = torch.Generator().manual_seed(0)
     source = (torch.randn((1, channels, sample_rate * 2), generator=generator) * noise_std).clamp_(-1, 1)
     if noise_std == 0.95:
@@ -137,7 +134,7 @@ def test_audioseal_watermarks_24khz_stream() -> None:
 def test_audioseal_is_deterministic_across_interleaved_requests() -> None:
     """Ensure interleaved requests remain isolated and deterministic."""
     pytest.importorskip("audioseal")
-    sample_rate = 16_000
+    sample_rate = audio_seal._AUDIOSEAL_SAMPLE_RATE
     sources = {
         request_id: torch.randn((1, 1, sample_rate), generator=torch.Generator().manual_seed(seed)) * 0.05
         for request_id, seed in (("request-1", 1), ("request-2", 2))

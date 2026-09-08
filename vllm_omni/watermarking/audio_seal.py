@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
+import torchaudio.functional as audio_functional
 from vllm.logger import init_logger
 from vllm.utils.import_utils import PlaceholderModule
 
@@ -22,6 +23,8 @@ try:
     import audioseal.loader as loader
 except ImportError:
     loader = PlaceholderModule("audioseal")  # type: ignore[assignment]
+
+_AUDIOSEAL_SAMPLE_RATE = 16_000
 
 
 @dataclass
@@ -73,17 +76,31 @@ class AudioSealWatermarker(AudioWatermarkerBase[_AudioSealState]):
 
         original_device = data.samples.device
         original_dtype = data.samples.dtype
+        source = data.samples.to(device="cpu", dtype=torch.float32)
+        # AudioSeal requires 16k sampling rate, so resample if needed
+        model_input = self.maybe_resample(source, data.sample_rate, _AUDIOSEAL_SAMPLE_RATE)
+
+        # We always run AudioSeal in streaming mode for now, so that we don't have to
+        # have separate paths for delta and cumulative semantics. Initial benchmarks for
+        # full vs streamed AudioSeal don't look compelling enough to have a split path for now.
         with self._model.streaming(state.batch_size):
             if state.streaming_state is not None:
                 self._model.encoder.set_streaming_state(state.streaming_state)  # type: ignore[attr-defined]
             watermarked = self._model(
-                data.samples.to(device="cpu", dtype=torch.float32),
-                sample_rate=data.sample_rate,
+                model_input,
+                sample_rate=_AUDIOSEAL_SAMPLE_RATE,
                 message=state.message,
             )
             state.streaming_state = self._model.encoder.get_streaming_state()  # type: ignore[attr-defined]
+
+        # if we resampled, we need to resample just the watermark & add it onto the residual.
+        # Note that torchaudio.functional.resample can change the length, so we may need to pad.
+        if data.sample_rate != _AUDIOSEAL_SAMPLE_RATE:
+            residual = self.maybe_resample(watermarked - model_input, _AUDIOSEAL_SAMPLE_RATE, data.sample_rate)
+            watermarked = source + self.trim_to_length(residual, source.shape[-1])
+
         return AudioTensor(
-            watermarked.to(device=original_device, dtype=original_dtype),
+            samples=watermarked.to(device=original_device, dtype=original_dtype),
             sample_rate=data.sample_rate,
         )
 
@@ -102,9 +119,14 @@ class AudioSealWatermarker(AudioWatermarkerBase[_AudioSealState]):
                 )
             detector.eval()
             self._detector = detector
-        probability, _ = detector.detect_watermark(
+        samples = self.maybe_resample(
             data.samples.to(device="cpu", dtype=torch.float32),
-            sample_rate=data.sample_rate,
+            data.sample_rate,
+            _AUDIOSEAL_SAMPLE_RATE,
+        )
+        probability, _ = detector.detect_watermark(
+            samples,
+            sample_rate=_AUDIOSEAL_SAMPLE_RATE,
         )
         return torch.as_tensor(probability).min().item() > 0.5
 
@@ -112,8 +134,20 @@ class AudioSealWatermarker(AudioWatermarkerBase[_AudioSealState]):
         """Validate AudioSeal channel and sample-rate requirements."""
         if data.samples.shape[1] != 1:
             raise ValueError("AudioSeal implementation requires mono audio")
-        if data.sample_rate != 16_000:
-            raise ValueError("AudioSeal requires 16 kHz audio")
+
+    @staticmethod
+    def maybe_resample(samples: torch.Tensor, source_rate: int, target_rate: int) -> torch.Tensor:
+        """Resample audio for AudioSeal while preserving leading dimensions."""
+        if source_rate == target_rate:
+            return samples
+        return audio_functional.resample(samples, source_rate, target_rate)
+
+    @staticmethod
+    def trim_to_length(samples: torch.Tensor, length: int) -> torch.Tensor:
+        """Trim resampling round-up without hiding a short residual."""
+        if samples.shape[-1] < length:
+            raise RuntimeError("resampled AudioSeal residual is shorter than source audio")
+        return samples[..., :length]
 
     def _close_audio_state(self, state: _AudioSealState) -> None:
         """Discard retained AudioSeal streaming state."""
