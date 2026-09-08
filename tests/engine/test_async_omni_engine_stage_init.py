@@ -19,7 +19,6 @@ from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.engine.stage_init_utils import (
     LogicalStageInitPlan,
     ReplicaInitPlan,
-    build_llm_stage_output_processor,
     build_stage0_input_processor,
     compute_replica_layout,
     split_devices_for_replicas,
@@ -30,30 +29,39 @@ from vllm_omni.outputs.output_processor import MultimodalOutputProcessor
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-def test_build_llm_stage_output_processor_initializes_configured_audio_watermarker(monkeypatch):
-    """Ensure stage assembly initializes only configured, produced modalities."""
+@pytest.mark.parametrize("stage_type", ["llm", "diffusion"])
+def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, stage_type: str):
+    """Ensure runtime initialization constructs the configured stage watermarker."""
     watermarker = object()
     constructor = MagicMock(return_value=watermarker)
     monkeypatch.setitem(MultimodalOutputProcessor._watermarker_registry["audio"], "audioseal", constructor)
-    config = types.SimpleNamespace(model_config=types.SimpleNamespace(skip_tokenizer_init=True))
-    audio_plan = _make_llm_plan(0, stage_id=0, vllm_config=config)
-    audio_plan.replicas[0].metadata.engine_output_type = "audio"
+    runtime = StageRuntime(
+        stage_configs=[],
+        model="dummy-model",
+        config_path="dummy-config",
+        stage_init_timeout=1,
+        async_chunk=False,
+        watermark_config=WatermarkConfig({"audio": "audioseal"}),
+    )
+    if stage_type == "llm":
+        config = types.SimpleNamespace(model_config=types.SimpleNamespace(skip_tokenizer_init=True))
+        plan = _make_llm_plan(0, stage_id=0, vllm_config=config, final_output=True, final_output_type="audio")
+    else:
+        plan = _make_diffusion_plan(0, stage_id=0, final_output_type="audio")
+    client = types.SimpleNamespace(
+        stage_type=stage_type,
+        final_output=True,
+        final_output_type="audio",
+        is_comprehension=False,
+        default_sampling_params=types.SimpleNamespace(),
+    )
+    monkeypatch.setattr(runtime, "_prepare_stage_plans", lambda: [plan])
+    monkeypatch.setattr(runtime, "_initialize_replica", lambda *_args: client)
 
-    processor = build_llm_stage_output_processor(audio_plan, config)
-    constructor.assert_not_called()
-    assert processor._watermarkers == {}
+    runtime.initialize()
 
-    watermark_config = WatermarkConfig({"audio": "audioseal"})
-    processor = build_llm_stage_output_processor(audio_plan, config, watermark_config=watermark_config)
+    assert len(runtime.stage_pools) == 1
     constructor.assert_called_once_with()
-    assert processor is not None
-    assert processor._watermarkers == {"audio": watermarker}
-
-    # If we don't have audio as the output, we don't call the audio watermarker
-    text_plan = _make_llm_plan(1, stage_id=1, vllm_config=config)
-    text_plan.replicas[0].metadata.engine_output_type = "image"
-    build_llm_stage_output_processor(text_plan, config, watermark_config=watermark_config)
-    assert constructor.call_count == 1
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):
@@ -169,6 +177,7 @@ def _make_diffusion_plan(
     *,
     stage_id: int,
     num_replicas: int = 1,
+    final_output_type: str = "image",
 ):
     replicas: list[ReplicaInitPlan] = []
     for replica_id in range(num_replicas):
@@ -184,7 +193,11 @@ def _make_diffusion_plan(
                 num_replicas=num_replicas,
                 launch_mode="local",
                 stage_cfg=stage_cfg,
-                metadata=_make_diffusion_metadata(stage_id, replica_id=replica_id),
+                metadata=_make_diffusion_metadata(
+                    stage_id,
+                    replica_id=replica_id,
+                    final_output_type=final_output_type,
+                ),
                 stage_connector_spec={},
                 omni_kv_connector=(None, None, None),
             )

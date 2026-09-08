@@ -1528,7 +1528,7 @@ def build_llm_stage_output_processor(
         tokenizer = cached_tokenizer_from_config(
             model_config=stage_vllm_config.model_config,
         )
-    output_modality = OutputModality.from_string(metadata.engine_output_type)
+    output_modality = OutputModality.from_string(metadata.final_output_type)
     watermarkers = MultimodalOutputProcessor.initialize_watermarkers(
         output_modality, watermark_config or WatermarkConfig()
     )
