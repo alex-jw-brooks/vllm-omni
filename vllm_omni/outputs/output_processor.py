@@ -4,7 +4,7 @@
 import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import fields as dataclass_fields
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 from vllm.logger import init_logger
@@ -31,7 +31,7 @@ from vllm_omni.outputs.multimodal_accumulation import (
     replace_snapshot_keys,
 )
 from vllm_omni.outputs.output_modality import OutputModality, get_accumulation_strategy
-from vllm_omni.watermarking import AudioSealWatermarker
+from vllm_omni.watermarking import WATERMARKER_REGISTRY, Watermarker
 
 logger = init_logger(__name__)
 
@@ -386,6 +386,21 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
     4. _new_completion_output() returns MultimodalCompletionOutput
     """
 
+    _watermarker_registry: ClassVar[Mapping[str, type[Watermarker]]] = WATERMARKER_REGISTRY
+
+    @classmethod
+    def initialize_watermarkers(cls, output_modality: OutputModality) -> dict[str, Watermarker]:
+        """Construct registered watermarkers for one or more output modalities.
+
+        NOTE: OutputModality is a bit flag enum and can describe multiple output types.
+        """
+        watermarkers: dict[str, Watermarker] = {}
+        for modality, watermarker_type in cls._watermarker_registry.items():
+            if OutputModality.from_string(modality) in output_modality:
+                watermarkers[modality] = watermarker_type()
+                logger.info("Initialized watermarker for modality %s", modality)
+        return watermarkers
+
     def __init__(
         self,
         tokenizer: TokenizerLike | None,
@@ -395,6 +410,7 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
         tracing_enabled: bool = False,
         engine_core_output_type: str | None = None,
         output_modality: OutputModality = OutputModality.TEXT,
+        watermarkers: Mapping[str, Watermarker] | None = None,
     ):
         """Initialize the multimodal output processor.
 
@@ -409,6 +425,7 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
             output_modality: Type-safe output modality flag. Used to tag
                 multimodal outputs with the correct modality key when
                 per-output type info is unavailable.
+            watermarkers: Watermarkers keyed by output modality.
         """
         super().__init__(
             tokenizer=tokenizer,
@@ -424,12 +441,8 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
         self.engine_core_output_type = engine_core_output_type
         self._native_text_metrics_by_request: dict[str, dict[str, Any]] = {}
 
-        # TODO: Initialize watermarkers with other model resources during engine load.
         self._watermark_lock = asyncio.Lock()
-        self._watermarkers: dict[str, AudioSealWatermarker] = {}
-        if OutputModality.AUDIO in self.output_modality:
-            self._watermarkers["audio"] = AudioSealWatermarker()
-            logger.info("Audio watermarking enabled")
+        self._watermarkers = watermarkers if watermarkers is not None else {}
 
     def _apply_watermark(
         self,
@@ -747,11 +760,19 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
         """Offload watermark inference while preserving output order."""
         async with self._watermark_lock:
             request_ids = set(self.request_states)
-            prepared = await asyncio.to_thread(
-                self._prepare_watermark_outputs,
-                engine_core_outputs,
-                request_ids,
+            worker = asyncio.create_task(
+                asyncio.to_thread(
+                    self._prepare_watermark_outputs,
+                    engine_core_outputs,
+                    request_ids,
+                )
             )
+            try:
+                prepared = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # NOTE: This assumes the watermarker eventually returns
+                await worker
+                raise  # We need to propagate to ensure proper shutdown
             return self._process_prepared_outputs(
                 engine_core_outputs,
                 prepared,
