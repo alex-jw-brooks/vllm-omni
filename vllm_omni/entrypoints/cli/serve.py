@@ -16,6 +16,7 @@ import json
 import math
 import os
 import signal
+from collections.abc import Mapping
 from types import FrameType
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,7 +25,9 @@ from vllm.entrypoints.cli.types import CLISubcommand
 from vllm.entrypoints.launchers.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.serve.utils.api_utils import VLLM_SUBCMD_PARSER_EPILOG
 from vllm.logger import init_logger
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 
+from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.diffusion.registry import resolve_native_single_file
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import (
@@ -33,6 +36,7 @@ from vllm_omni.entrypoints.openai.api_server import (
 )
 from vllm_omni.entrypoints.utils import parse_stage_overrides, prepare_stage_config_inputs
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
+from vllm_omni.watermarking import WATERMARKER_REGISTRY
 
 if TYPE_CHECKING:
     from vllm.v1.utils import APIServerProcessManager
@@ -59,6 +63,9 @@ Search by using: `--help=<ConfigGroup>` to explore options by section (e.g.,
 --help=OmniConfig)
   Use `--help=all` to show all available flags at once.
 """
+
+_ALGORITHM_KEY = "algorithm"
+_WATERMARK_CONFIG_HELP = 'Modality-keyed JSON watermark configuration; expected {"<modality>": "<algorithm>"}.'
 
 
 def _parse_stage_overrides(value: str) -> dict[str, dict[str, Any]]:
@@ -91,6 +98,22 @@ def _json_object(value: str) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise argparse.ArgumentTypeError("must be a JSON object")
     return parsed
+
+
+def _parse_watermark_config(value: str) -> WatermarkConfig:
+    """Parse a modality-keyed watermark config from the CLI."""
+    try:
+        config = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP) from exc
+    if not isinstance(config, Mapping):
+        raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP)
+    if _ALGORITHM_KEY in config and not WATERMARKER_REGISTRY.keys() & config.keys():
+        raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP)
+    try:
+        return WatermarkConfig(config)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _ensure_vllm_platform():
@@ -314,7 +337,7 @@ class OmniServeCommand(CLISubcommand):
             return
         validate_parsed_serve_args(args)
 
-    def subparser_init(self, subparsers: argparse._SubParsersAction) -> TrackingArgumentParser:
+    def subparser_init(self, subparsers: argparse._SubParsersAction) -> FlexibleArgumentParser:
         serve_parser = subparsers.add_parser(
             self.name,
             description=DESCRIPTION,
@@ -323,6 +346,8 @@ class OmniServeCommand(CLISubcommand):
 
         _ensure_vllm_platform()
         serve_parser = make_arg_parser(serve_parser)
+        if not isinstance(serve_parser, TrackingArgumentParser):
+            raise TypeError("Omni serve requires a TrackingArgumentParser")
         serve_parser.epilog = VLLM_SUBCMD_PARSER_EPILOG.format(subcmd=self.name)
 
         # Create OmniConfig argument group for omni-related parameters
@@ -336,11 +361,12 @@ class OmniServeCommand(CLISubcommand):
             action="store_true",
             help="Enable vLLM-Omni mode for multi-modal and diffusion models",
         )
-        omni_config_group.add_argument(
-            "--watermark-outputs",
-            action="store_true",
-            default=False,
-            help="Apply registered watermarks to generated outputs (currently only supported for audio).",
+        serve_parser.maybe_override_argument(
+            omni_config_group,
+            "--watermark-config",
+            argument_type=_parse_watermark_config,
+            default=None,
+            help='Modality-keyed JSON watermark configuration; expected {"<modality>": "<algorithm>"}.',
         )
 
         try:

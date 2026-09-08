@@ -49,6 +49,7 @@ from vllm_omni.config.omni_config import (
     VllmOmniDiffusionStageConfig,
 )
 from vllm_omni.config.stage_config import StageType
+from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.distributed.omni_connectors.utils.config import (
     TRANSFER_ENGINE_CONNECTOR_NAMES,
@@ -1559,7 +1560,7 @@ def build_llm_stage_output_processor(
     plan: LogicalStageInitPlan,
     stage_vllm_config: Any,
     log_stats: bool = False,
-    watermark_outputs: bool = False,
+    watermark_config: WatermarkConfig | None = None,
 ) -> Any | None:
     """Build one output processor per logical LLM stage.
 
@@ -1577,7 +1578,9 @@ def build_llm_stage_output_processor(
             model_config=stage_vllm_config.model_config,
         )
     output_modality = OutputModality.from_string(metadata.engine_output_type)
-    watermarkers = MultimodalOutputProcessor.initialize_watermarkers(output_modality) if watermark_outputs else {}
+    watermarkers = MultimodalOutputProcessor.initialize_watermarkers(
+        output_modality, watermark_config or WatermarkConfig()
+    )
     return MultimodalOutputProcessor(
         tokenizer=tokenizer,
         log_stats=log_stats,
