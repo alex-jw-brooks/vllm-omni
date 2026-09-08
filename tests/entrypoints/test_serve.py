@@ -67,7 +67,7 @@ def test_watermark_config_rejects_null_audio() -> None:
 
 def test_watermark_config_lists_registry_algorithms() -> None:
     """Ensure invalid algorithms report the modality's registered choices."""
-    with pytest.raises(argparse.ArgumentTypeError, match="valid algorithms: audioseal"):
+    with pytest.raises(argparse.ArgumentTypeError, match="unsupported watermark algorithm"):
         _parse_watermark_config('{"audio": {"algorithm": "unknown"}}')
 
 
