@@ -21,6 +21,7 @@ from vllm.v1.engine.output_processor import (
 from vllm.v1.engine.parallel_sampling import ParentRequest
 from vllm.v1.metrics.stats import IterationStats, RequestStateStats
 
+from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.data_entry_keys import unflatten_payload
 from vllm_omni.engine import OmniEngineCoreOutput
 from vllm_omni.outputs import OmniRequestOutput
@@ -386,18 +387,24 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
     4. _new_completion_output() returns MultimodalCompletionOutput
     """
 
-    _watermarker_registry: ClassVar[Mapping[str, type[Watermarker]]] = WATERMARKER_REGISTRY
+    # Watermarker registry maps modalities -> algorithm name -> Watermarker type
+    _watermarker_registry: ClassVar[Mapping[str, Mapping[str, type[Watermarker]]]] = WATERMARKER_REGISTRY
 
     @classmethod
-    def initialize_watermarkers(cls, output_modality: OutputModality) -> dict[str, Watermarker]:
+    def initialize_watermarkers(
+        cls,
+        output_modality: OutputModality,
+        watermark_config: WatermarkConfig,
+    ) -> dict[str, Watermarker]:
         """Construct registered watermarkers for one or more output modalities.
 
         NOTE: OutputModality is a bit flag enum and can describe multiple output types.
         """
         watermarkers: dict[str, Watermarker] = {}
-        for modality, watermarker_type in cls._watermarker_registry.items():
-            if OutputModality.from_string(modality) in output_modality:
-                watermarkers[modality] = watermarker_type()
+        for modality, watermarker_types in cls._watermarker_registry.items():
+            algorithm = watermark_config.modality_algorithms.get(modality)
+            if algorithm is not None and OutputModality.from_string(modality) in output_modality:
+                watermarkers[modality] = watermarker_types[algorithm]()
                 logger.info("Initialized watermarker for modality %s", modality)
         return watermarkers
 

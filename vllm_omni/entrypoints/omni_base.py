@@ -18,6 +18,7 @@ from vllm.transformers_utils.repo_utils import file_or_path_exists
 from vllm.transformers_utils.runai_utils import is_runai_obj_uri
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 
+from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.engine.messages import (
     EngineQueueMessage,
@@ -169,8 +170,11 @@ class OmniBase(PDDisaggregationMixin):
     def __init__(
         self,
         model: str,
+        watermark_config: WatermarkConfig | None = None,
         **kwargs: Any,
     ) -> None:
+        if watermark_config is not None and not isinstance(watermark_config, WatermarkConfig):
+            raise TypeError("watermark_config must be a WatermarkConfig; use --watermark-config for CLI JSON")
         if "engine_args" in kwargs:
             logger.warning(
                 "engine_args were passed as a kwarg to an Omni instance; this is not supported. "
@@ -218,6 +222,7 @@ class OmniBase(PDDisaggregationMixin):
             transfer_emitter=self.transfer_metrics,
             prom_metrics=self.prom_metrics,
             log_stats=log_stats,
+            watermark_config=watermark_config,
             **kwargs,
         )
         self._shutdown_called = False

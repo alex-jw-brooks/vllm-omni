@@ -6,16 +6,75 @@
 from __future__ import annotations
 
 import argparse
+import json
 from types import SimpleNamespace
 
 import pytest
 from pytest_mock import MockerFixture
 
-from vllm_omni.entrypoints.cli.serve import OmniServeCommand, run_headless
+from vllm_omni.config.watermarking import WatermarkConfig
+from vllm_omni.entrypoints.cli.serve import (
+    OmniServeCommand,
+    _parse_watermark_config,
+    run_headless,
+)
+from vllm_omni.entrypoints.omni_base import OmniBase
 from vllm_omni.entrypoints.utils import parse_stage_overrides
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
+
+def test_serve_parser_accepts_modality_keyed_watermark_config() -> None:
+    """Ensure the CLI parses Omni's modality-keyed watermark config."""
+    parser = TrackingArgumentParser()
+    subparsers = parser.add_subparsers(dest="subcommand")
+    OmniServeCommand().subparser_init(subparsers)
+
+    args = parser.parse_args(["serve", "fake-model", "--omni", "--watermark-config", '{"audio":"audioseal"}'])
+
+    assert args.watermark_config == WatermarkConfig({"audio": "audioseal"})
+    assert args.get_explicit_kwargs_dict()["watermark_config"] == args.watermark_config
+
+
+def test_watermark_config_collision_uses_omni_validation(capsys: pytest.CaptureFixture[str]) -> None:
+    """Ensure an upstream watermark argument is extended without a duplicate flag."""
+    parser = TrackingArgumentParser()
+    parser.add_argument("--watermark-config", type=json.loads)
+    parser.maybe_override_argument(
+        parser.add_argument_group("OmniConfig"),
+        "--watermark-config",
+        argument_type=_parse_watermark_config,
+        default=None,
+        help="test",
+    )
+
+    args = parser.parse_args(["--watermark-config", '{"audio":"audioseal"}'])
+    assert args.watermark_config == WatermarkConfig({"audio": "audioseal"})
+    assert args.get_explicit_kwargs_dict()["watermark_config"] == args.watermark_config
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--watermark-config", '{"algorithm":"gumbel","key":123}'])
+    error = capsys.readouterr().err
+    assert 'expected {"<modality>": "<algorithm>"}' in error
+
+
+def test_watermark_config_rejects_null_audio() -> None:
+    """Ensure an explicit audio modality requires an algorithm."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        _parse_watermark_config('{"audio": null}')
+
+
+def test_watermark_config_lists_registry_algorithms() -> None:
+    """Ensure invalid algorithms report the modality's registered choices."""
+    with pytest.raises(argparse.ArgumentTypeError, match="valid algorithms: audioseal"):
+        _parse_watermark_config('{"audio": {"algorithm": "unknown"}}')
+
+
+def test_omni_rejects_untyped_watermark_config() -> None:
+    """Ensure direct Omni use rejects transport mappings before startup."""
+    with pytest.raises(TypeError, match="watermark_config must be a WatermarkConfig"):
+        OmniBase("fake-model", watermark_config={"audio": {"algorithm": "audioseal"}})  # type: ignore[arg-type]
 
 
 def test_serve_parser_accepts_no_async_chunk_and_marks_it_explicit() -> None:

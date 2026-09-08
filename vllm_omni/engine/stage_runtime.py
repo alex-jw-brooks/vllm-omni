@@ -19,6 +19,7 @@ import janus
 from omegaconf import OmegaConf
 from vllm.logger import init_logger
 
+from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.distributed.omni_connectors.utils.initialization import (
     resolve_omni_kv_config_for_stage,
 )
@@ -128,7 +129,7 @@ class StageRuntime:
         tokenizer: str | None = None,
         parallel_stage_init: bool = False,
         log_stats: bool = False,
-        watermark_outputs: bool = False,
+        watermark_config: WatermarkConfig | None = None,
     ) -> None:
         self._stage_configs = stage_configs
         self._model = model
@@ -142,7 +143,7 @@ class StageRuntime:
         # keeps the legacy per-device LOCK_EX serialization.
         self._parallel_stage_init = parallel_stage_init
         self._log_stats = log_stats
-        self._watermark_outputs = watermark_outputs
+        self._watermark_config = watermark_config
         self._num_stages = len(stage_configs)
 
         # Populated by initialize()
@@ -956,7 +957,7 @@ class StageRuntime:
                     plan,
                     stage_vllm_config,
                     log_stats=self._log_stats,
-                    watermark_outputs=self._watermark_outputs,
+                    watermark_config=self._watermark_config,
                 )
 
             stage_pools.append(
@@ -999,7 +1000,7 @@ class DistStageRuntime(StageRuntime):
         omni_master_port: int,
         tokenizer: str | None = None,
         log_stats: bool = False,
-        watermark_outputs: bool = False,
+        watermark_config: WatermarkConfig | None = None,
         omni_dp_size_local: int = 1,
         omni_heartbeat_timeout: float = 30.0,
         omni_lb_policy: str = "random",
@@ -1015,7 +1016,7 @@ class DistStageRuntime(StageRuntime):
             tokenizer=tokenizer,
             parallel_stage_init=parallel_stage_init,
             log_stats=log_stats,
-            watermark_outputs=watermark_outputs,
+            watermark_config=watermark_config,
         )
         self._single_stage_id_filter = single_stage_id_filter
         self._omni_master_address = omni_master_address
@@ -1345,7 +1346,7 @@ def create_stage_runtime(
     omni_lb_policy: str = "random",
     request_queue: janus.Queue[EngineQueueMessage] | None = None,
     log_stats: bool = False,
-    watermark_outputs: bool = False,
+    watermark_config: WatermarkConfig | None = None,
 ) -> StageRuntime:
     """Factory: select StageRuntime or DistStageRuntime."""
     if single_stage_mode:
@@ -1360,7 +1361,7 @@ def create_stage_runtime(
             tokenizer=tokenizer,
             parallel_stage_init=parallel_stage_init,
             log_stats=log_stats,
-            watermark_outputs=watermark_outputs,
+            watermark_config=watermark_config,
             single_stage_id_filter=single_stage_id_filter,
             omni_master_address=omni_master_address,
             omni_master_port=omni_master_port,
@@ -1378,5 +1379,5 @@ def create_stage_runtime(
         tokenizer=tokenizer,
         parallel_stage_init=parallel_stage_init,
         log_stats=log_stats,
-        watermark_outputs=watermark_outputs,
+        watermark_config=watermark_config,
     )

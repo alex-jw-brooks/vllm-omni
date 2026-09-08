@@ -38,6 +38,7 @@ from vllm_omni.config.stage_config import (
     DuplexSessionRuntimeConfig,
     load_deploy_config,
 )
+from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.data_entry_keys import REQUEST_ARTIFACT_DIRS_KEY, TRANSFORM_OWNED_META_KEYS
 from vllm_omni.diffusion.data import (
     DiffusionParallelConfig,
@@ -123,7 +124,7 @@ class AsyncOmniEngine:
     _transfer_emitter: Any = None
     _prom_metrics: Any = None
     _enable_orch_monitor: bool = False
-    _watermark_outputs: bool = False
+    _watermark_config: WatermarkConfig | None = None
     # Lazily created by get_output_blocking_async().
     _output_drain_executor: concurrent.futures.ThreadPoolExecutor | None = None
 
@@ -136,7 +137,7 @@ class AsyncOmniEngine:
         transfer_emitter: Any = None,
         prom_metrics: Any = None,
         log_stats: bool = False,
-        watermark_outputs: bool = False,
+        watermark_config: WatermarkConfig | None = None,
         tokenizer: str | None = None,
         trust_remote_code: bool | None = None,
         **kwargs: Any,
@@ -157,8 +158,8 @@ class AsyncOmniEngine:
         # replica) vllm:* wrap stays registered but reads zero. Respects the
         # --log-stats CLI flag set by the user via OmniBase.
         self._log_stats = log_stats
-        self._watermark_outputs = watermark_outputs
         self._enable_orch_monitor = bool(kwargs.pop("enable_orch_monitor", False))
+        self._watermark_config = watermark_config
 
         logger.info(f"[AsyncOmniEngine] Initializing with model {model}")
 
@@ -338,7 +339,7 @@ class AsyncOmniEngine:
             omni_lb_policy=self._omni_lb_policy,
             request_queue=self.request_queue,
             log_stats=self._log_stats,
-            watermark_outputs=self._watermark_outputs,
+            watermark_config=self._watermark_config,
         )
         self._runtime.initialize()
 
