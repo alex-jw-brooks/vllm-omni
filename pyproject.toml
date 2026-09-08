@@ -36,7 +36,7 @@ classifiers = [
 [project.optional-dependencies]
 
 watermarking = [
-    "audioseal<1.0",
+    "audioseal>=0.2,<1.0",
 ]
 
 dev = [
