@@ -1199,6 +1199,7 @@ class Orchestrator:
                                 idle = False
                                 continue
 
+                            diffusion_output = await pool.process_diffusion_output(diffusion_output)
                             pool.record_output_timestamps([diffusion_output])
                             processed = [diffusion_output]
                         else:
@@ -1441,6 +1442,7 @@ class Orchestrator:
                         if self._absorb_diffusion_metrics(stage_id, replica_id, payload):
                             self._orch_monitor.note_loop(idle=False)
                             continue
+                        payload = await pool.process_diffusion_output(payload)
                         pool.record_output_timestamps([payload])
                         processed = [payload]
                     else:

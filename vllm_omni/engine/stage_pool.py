@@ -9,12 +9,17 @@ import asyncio
 import time as _time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+import numpy as np
+import torch
 from vllm.logger import init_logger
+from vllm.outputs import RequestOutput
 from vllm.v1.engine import EngineCoreOutputs
+from vllm.v1.engine.output_processor import RequestState
 from vllm.v1.metrics.stats import IterationStats
 
+from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.distributed.omni_coordinator import (
     LoadBalancer,
     OmniCoordClientForHub,
@@ -22,6 +27,7 @@ from vllm_omni.distributed.omni_coordinator import (
     ReplicaStatus,
 )
 from vllm_omni.distributed.omni_coordinator.load_balancer import Task
+from vllm_omni.engine import OmniEngineCoreOutput
 from vllm_omni.engine.stage_client import (
     StagePoolClient,
     StagePoolDiffusionClient,
@@ -40,6 +46,10 @@ from vllm_omni.metrics.utils import (
     coerce_positive_int_scalar,
     iter_mm_outputs,
 )
+from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.outputs.mm_outputs import MultimodalCompletionOutput, MultimodalPayload
+from vllm_omni.outputs.output_modality import OutputModality
+from vllm_omni.watermarking import WATERMARKER_REGISTRY, Watermarker
 
 if TYPE_CHECKING:
     from vllm_omni.engine.orchestrator import OrchestratorRequestState
@@ -95,6 +105,27 @@ class StagePool:
     ``range(pool.num_replicas)`` to skip the gaps.
     """
 
+    _watermarker_registry: ClassVar[Mapping[str, Mapping[str, type[Watermarker]]]] = WATERMARKER_REGISTRY
+
+    @classmethod
+    def initialize_watermarkers(
+        cls,
+        output_modality: OutputModality,
+        watermark_config: WatermarkConfig | None,
+    ) -> dict[str, Watermarker]:
+        """Construct configured watermarkers for a logical stage."""
+        watermarkers: dict[str, Watermarker] = {}
+
+        if watermark_config is None:
+            return watermarkers
+
+        for modality, watermarker_types in cls._watermarker_registry.items():
+            algorithm = watermark_config.modality_algorithms.get(modality)
+            if algorithm is not None and OutputModality.from_string(modality) in output_modality:
+                watermarkers[modality] = watermarker_types[algorithm]()
+                logger.info("Initialized watermarker for modality %s", modality)
+        return watermarkers
+
     DISPATCH_WAIT_TIMEOUT_S: float = 10.0
     DISPATCH_RETRY_INTERVAL_S: float = 0.1
     # Only these EngineCore helpers may skip collective_rpc_async. A generic
@@ -115,6 +146,7 @@ class StagePool:
         *,
         output_processor: Any = None,
         stage_vllm_config: Any = None,
+        watermarkers: Mapping[str, Watermarker] | None = None,
     ) -> None:
         if isinstance(clients, list):
             normalized_clients: list[StagePoolClient] = list(clients)
@@ -129,6 +161,8 @@ class StagePool:
         self.clients: list[StagePoolClient | None] = list(normalized_clients)
         self._output_processor = output_processor
         self._stage_vllm_config = stage_vllm_config
+        self._watermarkers = watermarkers if watermarkers is not None else {}
+        self._watermark_lock = asyncio.Lock()
         self._next_replica_id = 0
         self._request_bindings: dict[str, int] = {}
         self._unavailable_replicas: set[int] = set()
@@ -1140,11 +1174,14 @@ class StagePool:
             return []
         client = cast(StagePoolLLMClient, raw_client)
         processor = self.output_processor
-        processed = await processor.process_outputs_async(
+        await self._process_watermark_outputs(raw_outputs.outputs)
+        processed = processor.process_outputs(
             raw_outputs.outputs,
             raw_outputs.timestamp,
             iteration_stats,
         )
+        if self._watermarkers:
+            self._discard_completed_llm_watermark_state(raw_outputs.outputs, processor.request_states)
         # Use the same wall-clock source as OrchestratorRequestState.stage_submit_ts.
         # EngineCoreOutputs.timestamp may use a different clock base, which would
         # make TTFO negative and get clamped to 0.
@@ -1152,7 +1189,9 @@ class StagePool:
 
         if processed.reqs_to_abort:
             await client.abort_requests_async(processed.reqs_to_abort)
-            await processor.commit_aborted_request_state_async(processed.reqs_to_abort, internal=True)
+            if self._watermarkers:
+                async with self._watermark_lock:
+                    self._discard_watermark_state(processed.reqs_to_abort)
 
         if raw_outputs.scheduler_stats is not None:
             processor.update_scheduler_stats(raw_outputs.scheduler_stats)
@@ -1198,6 +1237,108 @@ class StagePool:
             return None
         return cast(StagePoolDiffusionClient, raw_client).get_diffusion_output_nowait()
 
+    @staticmethod
+    def _watermark_payload(
+        request_id: str,
+        modality: str,
+        watermarker: Watermarker,
+        payload: MultimodalPayload | dict[str, Any],
+    ) -> None:
+        """Watermark one modality payload in place."""
+        data = payload.get(modality)
+        if data is None:
+            return
+        if not isinstance(data, (np.ndarray, torch.Tensor)):
+            raise TypeError(f"{modality} output must be an array or tensor")
+        metadata: Mapping[str, object] = payload
+        if modality == "audio" and payload.get("sr") is None:
+            metadata = {"sr": payload.get("audio_sample_rate")}
+        # TODO (Alex): Standardize stage media output types before watermarking and remove this.
+        # For now we have it to ensure watermarking doesn't modify the data type.
+        tensor = torch.from_numpy(data) if isinstance(data, np.ndarray) else data
+        watermarked = watermarker.watermark_output(request_id, tensor, metadata)
+        result = watermarked.numpy() if isinstance(data, np.ndarray) else watermarked
+        if isinstance(payload, MultimodalPayload):
+            payload.tensors[modality] = result
+        else:
+            payload[modality] = result
+
+    def _watermark_outputs(self, outputs: list[Any]) -> None:
+        """Watermark supported payloads in a batch of stage outputs."""
+        for output in outputs:
+            if isinstance(output, OmniEngineCoreOutput):
+                payload = output.multimodal_output
+                if payload is None:
+                    continue
+                for modality, watermarker in self._watermarkers.items():
+                    normalized = MultimodalPayload.from_raw(payload, modality)
+                    if normalized is None:
+                        continue
+                    try:
+                        self._watermark_payload(output.request_id, modality, watermarker, normalized)
+                    except (RuntimeError, TypeError, ValueError):
+                        logger.exception("Failed to watermark %s output for request %s", modality, output.request_id)
+                        watermarker.discard_request_state(output.request_id)
+                    output.multimodal_output = normalized
+                continue
+            if not isinstance(output, RequestOutput):
+                continue
+            payloads: list[MultimodalPayload | dict[str, Any]] = [
+                completion.multimodal_output
+                for completion in output.outputs
+                if isinstance(completion, MultimodalCompletionOutput) and completion.multimodal_output is not None
+            ]
+            if isinstance(output, OmniRequestOutput) and not output.outputs:
+                payload = output.multimodal_output
+                if isinstance(payload, dict):
+                    payloads.append(payload)
+
+            for payload in payloads:
+                for modality, watermarker in self._watermarkers.items():
+                    try:
+                        self._watermark_payload(output.request_id, modality, watermarker, payload)
+                    except (RuntimeError, TypeError, ValueError):
+                        logger.exception("Failed to watermark %s output for request %s", modality, output.request_id)
+                        watermarker.discard_request_state(output.request_id)
+            if output.finished:
+                self._discard_watermark_state([output.request_id])
+
+    def _discard_completed_llm_watermark_state(
+        self,
+        outputs: list[Any],
+        request_states: Mapping[str, RequestState],
+    ) -> None:
+        """Discard watermark state for completed LLM requests."""
+        request_ids = [
+            output.request_id
+            for output in outputs
+            if isinstance(output, OmniEngineCoreOutput) and output.request_id not in request_states
+        ]
+        self._discard_watermark_state(request_ids)
+
+    async def _process_watermark_outputs(self, outputs: list[Any]) -> None:
+        """Watermark outputs off-loop while serializing state access."""
+        if not self._watermarkers:
+            return
+        async with self._watermark_lock:
+            worker = asyncio.create_task(asyncio.to_thread(self._watermark_outputs, outputs))
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                await worker
+                raise
+
+    async def process_diffusion_output(self, output: OmniRequestOutput) -> OmniRequestOutput:
+        """Watermark one diffusion output without blocking the event loop."""
+        await self._process_watermark_outputs([output])
+        return output
+
+    def _discard_watermark_state(self, request_ids: list[str]) -> None:
+        """Discard retained watermark state for the given requests."""
+        for watermarker in self._watermarkers.values():
+            for request_id in request_ids:
+                watermarker.discard_request_state(request_id)
+
     # ---- Stage-local control plane ----
 
     async def abort_requests(self, request_ids: list[str]) -> list[tuple[str, Any]]:
@@ -1223,6 +1364,7 @@ class StagePool:
             request_ids_by_replica.setdefault(replica_id, []).append(request_id)
 
         abort_outputs: list[tuple[str, Any]] = []
+        watermark_abort_ids: list[str] = []
         is_diffusion = self.stage_type == "diffusion"
         for replica_id, replica_request_ids in request_ids_by_replica.items():
             # Orchestrator ids are OP external ids; EngineCore may use a
@@ -1232,28 +1374,38 @@ class StagePool:
             # still surface EngineCore/internal ids and would drop the prefix.
             engine_abort_ids = list(replica_request_ids)
             if not is_diffusion and self._output_processor is not None:
-                engine_abort_ids = []
-                for orch_req_id in replica_request_ids:
-                    collected_ids, stage_outputs = await self._output_processor.abort_requests_collecting_outputs_async(
-                        [orch_req_id],
-                        internal=False,
-                        commit_state=False,
-                    )
-                    for req_out in stage_outputs:
-                        abort_outputs.append((orch_req_id, req_out))
-                    if collected_ids:
-                        engine_abort_ids.extend(collected_ids)
-                    else:
-                        engine_abort_ids.append(orch_req_id)
+                collect = getattr(self._output_processor, "abort_requests_collecting_outputs", None)
+                if collect is not None:
+                    engine_abort_ids = []
+                    for orch_req_id in replica_request_ids:
+                        collected_ids, stage_outputs = collect(
+                            [orch_req_id],
+                            internal=False,
+                            commit_state=False,
+                        )
+                        for req_out in stage_outputs:
+                            abort_outputs.append((orch_req_id, req_out))
+                        if collected_ids:
+                            engine_abort_ids.extend(collected_ids)
+                        else:
+                            engine_abort_ids.append(orch_req_id)
+                else:
+                    aborted = self._output_processor.abort_requests(replica_request_ids, internal=False)
+                    if aborted:
+                        engine_abort_ids = list(aborted)
+            watermark_abort_ids.extend(engine_abort_ids)
             client = self.clients[replica_id]
             if client is None:
                 continue
             await client.abort_requests_async(engine_abort_ids)
             if not is_diffusion and self._output_processor is not None:
-                await self._output_processor.commit_aborted_request_state_async(
-                    replica_request_ids,
-                    internal=False,
-                )
+                commit = getattr(self._output_processor, "commit_aborted_request_state", None)
+                if callable(commit):
+                    commit(replica_request_ids, internal=False)
+
+        if self._watermarkers:
+            async with self._watermark_lock:
+                self._discard_watermark_state(watermark_abort_ids)
 
         return abort_outputs
 

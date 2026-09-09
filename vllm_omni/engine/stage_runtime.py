@@ -66,6 +66,7 @@ from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.entrypoints.stage_utils import resolve_stage_physical_devices
 from vllm_omni.entrypoints.utils import inject_omni_kv_config
 from vllm_omni.outputs.output_metadata import FinalOutputModalityType
+from vllm_omni.outputs.output_modality import OutputModality
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
@@ -949,7 +950,17 @@ class StageRuntime:
             clients: list[StagePoolClient] = [client for client in replica_clients if client is not None]
             stage_vllm_config = None
             output_processor = None
-            if plan.replicas[0].metadata.stage_type != "diffusion":
+            metadata = plan.replicas[0].metadata
+            # Initialize watermarkers based on the output type as needed
+            watermarkers = (
+                StagePool.initialize_watermarkers(
+                    OutputModality.from_string(metadata.final_output_type),
+                    self._watermark_config or None,
+                )
+                if metadata.final_output
+                else {}
+            )
+            if metadata.stage_type != "diffusion":
                 stage_vllm_config = plan.replicas[0].stage_vllm_config
                 if stage_vllm_config is None:
                     raise RuntimeError(f"Stage {plan.stage_id} is missing vllm_config")
@@ -957,7 +968,6 @@ class StageRuntime:
                     plan,
                     stage_vllm_config,
                     log_stats=self._log_stats,
-                    watermark_config=self._watermark_config,
                 )
 
             stage_pools.append(
@@ -966,6 +976,7 @@ class StageRuntime:
                     clients,
                     output_processor=output_processor,
                     stage_vllm_config=stage_vllm_config,
+                    watermarkers=watermarkers,
                 )
             )
 

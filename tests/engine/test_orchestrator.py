@@ -12,15 +12,18 @@ import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import janus
 import pytest
+import torch
 from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs, FinishReason
 from vllm.v1.engine.exceptions import EngineDeadError
 from vllm.v1.metrics.stats import IterationStats
 
+from vllm_omni.engine import OmniEngineCoreOutput
 from vllm_omni.engine.duplex.control_plane import DuplexControlPlane
 from vllm_omni.engine.duplex.messages import (
     AppendDuplexInputMessage,
@@ -256,9 +259,6 @@ class FakeOutputProcessor:
             reqs_to_abort=[],
         )
 
-    async def process_outputs_async(self, *args, **kwargs):
-        return self.process_outputs(*args, **kwargs)
-
     def abort_requests(self, request_ids, internal: bool = False):
         aborted_ids, _outputs = self.abort_requests_collecting_outputs(request_ids, internal=internal)
         return aborted_ids
@@ -286,12 +286,6 @@ class FakeOutputProcessor:
                 )
             )
         return ids, outputs
-
-    async def abort_requests_collecting_outputs_async(self, *args, **kwargs):
-        return self.abort_requests_collecting_outputs(*args, **kwargs)
-
-    async def commit_aborted_request_state_async(self, *_args, **_kwargs) -> None:
-        return None
 
     def update_scheduler_stats(self, _scheduler_stats) -> None:
         return None
@@ -2651,38 +2645,61 @@ async def test_stage_pool_process_llm_raw_outputs_mutates_iteration_stats() -> N
 
 
 @pytest.mark.asyncio
-async def test_stage_pool_uses_async_output_processor_for_llm_stages() -> None:
-    """Ensure that we use async output processing where it's available."""
+async def test_stage_pool_watermark_cancellation_waits_before_abort() -> None:
+    """Ensure cancellation waits for watermark work before releasing the lock."""
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
 
-    class AsyncOutputProcessor(FakeOutputProcessor):
-        def __init__(self) -> None:
-            super().__init__()
-            self.async_called = False
+    def watermark_output(_request_id, samples, _metadata):
+        worker_started.set()
+        try:
+            release_worker.wait()
+            return samples
+        finally:
+            worker_finished.set()
 
-        def process_outputs(self, *_args, **_kwargs):
-            raise AssertionError("synchronous output processing used")
-
-        async def process_outputs_async(self, *_args, **_kwargs):
-            self.async_called = True
-            return SimpleNamespace(request_outputs=[], reqs_to_abort=[])
-
-    client = FakeStageClient(stage_type="llm", final_output=True)
-    processor = AsyncOutputProcessor()
+    watermarker = MagicMock()
+    watermarker.watermark_output.side_effect = watermark_output
+    request_output = _build_request_output("r", finished=False)
+    engine_output = OmniEngineCoreOutput(
+        request_id="r",
+        new_token_ids=[],
+        multimodal_output={"model_outputs": torch.zeros(8), "sr": 24_000},
+    )
+    client = FakeStageClient(stage_type="llm", final_output=True, final_output_type="audio")
+    processor = FakeOutputProcessor(request_outputs=[request_output])
+    processor.request_states = {"r": object()}
     pool = StagePool(
         0,
         [client],
         output_processor=processor,
         stage_vllm_config=SimpleNamespace(model_config=SimpleNamespace(max_model_len=64)),
+        watermarkers={"audio": watermarker},
     )
+    pool._request_bindings["r"] = 0
 
-    await pool.process_llm_raw_outputs(
-        0,
-        SimpleNamespace(outputs=["raw"], timestamp=1.0, scheduler_stats=None),
+    processing = asyncio.create_task(
+        pool.process_llm_raw_outputs(
+            0,
+            SimpleNamespace(outputs=[engine_output], timestamp=1.0, scheduler_stats=None),
+        )
     )
+    await asyncio.wait_for(asyncio.to_thread(worker_started.wait), timeout=5)
+    processing.cancel()
+    aborting = asyncio.create_task(pool.abort_requests(["r"]))
+    await asyncio.sleep(0)
 
-    # Ensure that we call the async output processor so that potentially heavy
-    # post processing, e.g., audio watermarking, does not block the output loop
-    assert processor.async_called
+    assert not aborting.done()
+    assert not worker_finished.is_set()
+
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await processing
+    assert worker_finished.is_set()
+    await aborting
+    watermarker.watermark_output.assert_called_once()
+    watermarker.discard_request_state.assert_called_once_with("r")
 
 
 @pytest.mark.asyncio

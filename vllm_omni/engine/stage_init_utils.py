@@ -50,14 +50,12 @@ from vllm_omni.config.omni_config import (
     VllmOmniDiffusionStageConfig,
 )
 from vllm_omni.config.stage_config import StageType
-from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.engine.arg_utils import OmniEngineArgs
 from vllm_omni.entrypoints.stage_utils import _to_dict, set_stage_devices
 from vllm_omni.entrypoints.utils import filter_dataclass_kwargs, resolve_model_config_path
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParams
 from vllm_omni.inputs.preprocess import OmniInputPreprocessor
-from vllm_omni.outputs.output_modality import OutputModality
 from vllm_omni.outputs.output_processor import MultimodalOutputProcessor
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization.inc_config import OmniINCConfig
@@ -1511,7 +1509,6 @@ def build_llm_stage_output_processor(
     plan: LogicalStageInitPlan,
     stage_vllm_config: Any,
     log_stats: bool = False,
-    watermark_config: WatermarkConfig | None = None,
 ) -> Any | None:
     """Build one output processor per logical LLM stage.
 
@@ -1528,15 +1525,10 @@ def build_llm_stage_output_processor(
         tokenizer = cached_tokenizer_from_config(
             model_config=stage_vllm_config.model_config,
         )
-    output_modality = OutputModality.from_string(metadata.final_output_type)
-    watermarkers = MultimodalOutputProcessor.initialize_watermarkers(
-        output_modality, watermark_config or WatermarkConfig()
-    )
     return MultimodalOutputProcessor(
         tokenizer=tokenizer,
         log_stats=log_stats,
         engine_core_output_type=metadata.engine_output_type,
-        watermarkers=watermarkers,
     )
 
 

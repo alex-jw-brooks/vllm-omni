@@ -26,7 +26,7 @@ SERVER_PARAMS = [
             server_args=[
                 "--trust-remote-code",
                 "--watermark-config",
-                '{"audio": {"algorithm": "audioseal"}}',
+                '{"audio":"audioseal"}',
             ],
         ),
         id="qwen3-tts-0.6b",

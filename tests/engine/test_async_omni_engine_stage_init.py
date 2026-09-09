@@ -23,8 +23,8 @@ from vllm_omni.engine.stage_init_utils import (
     compute_replica_layout,
     split_devices_for_replicas,
 )
+from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.engine.stage_runtime import StageRuntime
-from vllm_omni.outputs.output_processor import MultimodalOutputProcessor
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -34,7 +34,7 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
     """Ensure runtime initialization constructs the configured stage watermarker."""
     watermarker = object()
     constructor = MagicMock(return_value=watermarker)
-    monkeypatch.setitem(MultimodalOutputProcessor._watermarker_registry["audio"], "audioseal", constructor)
+    monkeypatch.setitem(StagePool._watermarker_registry["audio"], "audioseal", constructor)
     runtime = StageRuntime(
         stage_configs=[],
         model="dummy-model",
@@ -62,6 +62,7 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
 
     assert len(runtime.stage_pools) == 1
     constructor.assert_called_once_with()
+    assert runtime.stage_pools[0]._watermarkers == {"audio": watermarker}
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):
@@ -844,11 +845,10 @@ def test_stage_runtime_passes_log_stats_to_output_processor(monkeypatch):
     captured: dict[str, object] = {}
     output_processor = object()
 
-    def _capture_build_llm_stage_output_processor(plan, stage_vllm_config, *, log_stats=False, watermark_config=None):
+    def _capture_build_llm_stage_output_processor(plan, stage_vllm_config, *, log_stats=False):
         captured["plan"] = plan
         captured["stage_vllm_config"] = stage_vllm_config
         captured["log_stats"] = log_stats
-        captured["watermark_config"] = watermark_config
         return output_processor
 
     monkeypatch.setattr(
@@ -864,7 +864,6 @@ def test_stage_runtime_passes_log_stats_to_output_processor(monkeypatch):
         "plan": stage_plan,
         "stage_vllm_config": cfg,
         "log_stats": True,
-        "watermark_config": None,
     }
 
 

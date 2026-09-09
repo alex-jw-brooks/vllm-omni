@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 """Multimodal output data structures for vLLM-Omni.
 
 This module defines structured types for multimodal outputs.
@@ -218,11 +221,7 @@ class MultimodalPayload(Mapping):
         return cls(tensors=tensors, metadata=metadata)
 
     @classmethod
-    def from_raw(
-        cls,
-        payload: MultimodalPayload | Mapping[str, object] | torch.Tensor,
-        modality_key: str,
-    ) -> MultimodalPayload | None:
+    def from_raw(cls, payload: Any, modality_key: str) -> MultimodalPayload | None:
         """Create a MultimodalPayload from a raw producer payload.
 
         Accepts a MultimodalPayload (returned as-is), a dict, or a bare
@@ -233,10 +232,11 @@ class MultimodalPayload(Mapping):
         """
         if isinstance(payload, MultimodalPayload):
             return payload
-        if isinstance(payload, torch.Tensor):
+
+        if not isinstance(payload, dict):
             return cls.from_dict({modality_key: _to_cpu(payload)})
 
-        remapped: dict[str, object] = {}
+        remapped: dict[str, Any] = {}
         for key, value in payload.items():
             is_producer_key = key == "model_outputs" or (key == "hidden" and modality_key != "hidden")
             remapped[modality_key if is_producer_key else key] = _to_cpu(value)
