@@ -1039,6 +1039,7 @@ class OrchestratorBase:
                                 continue
 
                             if not is_diffusion_request_started_output(diffusion_output):
+                                diffusion_output = await pool.process_diffusion_output(diffusion_output)
                                 pool.record_output_timestamps([diffusion_output])
                             processed = [diffusion_output]
                         else:
@@ -1288,6 +1289,7 @@ class OrchestratorBase:
                             self._orch_monitor.note_loop(idle=False)
                             continue
                         if not is_diffusion_request_started_output(payload):
+                            payload = await pool.process_diffusion_output(payload)
                             pool.record_output_timestamps([payload])
                         processed = [payload]
                     else:
