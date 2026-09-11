@@ -26,7 +26,7 @@ from vllm.entrypoints.serve.utils.api_utils import VLLM_SUBCMD_PARSER_EPILOG
 from vllm.logger import init_logger
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
-from vllm_omni.config.watermarking import WatermarkConfig
+from vllm_omni.config.watermarking import ALGORITHM_KEY, WatermarkConfig
 from vllm_omni.diffusion.registry import resolve_native_single_file
 from vllm_omni.engine.arg_utils import FRONTEND_ONLY_ID_FILTER, is_frontend_only
 from vllm_omni.entrypoints.api_server_shared_dir import (
@@ -68,8 +68,9 @@ Search by using: `--help=<ConfigGroup>` to explore options by section (e.g.,
   Use `--help=all` to show all available flags at once.
 """
 
-_ALGORITHM_KEY = "algorithm"
-_WATERMARK_CONFIG_HELP = 'Modality-keyed JSON watermark configuration; expected {"<modality>": "<algorithm>"}.'
+_WATERMARK_CONFIG_HELP = (
+    'Modality-keyed JSON watermark configuration. Example: {"<modality>": {"algorithm": "<algorithm>"}}.'
+)
 
 
 def _parse_stage_overrides(value: str) -> dict[str, dict[str, Any]]:
@@ -126,7 +127,7 @@ def _parse_watermark_config(value: str) -> WatermarkConfig:
         raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP) from exc
     if not isinstance(config, Mapping):
         raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP)
-    if _ALGORITHM_KEY in config and not WATERMARKER_REGISTRY.keys() & config.keys():
+    if ALGORITHM_KEY in config and not WATERMARKER_REGISTRY.keys() & config.keys():
         raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP)
     try:
         return WatermarkConfig(config)
@@ -397,7 +398,7 @@ class OmniServeCommand(CLISubcommand):
             "--watermark-config",
             argument_type=_parse_watermark_config,
             default=None,
-            help='Modality-keyed JSON watermark configuration; expected {"<modality>": "<algorithm>"}.',
+            help=_WATERMARK_CONFIG_HELP,
         )
 
         try:
