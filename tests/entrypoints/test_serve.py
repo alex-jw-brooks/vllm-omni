@@ -31,9 +31,11 @@ def test_serve_parser_accepts_modality_keyed_watermark_config() -> None:
     subparsers = parser.add_subparsers(dest="subcommand")
     OmniServeCommand().subparser_init(subparsers)
 
-    args = parser.parse_args(["serve", "fake-model", "--omni", "--watermark-config", '{"audio":"audioseal"}'])
+    args = parser.parse_args(
+        ["serve", "fake-model", "--omni", "--watermark-config", '{"audio":{"algorithm":"audioseal"}}']
+    )
 
-    assert args.watermark_config == WatermarkConfig({"audio": "audioseal"})
+    assert args.watermark_config == WatermarkConfig({"audio": {"algorithm": "audioseal"}})
     assert args.get_explicit_kwargs_dict()["watermark_config"] == args.watermark_config
 
 
@@ -49,20 +51,21 @@ def test_watermark_config_collision_uses_omni_validation(capsys: pytest.CaptureF
         help="test",
     )
 
-    args = parser.parse_args(["--watermark-config", '{"audio":"audioseal"}'])
-    assert args.watermark_config == WatermarkConfig({"audio": "audioseal"})
+    args = parser.parse_args(["--watermark-config", '{"audio":{"algorithm":"audioseal"}}'])
+    assert args.watermark_config == WatermarkConfig({"audio": {"algorithm": "audioseal"}})
     assert args.get_explicit_kwargs_dict()["watermark_config"] == args.watermark_config
 
     with pytest.raises(SystemExit):
         parser.parse_args(["--watermark-config", '{"algorithm":"gumbel","key":123}'])
     error = capsys.readouterr().err
-    assert 'expected {"<modality>": "<algorithm>"}' in error
+    assert '{"<modality>": {"algorithm": "<algorithm>"}}' in error
 
 
-def test_watermark_config_rejects_null_audio() -> None:
-    """Ensure an explicit audio modality requires an algorithm."""
+@pytest.mark.parametrize("value", ['{"audio": null}', '{"audio": "audioseal"}'])
+def test_watermark_config_requires_modality_config_object(value: str) -> None:
+    """Ensure a modality value uses the nested config shape."""
     with pytest.raises(argparse.ArgumentTypeError):
-        _parse_watermark_config('{"audio": null}')
+        _parse_watermark_config(value)
 
 
 def test_watermark_config_lists_registry_algorithms() -> None:

@@ -19,7 +19,7 @@ from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.engine.output_processor import RequestState
 from vllm.v1.metrics.stats import IterationStats
 
-from vllm_omni.config.watermarking import WatermarkConfig
+from vllm_omni.config.watermarking import ALGORITHM_KEY, WatermarkConfig
 from vllm_omni.distributed.omni_coordinator import (
     LoadBalancer,
     OmniCoordClientForHub,
@@ -120,8 +120,14 @@ class StagePool:
             return watermarkers
 
         for modality, watermarker_types in cls._watermarker_registry.items():
-            algorithm = watermark_config.modality_algorithms.get(modality)
-            if algorithm is not None and OutputModality.from_string(modality) in output_modality:
+            config = watermark_config.modality_configs.get(modality)
+            if config is not None and OutputModality.from_string(modality) in output_modality:
+                algorithm = config.get(ALGORITHM_KEY)
+                if not isinstance(algorithm, str) or algorithm not in watermarker_types:
+                    valid_algorithms = ", ".join(sorted(watermarker_types))
+                    raise ValueError(
+                        f"unsupported watermark algorithm {algorithm} for {modality}; supported: {valid_algorithms}"
+                    )
                 watermarkers[modality] = watermarker_types[algorithm]()
                 logger.info("Initialized watermarker for modality %s", modality)
         return watermarkers

@@ -32,7 +32,7 @@ def _stable_audio_server_cases(model: str):
         pytest.param(
             OmniServerParams(
                 model=model,
-                server_args=["--watermark-config", '{"audio":"audioseal"}'],
+                server_args=["--watermark-config", '{"audio":{"algorithm":"audioseal"}}'],
             ),
             id="t2a",
             marks=SINGLE_CARD_FEATURE_MARKS,

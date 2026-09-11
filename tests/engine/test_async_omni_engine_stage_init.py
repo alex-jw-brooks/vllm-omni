@@ -25,6 +25,7 @@ from vllm_omni.engine.stage_init_utils import (
 )
 from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.engine.stage_runtime import StageRuntime
+from vllm_omni.outputs.output_modality import OutputModality
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -41,7 +42,7 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
         config_path="dummy-config",
         stage_init_timeout=1,
         async_chunk=False,
-        watermark_config=WatermarkConfig({"audio": "audioseal"}),
+        watermark_config=WatermarkConfig({"audio": {"algorithm": "audioseal"}}),
     )
     if stage_type == "llm":
         config = types.SimpleNamespace(model_config=types.SimpleNamespace(skip_tokenizer_init=True))
@@ -63,6 +64,16 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
     assert len(runtime.stage_pools) == 1
     constructor.assert_called_once_with()
     assert runtime.stage_pools[0]._watermarkers == {"audio": watermarker}
+
+
+def test_initialize_watermarkers_checks_validity() -> None:
+    """Ensure stage initialization rejects a config mutated after validation."""
+    audio_config: dict[str, object] = {"algorithm": "audioseal"}
+    watermark_config = WatermarkConfig({"audio": audio_config})
+
+    audio_config["algorithm"] = "this is not a valid algorithm"
+    with pytest.raises(ValueError):
+        StagePool.initialize_watermarkers(OutputModality.AUDIO, watermark_config)
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):
@@ -249,7 +260,7 @@ def test_async_omni_engine_initialize_stages_passes_log_stats_to_runtime(monkeyp
     engine._omni_lb_policy = "random"
     engine.request_queue = types.SimpleNamespace()
     engine._log_stats = True
-    engine._watermark_config = WatermarkConfig({"audio": "audioseal"})
+    engine._watermark_config = WatermarkConfig({"audio": {"algorithm": "audioseal"}})
     engine._parallel_stage_init = False
 
     captured: dict[str, object] = {}
