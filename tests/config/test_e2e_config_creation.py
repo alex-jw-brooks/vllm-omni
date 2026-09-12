@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from unittest import mock
 
 import pytest
-from transformers import LlamaConfig
+from transformers import LlamaConfig, LlavaConfig
 from vllm import SamplingParams
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 
@@ -140,11 +140,12 @@ def built_stage_configs(model: str, **kwargs):
         return None
 
     with (
-        mock.patch.dict(OMNI_PIPELINES, {"llama": _LLM_PIPELINE}),
+        mock.patch.dict(OMNI_PIPELINES, {"llama": _LLM_PIPELINE, "llava": _LLM_PIPELINE}),
         mock.patch.object(stage_runtime, "build_vllm_config", side_effect=_record_vllm),
         mock.patch.object(stage_init_utils, "build_diffusion_config", side_effect=_record_diffusion),
         mock.patch.object(stage_runtime.StageRuntime, "_initialize_local_llm_replica", _skip_llm_spawn),
         mock.patch.object(stage_diffusion_client, "create_diffusion_client", side_effect=_skip_diffusion_client),
+        mock.patch.object(async_omni_engine, "build_stage0_input_processor"),
         mock.patch.object(async_omni_engine.Orchestrator, "run", _noop_run),
         mock.patch.object(stage_init_utils.current_omni_platform, "get_device_count", return_value=1),
     ):
@@ -201,6 +202,15 @@ class TestQuantization:
             assert built[0].model_config.quantization is None
             assert built[0].quant_config is None
 
+    def test_stage_initialization_preserves_nested_checkpoint_quantization(self, tmp_path):
+        LlavaConfig(text_config=LlamaConfig(quantization_config=_SERIALIZED_FP8)).save_pretrained(tmp_path)
+
+        with built_stage_configs(str(tmp_path), **_LLM_ENGINE_ARGS) as (_, built):
+            quant_config = built[0].quant_config
+            assert quant_config is not None
+            assert quant_config.get_name() == "fp8"
+            assert quant_config.is_checkpoint_fp8_serialized is True
+
 
 class TestDiffusionStageKwargs:
     """Diffusion kwargs actually land on the built OmniDiffusionConfig."""
@@ -250,7 +260,7 @@ def built_omni_config(model: str, **kwargs):
         raise _StopAfterOmniConfigError
 
     with (
-        mock.patch.dict(OMNI_PIPELINES, {"llama": _LLM_PIPELINE}),
+        mock.patch.dict(OMNI_PIPELINES, {"llama": _LLM_PIPELINE, "llava": _LLM_PIPELINE}),
         mock.patch.object(
             StageConfigFactory,
             "create_from_model",
@@ -283,6 +293,15 @@ class TestOmniConfigQuantization:
             assert isinstance(qc, QuantizationConfig)
             assert qc.get_name() == "fp8"
             assert qc.is_checkpoint_fp8_serialized is True
+
+    def test_resolves_nested_checkpoint_quantization(self, tmp_path):
+        LlavaConfig(text_config=LlamaConfig(quantization_config=_SERIALIZED_FP8)).save_pretrained(tmp_path)
+
+        with built_omni_config(str(tmp_path)) as cfg:
+            quant_config = cfg.stage_configs[0].quantization_config
+            assert isinstance(quant_config, QuantizationConfig)
+            assert quant_config.get_name() == "fp8"
+            assert quant_config.is_checkpoint_fp8_serialized is True
 
     def test_diffusion_cli_quantization_is_preformed_fp8(self, diffusion_model_dir):
         with built_omni_config(diffusion_model_dir, quantization="fp8") as cfg:
