@@ -82,7 +82,6 @@ from vllm_omni.engine.stage_runtime import (
 from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
 from vllm_omni.entrypoints.utils import (
     _apply_stage_engine_arg_overrides,
-    load_and_resolve_stage_configs,
     parse_stage_overrides,
 )
 from vllm_omni.inputs.data import OmniInteractionPrompt, OmniSamplingParams
@@ -323,7 +322,7 @@ class AsyncOmniEngine:
             stage_configs=self.stage_configs,
             model=self.model,
             config_path=self.config_path,
-            hf_config=self.hf_config,
+            hf_config=None,
             single_stage_mode=self.single_stage_mode,
             stage_init_timeout=stage_init_timeout,
             async_chunk=self.async_chunk,

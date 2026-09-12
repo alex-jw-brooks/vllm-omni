@@ -189,6 +189,7 @@ def test_build_vllm_config_fails_before_engine_config_on_mismatch():
             build_vllm_config(
                 stage,
                 model="dummy-model",
+                hf_config=None,
                 engine_args_dict={
                     "tensor_parallel_size": 4,
                     "data_parallel_size": 1,
@@ -217,11 +218,11 @@ def test_build_vllm_config_proceeds_on_consistent_layout():
             stage_init_utils.OmniEngineArgs, "create_engine_config", return_value=fake_config
         ) as create_engine_config,
         mock.patch.object(stage_init_utils.Executor, "get_class", return_value=sentinel_executor),
-        mock.patch.object(stage_init_utils.OmniINCConfig, "maybe_upgrade", side_effect=lambda quant: quant),
     ):
         vllm_config, executor_class = build_vllm_config(
             stage,
             model="dummy-model",
+            hf_config=None,
             engine_args_dict={"tensor_parallel_size": 1},
         )
     create_engine_config.assert_called_once()

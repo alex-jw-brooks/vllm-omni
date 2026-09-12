@@ -1377,13 +1377,14 @@ def test_diffusion_alias_conflicts_prefer_canonical_key(
     canonical_value,
     alias_value,
 ):
-    from vllm_omni.diffusion.data import normalize_omni_diffusion_kwargs
+    from vllm_omni.diffusion.data import normalize_omni_kwargs
 
-    normalized = normalize_omni_diffusion_kwargs(
+    normalized = normalize_omni_kwargs(
         {
             canonical_key: canonical_value,
             alias_key: alias_value,
-        }
+        },
+        is_diffusion=True,
     )
 
     assert normalized[canonical_key] == canonical_value

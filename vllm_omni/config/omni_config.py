@@ -863,10 +863,7 @@ class _DiffusionConfigProjection:
         elif not isinstance(self.video_output_transport, VideoOutputTransportConfig):
             raise TypeError("video_output_transport must be a VideoOutputTransportConfig or mapping")
 
-        # FIXME - this is essentially a duplicated issue of what we have in diffusion / data,
-        # so if init always just gets an optional quant config, we do not need to redo this here.
         self.quantization_config = build_quantization_config(self.quantization_config)
-        self._propagate_quantization_from_tf_config(self.tf_model_config)
 
         if self.diffusion_attention_config is None or isinstance(
             self.diffusion_attention_config,

@@ -3,8 +3,8 @@
 
 import pytest
 import torch
-from pydantic import ValidationError
 from omegaconf import OmegaConf
+from pydantic import ValidationError
 
 from vllm_omni.config.config_factory import StageConfigFactory
 from vllm_omni.config.resolver import OmniConfigResolution
@@ -669,11 +669,13 @@ def test_serve_cli_accepts_additional_config():
 
 
 def test_resolve_stage_configs_delegates_overrides_to_resolver(mocker):
-    """The engine consumes resolver output without a second merge pass."""
+    """The engine delegates config creation to the resolver."""
     additional_config = {"torchair_graph_config": {"enabled": True}}
-    fake_diffusion_stage = SimpleNamespace(
-        stage_type="diffusion",
-        engine_args=SimpleNamespace(additional_config=additional_config),
+    fake_diffusion_stage = OmegaConf.create(
+        {
+            "stage_type": "diffusion",
+            "engine_args": {"additional_config": additional_config},
+        }
     )
     resolve_config = mocker.patch(
         "vllm_omni.engine.async_omni_engine.resolve_omni_config",
@@ -682,6 +684,18 @@ def test_resolve_stage_configs_delegates_overrides_to_resolver(mocker):
             stage_configs=(fake_diffusion_stage,),
         ),
     )
+    engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
+
+    config_path, stage_configs = engine._resolve_stage_configs(
+        "dummy-model",
+        {
+            "deploy_config": "dummy.yaml",
+            "additional_config": additional_config,
+        },
+        trust_remote_code=False,
+    )
+
+    assert config_path == "dummy.yaml"
     assert stage_configs == [fake_diffusion_stage]
     assert resolve_config.call_args.args == ("dummy-model",)
     assert resolve_config.call_args.kwargs["deploy_config_path"] == "dummy.yaml"
@@ -689,67 +703,67 @@ def test_resolve_stage_configs_delegates_overrides_to_resolver(mocker):
 
 
 def test_default_stage_resolves_video_output_from_checkpoint(mocker):
-    captured = {}
-
-    def resolve_with_default(*args, default_stage_cfg_factory, **kwargs):
-        del args, kwargs
-        stage_configs = default_stage_cfg_factory()
-        captured.update(stage_configs[0])
-        return "", OmegaConf.create(stage_configs), None
-
-    resolver = mocker.patch(
-        "vllm_omni.engine.async_omni_engine.resolve_model_class_name",
+    model = "/models/MiniMax-H3/FL2VA"
+    create_default_stage = mocker.spy(StageConfigFactory, "create_default_diffusion")
+    mocker.patch(
+        "vllm_omni.config.resolver.StageConfigFactory.create_from_model",
+        return_value=None,
+    )
+    resolve_model_class = mocker.patch(
+        "vllm_omni.config.resolver.resolve_model_class_name",
         return_value="MiniMaxH3Pipeline",
     )
     mocker.patch(
-        "vllm_omni.engine.async_omni_engine.load_and_resolve_stage_configs",
-        side_effect=resolve_with_default,
+        "vllm_omni.config.resolver.DiffusionModelRegistry.get_supported_archs",
+        return_value={"MiniMaxH3Pipeline"},
     )
     engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
-    engine._strip_single_engine_args = lambda kwargs: kwargs
 
-    engine._resolve_stage_configs(
-        "/models/MiniMax-H3/FL2VA",
+    _, stage_configs = engine._resolve_stage_configs(
+        model,
         {},
         trust_remote_code=False,
     )
 
-    resolver.assert_called_once_with("/models/MiniMax-H3/FL2VA", "default")
-    assert captured["final_output_type"] == "video"
+    resolve_model_class.assert_called_once_with(model, "default", None)
+    create_default_stage.assert_called_once()
+    assert stage_configs[0]["final_output_type"] == "video"
 
 
 def test_default_diffusers_stage_preserves_video_model_identity(mocker):
-    captured = {}
-
-    def resolve_with_default(*args, default_stage_cfg_factory, **kwargs):
-        del args, kwargs
-        stage_configs = default_stage_cfg_factory()
-        captured.update(stage_configs[0])
-        return "", OmegaConf.create(stage_configs), None
-
+    create_default_stage = mocker.spy(StageConfigFactory, "create_default_diffusion")
+    mocker.patch(
+        "vllm_omni.config.resolver.StageConfigFactory.create_from_model",
+        return_value=None,
+    )
+    mocker.patch(
+        "vllm_omni.diffusion.utils.hf_utils.resolve_native_diffusion_model_class",
+        return_value=None,
+    )
     mocker.patch(
         "vllm_omni.diffusion.utils.hf_utils.get_diffusion_model_index",
         return_value={"_class_name": "WanImageToVideoPipeline"},
     )
     mocker.patch(
-        "vllm_omni.engine.async_omni_engine.load_and_resolve_stage_configs",
-        side_effect=resolve_with_default,
+        "vllm_omni.config.resolver.DiffusionModelRegistry.get_supported_archs",
+        return_value={"WanImageToVideoPipeline"},
     )
     engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
-    engine._strip_single_engine_args = lambda kwargs: kwargs
 
-    engine._resolve_stage_configs(
+    _, stage_configs = engine._resolve_stage_configs(
         "/models/Wan2.2-I2V",
         {"diffusion_load_format": "diffusers"},
         trust_remote_code=False,
     )
 
-    assert captured["engine_args"]["model_class_name"] == "WanImageToVideoPipeline"
-    assert captured["final_output_type"] == "video"
+    create_default_stage.assert_called_once()
+    assert stage_configs[0]["engine_args"]["model_class_name"] == "WanImageToVideoPipeline"
+    assert stage_configs[0]["final_output_type"] == "video"
 
 
 def test_resolve_stage_configs_injects_additional_config_into_diffusion_stage(mocker):
     """Ensure YAML/deploy stage resolution forwards top-level additional_config."""
+    additional_config = {"torchair_graph_config": {"enabled": True}}
     fake_diffusion_stage = OmegaConf.create({"stage_type": "diffusion", "engine_args": {}})
     fake_llm_stage = OmegaConf.create({"stage_type": "llm", "engine_args": {}})
     mocker.patch(
@@ -769,7 +783,7 @@ def test_resolve_stage_configs_injects_additional_config_into_diffusion_stage(mo
     )
 
     assert "additional_config" not in stage_configs[0]["engine_args"]
-    assert stage_configs[1]["engine_args"]["additional_config"] == {"torchair_graph_config": {"enabled": True}}
+    assert stage_configs[1]["engine_args"]["additional_config"] == additional_config
 
 
 @pytest.mark.parametrize(

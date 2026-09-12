@@ -238,9 +238,10 @@ def built_omni_config(model: str, **kwargs):
     we create the config, since it hasn't been wired through the stage creation yet.
     """
     captured: dict = {}
+    create_from_model = StageConfigFactory.create_from_model
 
-    def _build_omni_config(m, *, trust_remote_code, cli_overrides, deploy_config_path, strategy_specs=None):
-        captured["config"] = StageConfigFactory.create_from_model(
+    def _build_omni_config(m, *, trust_remote_code, cli_overrides, deploy_config_path):
+        captured["config"] = create_from_model(
             m,
             trust_remote_code=trust_remote_code,
             cli_overrides=cli_overrides,
@@ -252,7 +253,7 @@ def built_omni_config(model: str, **kwargs):
         mock.patch.dict(OMNI_PIPELINES, {"llama": _LLM_PIPELINE}),
         mock.patch.object(
             StageConfigFactory,
-            "create_legacy_stage_configs_from_model",
+            "create_from_model",
             side_effect=_build_omni_config,
         ),
     ):

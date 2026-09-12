@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-def normalize_omni_kwargs(kwargs: dict[str, Any], is_diffusion: bool) -> dict[str, Any]:
+def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict[str, Any]:
     """Normalize legacy diffusion kwargs before config construction and return a handle to the
     normalized kwargs.
 
@@ -57,6 +57,7 @@ def normalize_omni_kwargs(kwargs: dict[str, Any], is_diffusion: bool) -> dict[st
     """
     normalized = dict(kwargs)
 
+    # dtype normalization should apply regardless of engine type
     dtype = normalized.get("dtype")
     if dtype is None:
         normalized["dtype"] = "auto"
@@ -1587,14 +1588,20 @@ class OmniDiffusionConfig:
                     raise
 
     @classmethod
-    def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":
+    def normalize_init_kwargs(cls, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         config_kwargs = normalize_omni_kwargs(kwargs, is_diffusion=True)
 
         # Filter kwargs to only include valid fields
         valid_fields = {f.name for f in fields(cls)}
-        filtered_kwargs = {key: value for key, value in config_kwargs.items() if key in valid_fields and value is not None}
+        filtered_kwargs = {
+            key: value for key, value in config_kwargs.items() if key in valid_fields and value is not None
+        }
 
-        return cls(**filtered_kwargs)
+        return filtered_kwargs
+
+    @classmethod
+    def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":
+        return cls(**cls.normalize_init_kwargs(kwargs))
 
 
 @dataclass
