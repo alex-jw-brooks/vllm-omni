@@ -91,7 +91,6 @@ def _runtime(parallel_stage_init: bool = False) -> StageRuntime:
         stage_configs=[],
         model="dummy",
         config_path="dummy",
-        hf_config=None,
         stage_init_timeout=5,
         async_chunk=False,
         parallel_stage_init=parallel_stage_init,

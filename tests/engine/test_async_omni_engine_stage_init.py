@@ -192,7 +192,6 @@ def _make_stage_runtime(
         stage_configs=stage_configs or [],
         model="dummy-model",
         config_path="dummy-config",
-        hf_config=None,
         stage_init_timeout=stage_init_timeout,
         async_chunk=False,
         log_stats=log_stats,
@@ -223,7 +222,6 @@ def test_async_omni_engine_initialize_stages_passes_log_stats_to_runtime(monkeyp
     engine = object.__new__(AsyncOmniEngine)
     engine.stage_configs = [types.SimpleNamespace()]
     engine.model = "dummy-model"
-    engine.hf_config = None
     engine.config_path = "dummy-config"
     engine.single_stage_mode = False
     engine.async_chunk = False
@@ -546,7 +544,6 @@ def test_initialize_diffusion_stage_preserves_configured_max_num_seqs(monkeypatc
     init_mod.initialize_diffusion_stage(
         0,
         "dummy-model",
-        None,
         types.SimpleNamespace(),
         metadata,
         stage_init_timeout=12,
@@ -603,7 +600,6 @@ def test_launch_diffusion_stage_replica_preserves_configured_max_num_seqs(monkey
 
     result, resources = startup_mod.launch_diffusion_stage_replica(
         model="dummy-model",
-        hf_config=None,
         stage_config=types.SimpleNamespace(),
         metadata=types.SimpleNamespace(stage_id=0),
         stage_init_timeout=12,
@@ -630,7 +626,6 @@ def test_initialize_diffusion_stage_does_not_write_max_num_seqs(monkeypatch):
     init_mod.initialize_diffusion_stage(
         0,
         "dummy-model",
-        None,
         types.SimpleNamespace(),
         metadata,
         stage_init_timeout=12,
@@ -682,7 +677,6 @@ def test_launch_diffusion_stage_replica_preserves_step_execution_max_num_seqs(mo
 
     startup_mod.launch_diffusion_stage_replica(
         model="dummy-model",
-        hf_config=None,
         stage_config=types.SimpleNamespace(),
         metadata=types.SimpleNamespace(stage_id=0),
         stage_init_timeout=12,

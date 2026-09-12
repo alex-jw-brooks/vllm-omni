@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import regex as re
-from transformers import PretrainedConfig
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
@@ -1452,7 +1451,6 @@ def _check_stage_device_layout(stage_config: Any, engine_args_dict: dict[str, An
 def build_vllm_config(
     stage_config: Any,
     model: str,
-    hf_config: PretrainedConfig | None,
     stage_connector_spec: dict[str, Any] | None = None,
     engine_args_dict: dict[str, Any] | None = None,
     headless: bool = False,
@@ -1930,7 +1928,6 @@ def get_stage_connector_spec(
 
 def build_diffusion_config(
     model: str,
-    hf_config: PretrainedConfig | None,
     stage_cfg: Any,
     metadata: StageMetadata,
     quantization_config: QuantizationConfig | None,
@@ -1966,7 +1963,6 @@ def build_diffusion_config(
 def initialize_diffusion_stage(
     stage_id: int,
     model: str,
-    hf_config: PretrainedConfig | None,
     stage_cfg: Any,
     metadata: StageMetadata,
     stage_init_timeout: int,
@@ -1977,7 +1973,6 @@ def initialize_diffusion_stage(
 
     Args:
         model: Model name or path.
-        hf_config: Cached HF PretrainedConfig for early quant resolution.
         stage_cfg: Stage configuration.
         metadata: Extracted stage metadata.
         stage_init_timeout: Timeout in seconds for stage initialization handshake
@@ -1985,7 +1980,7 @@ def initialize_diffusion_stage(
     """
     from vllm_omni.diffusion.stage_diffusion_client import create_diffusion_client
 
-    od_config = build_diffusion_config(model, hf_config, stage_cfg, metadata, quantization_config)
+    od_config = build_diffusion_config(model, stage_cfg, metadata, quantization_config)
     return create_diffusion_client(model, od_config, metadata, stage_init_timeout, use_inline)
 
 

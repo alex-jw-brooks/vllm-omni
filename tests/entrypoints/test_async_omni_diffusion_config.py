@@ -502,7 +502,6 @@ def test_invalid_diffusion_offload_config_fails_before_model_loading(monkeypatch
         stage_init_utils.initialize_diffusion_stage(
             stage_id=0,
             model="test",
-            hf_config=None,
             stage_cfg=object(),
             metadata=mocker.Mock(),
             stage_init_timeout=30,

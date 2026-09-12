@@ -130,7 +130,7 @@ def test_get_quantization_method_conflicting_aliases_raise():
 
 ### Checks for MP serialization
 def test_per_component_config_preserves_built_config():
-    """Ensure per component configs maintain prebuild configs."""
+    """Ensure per component configs maintain prebuilt configs."""
     transformer_cfg = build_quantization_config("fp8")
     config = build_quantization_config({"transformer": transformer_cfg, "vae": None})
 
