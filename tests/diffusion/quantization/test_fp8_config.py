@@ -54,6 +54,22 @@ def test_build_quantization_config_dict_not_mutated():
     assert original == copy
 
 
+def test_build_quantization_config_checkpoint_metadata_not_mutated():
+    """Ensure checkpoint metadata remains unchanged during config construction."""
+    metadata = {
+        "quant_method": "fp8",
+        "is_checkpoint_fp8_serialized": True,
+        "activation_scheme": "static",
+    }
+    original = metadata.copy()
+
+    config = build_quantization_config(None, metadata)
+
+    assert isinstance(config, Fp8Config)
+    assert config.is_checkpoint_fp8_serialized
+    assert metadata == original
+
+
 def test_build_quantization_config_modelopt_fp8_config_json():
     config = build_quantization_config(
         {
