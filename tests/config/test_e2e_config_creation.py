@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from unittest import mock
 
 import pytest
-from transformers import LlamaConfig
+from transformers import LlamaConfig, Qwen3OmniMoeConfig
 from vllm import SamplingParams
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 
@@ -298,3 +298,20 @@ class TestOmniConfigQuantization:
             assert isinstance(qc, QuantizationConfig)
             assert qc.get_name() == "fp8"
             assert qc.is_checkpoint_fp8_serialized is True
+
+    def test_nested_checkpoint_quantization_is_stage_scoped(self, tmp_path):
+        """Ensure nested checkpoint quantization applies only to its stage."""
+        hf_config = Qwen3OmniMoeConfig()
+        hf_config.thinker_config.text_config.quantization_config = _SERIALIZED_FP8
+        hf_config.save_pretrained(tmp_path)
+
+        config = StageConfigFactory.create_from_model(
+            str(tmp_path),
+            trust_remote_code=False,
+            cli_overrides={},
+            deploy_config_path=None,
+        )
+
+        assert config is not None
+        assert config.stage_by_id(0).quantization_config.get_name() == "fp8"
+        assert config.stage_by_id(1).quantization_config is None
