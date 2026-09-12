@@ -318,7 +318,7 @@ def _maybe_build_component_quant_config(
 
 
 def build_quantization_config(
-    quantization: str | dict[str, Any] | QuantizationConfig | None,
+    quantization: str | Mapping[str, Any] | QuantizationConfig | None,
     quant_config: dict[str, Any] | None = None,
 ) -> QuantizationConfig | None:
     """Build a resolved QuantizationConfig.
@@ -338,6 +338,10 @@ def build_quantization_config(
     """
     if isinstance(quantization, QuantizationConfig):
         return quantization
+    if quantization is not None and not isinstance(quantization, (str, Mapping)):
+        raise TypeError(
+            f"quantization must be a string, mapping, QuantizationConfig, or None, got {type(quantization).__name__}"
+        )
 
     # If we don't pass quantization, we can still grab it from the checkpoint's config
     if quantization is None:

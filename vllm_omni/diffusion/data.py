@@ -1285,12 +1285,12 @@ class OmniDiffusionConfig:
             self.video_output_transport = VideoOutputTransportConfig(**dict(self.video_output_transport))
         elif not isinstance(self.video_output_transport, VideoOutputTransportConfig):
             raise TypeError("video_output_transport must be a VideoOutputTransportConfig or mapping")
-        # Normalize the incoming quant spec (legacy "quantization" str / dict)
-        # into a real QuantizationConfig so the field matches its declared type,
-        # which ensure sthat we actually have a quantization config here.
-        # FIXME - this is probably not the best way to do this; i.e., we should prebuild
-        # the config directly on the common path, which if true, makes this a no-op.
-        # We should remove this and also the tf propagation once types are safe everywhere.
+        if isinstance(self.quantization_config, (str, Mapping)):
+            logger.warning_once(
+                "Passing a string or mapping as OmniDiffusionConfig.quantization_config "
+                "is deprecated and will be removed in vLLM-Omni >= 0.30. Pass a "
+                "preconstructed QuantizationConfig object instead."
+            )
         self.quantization_config = build_quantization_config(self.quantization_config)
 
         # Auto-detect quantization from TransformerConfig if not explicitly set.
