@@ -12,7 +12,7 @@ from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization import build_quantization_config
 from vllm_omni.quantization.factory import SUPPORTED_QUANTIZATION_METHODS
 
-pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
 
 npu_available = pytest.mark.skipif(not current_omni_platform.is_npu(), reason="NPU platform not available.")
 
@@ -48,12 +48,14 @@ def test_int8_config_with_custom_params():
     assert "proj_out" in config.ignored_layers
 
 
+@pytest.mark.cpu
 def test_no_quantization_config_is_not_serialized():
     """Ensure that if we have no loaded config for quantization, it's not serialized."""
     config = build_quantization_config("int8")
     assert config is not None and not config.is_checkpoint_int8_serialized
 
 
+@pytest.mark.cpu
 def test_with_quantization_config_is_serialized():
     """Ensure that if we have a loaded config for quantization, it's serialized."""
     config = build_quantization_config("int8", {"quant_method": "int8"})
