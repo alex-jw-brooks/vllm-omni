@@ -17,7 +17,6 @@ from typing import Any, cast
 
 import janus
 from omegaconf import OmegaConf
-from transformers import PretrainedConfig
 from vllm.logger import init_logger
 
 from vllm_omni.distributed.omni_connectors.utils.initialization import (
@@ -127,7 +126,6 @@ class StageRuntime:
         model: str,
         config_path: str,
         *,
-        hf_config: PretrainedConfig | None,
         stage_init_timeout: int,
         async_chunk: bool,
         tokenizer: str | None = None,
@@ -137,7 +135,6 @@ class StageRuntime:
         self._stage_configs = stage_configs
         self._model = model
         self._config_path = config_path
-        self._hf_config = hf_config
         self._stage_init_timeout = stage_init_timeout
         self._async_chunk = async_chunk
         self._tokenizer = tokenizer
@@ -411,7 +408,6 @@ class StageRuntime:
                 stage_vllm_config, executor_class = build_vllm_config(
                     stage_cfg,
                     self._model,
-                    self._hf_config,
                     stage_connector_spec=stage_connector_spec,
                     engine_args_dict=engine_args_dict,
                     quantization_config=quantization_config,
@@ -896,7 +892,6 @@ class StageRuntime:
                 )
                 client, resources = launch_diffusion_stage_replica(
                     model=self._model,
-                    hf_config=self._hf_config,
                     stage_config=plan.stage_cfg,
                     metadata=plan.metadata,
                     stage_init_timeout=stage_init_timeout,
@@ -994,7 +989,6 @@ class DistStageRuntime(StageRuntime):
         model: str,
         config_path: str,
         *,
-        hf_config: PretrainedConfig | None,
         stage_init_timeout: int,
         async_chunk: bool,
         single_stage_id_filter: int | None,
@@ -1012,7 +1006,6 @@ class DistStageRuntime(StageRuntime):
             stage_configs=stage_configs,
             model=model,
             config_path=config_path,
-            hf_config=hf_config,
             stage_init_timeout=stage_init_timeout,
             async_chunk=async_chunk,
             tokenizer=tokenizer,
@@ -1333,7 +1326,6 @@ def create_stage_runtime(
     model: str,
     config_path: str,
     *,
-    hf_config: PretrainedConfig | None,
     single_stage_mode: bool,
     stage_init_timeout: int,
     async_chunk: bool,
@@ -1357,7 +1349,6 @@ def create_stage_runtime(
             stage_configs=stage_configs,
             model=model,
             config_path=config_path,
-            hf_config=hf_config,
             stage_init_timeout=stage_init_timeout,
             async_chunk=async_chunk,
             tokenizer=tokenizer,
@@ -1375,7 +1366,6 @@ def create_stage_runtime(
         stage_configs=stage_configs,
         model=model,
         config_path=config_path,
-        hf_config=hf_config,
         stage_init_timeout=stage_init_timeout,
         async_chunk=async_chunk,
         tokenizer=tokenizer,
