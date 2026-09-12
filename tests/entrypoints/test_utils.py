@@ -4,8 +4,10 @@
 """Unit tests for vllm_omni.entrypoints.utils module."""
 
 import logging
+import os
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,9 +26,14 @@ from vllm_omni.config.stage_config import PipelineConfig
 from vllm_omni.config.yaml_util import create_config
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.engine.arg_utils import OmniEngineArgs
+from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
+from vllm_omni.engine.stage_init_utils import get_stage_connector_spec, load_omni_transfer_config_for_model
 from vllm_omni.entrypoints.utils import (
+    _try_resolve_omni_model_type,
     coerce_param_message_types,
     filter_dataclass_kwargs,
+    load_and_resolve_stage_configs,
+    resolve_model_config_path,
 )
 from vllm_omni.model_executor.models.qwen3_omni.pipeline import QWEN3_OMNI_PIPELINE
 
@@ -294,6 +301,7 @@ class TestFilterDataclassKwargs:
         assert result["cache_config"]["rel_l1_thresh"] == 0.3
         assert "extra_param" not in result["cache_config"]
 
+
 class TestResolveModelConfigPath:
     """Test suite for resolve_model_config_path function with diffusers format models."""
 
@@ -442,8 +450,11 @@ class TestLoadAndResolveStageConfigs:
         assert stage_configs[0]["engine_args"]["engine_backend"] == engine_backend
         assert stage_configs[0]["engine_args"]["revision"] == "pinned-revision"
 
-    def test_deploy_config_preserves_cli_overrides_and_replicas(self, tmp_path, mocker: MockerFixture):
-        deploy_path = tmp_path / "qwen3_multi.yaml"
+
+class TestResolveOmniConfig:
+    def test_bare_deploy_name_returns_packaged_resolved_path(self, tmp_path, mocker: MockerFixture):
+        deploy_name = "qwen3_omni_moe.yaml"
+        deploy_path = tmp_path / deploy_name
         deploy_path.write_text(
             "duplex_session:\n  server_vad_model_path: /models/silero_vad.onnx\nstages: []\n",
             encoding="utf-8",
@@ -454,6 +465,7 @@ class TestLoadAndResolveStageConfigs:
             "vllm_omni.config.config_factory.StageConfigFactory.get_pipeline_config",
             return_value=QWEN3_OMNI_PIPELINE,
         )
+        mocker.patch("vllm_omni.config.omni_config.read_checkpoint_quantization_config", return_value=None)
 
         resolved = resolve_omni_config(
             "dummy-model",

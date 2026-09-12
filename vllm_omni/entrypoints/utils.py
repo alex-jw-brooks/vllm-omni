@@ -4,12 +4,16 @@
 import json
 import os
 import types
+from collections import Counter
 from dataclasses import fields, is_dataclass
+from pathlib import Path
 from typing import Any, get_args, get_origin
 
 from omegaconf import DictConfig, OmegaConf
 from vllm.logger import init_logger
 from vllm.sampling_params import RequestOutputKind, SamplingParams
+from vllm.transformers_utils.config import get_config, get_hf_file_to_dict
+from vllm.transformers_utils.repo_utils import file_or_path_exists
 
 from vllm_omni.config.config_factory import (
     StageConfigFactory,
@@ -34,6 +38,11 @@ from vllm_omni.utils.model_source import materialize_object_storage_configs
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 logger = init_logger(__name__)
+
+
+_DIFFUSERS_CLASS_TO_CONFIG: dict[str, str] = {
+    "GlmImagePipeline": "glm_image",
+}
 
 
 def inject_omni_kv_config(stage: Any, omni_conn_cfg: dict[str, Any], omni_from: str, omni_to: str) -> None:
