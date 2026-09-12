@@ -24,8 +24,7 @@ from vllm.logger import init_logger
 
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
-from vllm_omni.entrypoints.utils import parse_stage_overrides
-from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides
+from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides, parse_stage_overrides
 from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
@@ -987,8 +986,8 @@ def run_headless(args: TrackingNamespace) -> None:
     from vllm.v1.executor.multiproc_executor import MultiprocExecutor
     from vllm.version import __version__ as VLLM_VERSION
 
-    from vllm_omni.config.resolver import resolve_omni_config
     from vllm_omni.config.config_factory import StageConfigFactory
+    from vllm_omni.config.resolver import resolve_omni_config
     from vllm_omni.distributed.omni_connectors.utils.initialization import resolve_omni_kv_config_for_stage
     from vllm_omni.engine.stage_engine_startup import (
         get_headless_replica_devices,

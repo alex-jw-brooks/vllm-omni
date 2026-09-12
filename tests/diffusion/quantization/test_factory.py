@@ -5,7 +5,6 @@
 - Quantization name resolution
 """
 
-import pickle
 from collections.abc import Callable
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
@@ -144,7 +143,7 @@ def test_component_config_survives_multiprocessing_serialization():
     """Ensure component configs survive mp serialization."""
     config = ComponentQuantizationConfig({"transformer": Fp8Config(), "vae": None})
 
-    restored = pickle.loads(ForkingPickler.dumps(config))
+    restored = ForkingPickler.loads(ForkingPickler.dumps(config))
 
     assert restored.resolve("transformer").get_name() == "fp8"
     assert restored.resolve("vae") is None
@@ -155,7 +154,7 @@ def test_quantization_configs_survive_multiprocessing_serialization(
     case: ConfigCase,
 ) -> None:
     config = case.constructor()
-    restored = pickle.loads(ForkingPickler.dumps(config))
+    restored = ForkingPickler.loads(ForkingPickler.dumps(config))
 
     assert type(restored) is type(config)
     assert restored.get_name() == config.get_name()
