@@ -1288,7 +1288,7 @@ class OmniDiffusionConfig:
         if isinstance(self.quantization_config, (str, Mapping)):
             logger.warning_once(
                 "Passing a string or mapping as OmniDiffusionConfig.quantization_config "
-                "is deprecated and will be removed in vLLM-Omni >= 0.30. Pass a "
+                "is deprecated and will be removed in vLLM-Omni>0.30. Pass a "
                 "preconstructed QuantizationConfig object instead."
             )
         self.quantization_config = build_quantization_config(self.quantization_config)
