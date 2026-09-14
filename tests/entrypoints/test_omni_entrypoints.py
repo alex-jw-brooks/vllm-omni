@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gc
 import queue
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -1334,6 +1335,31 @@ def test_omni_pygenerator_does_not_kill_engine(monkeypatch: pytest.MonkeyPatch):
     assert not engine.shutdown_called
 
 
+def test_omni_generator_close_cleans_up(monkeypatch: pytest.MonkeyPatch):
+    """Ensure that a closed generator cleans things up properly."""
+    engine = FakeAsyncOmniEngine(
+        stage_metadata=THREE_STAGE_META,
+        on_add_request=_enqueue_async_three_stage_outputs,
+    )
+
+    _patch_engine(monkeypatch, engine)
+
+    app = Omni("dummy-model")
+
+    # Create a generator and start to evaluate it to make sure the request isn't aborted yet
+    my_gen = app.generate(["hello"], py_generator=True)
+    next(my_gen)
+    request_id = engine.submitted[0]["request_id"]
+    assert engine.aborted == []
+    assert request_id in app.request_states
+
+    # Close it and make sure the sure it's aborted, but without killing engine
+    my_gen.close()
+    assert engine.aborted == [[request_id]]
+    assert request_id not in app.request_states
+    assert not engine.shutdown_called
+
+
 def test_del_shutsdown_engine(monkeypatch: pytest.MonkeyPatch):
     engine = FakeAsyncOmniEngine(
         stage_metadata=THREE_STAGE_META,
@@ -1345,4 +1371,5 @@ def test_del_shutsdown_engine(monkeypatch: pytest.MonkeyPatch):
     app = Omni("dummy-model")
     assert not engine.shutdown_called
     del app
+    gc.collect()
     assert engine.shutdown_called
