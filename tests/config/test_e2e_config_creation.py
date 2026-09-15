@@ -27,6 +27,7 @@ from vllm_omni.config.stage_config import (
     StagePipelineConfig,
 )
 from vllm_omni.entrypoints.omni import Omni
+from vllm_omni.quantization import ComponentQuantizationConfig
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -349,3 +350,13 @@ class TestOmniConfigQuantization:
             assert isinstance(qc, QuantizationConfig)
             assert qc.get_name() == "fp8"
             assert qc.is_checkpoint_fp8_serialized is True
+
+    def test_checkpoint_quantization_preserves_component_exclusions(self, tmp_path):
+        model = _write_llm_model_dir(tmp_path, quantization_config=_SERIALIZED_FP8)
+        quantization = {"transformer": "fp8", "vae": None, "default": None}
+
+        with built_omni_config(model, quantization_config=quantization) as cfg:
+            quant_config = cfg.stage_configs[0].quantization_config
+            assert isinstance(quant_config, ComponentQuantizationConfig)
+            assert quant_config.resolve("vae") is None
+            assert quant_config.resolve("text_encoder") is None
