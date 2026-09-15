@@ -38,8 +38,8 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 @pytest.fixture(autouse=True)
 def _no_checkpoint_quantization(monkeypatch):
     monkeypatch.setattr(
-        "vllm_omni.engine.stage_runtime.read_checkpoint_quantization_config",
-        lambda _model: None,
+        "vllm_omni.engine.stage_runtime.get_stage_quantization_config",
+        lambda _model, _quantization, **_kwargs: None,
     )
 
 

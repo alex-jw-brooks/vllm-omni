@@ -501,12 +501,16 @@ def test_run_headless_llm_registers_with_auto_assigned_replica_id(mocker: Mocker
     )
     vllm_config = SimpleNamespace(parallel_config=parallel_config, needs_dp_coordinator=False)
     engine_manager = mocker.Mock()
+    quantization_config = mocker.Mock()
 
     mocker.patch(
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
-    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
+    mock_get_quantization_config = mocker.patch(
+        "vllm_omni.entrypoints.cli.serve.get_stage_quantization_config",
+        return_value=quantization_config,
+    )
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -540,7 +544,14 @@ def test_run_headless_llm_registers_with_auto_assigned_replica_id(mocker: Mocker
 
     run_headless(_make_headless_args(stage_id=0))
 
-    assert mock_build_vllm_config.call_args.kwargs["quantization_config"].get_name() == "fp8"
+    mock_get_quantization_config.assert_called_once_with(
+        "fake-model",
+        "fp8",
+        stage_type="llm",
+        trust_remote_code=False,
+        hf_config_name=None,
+    )
+    assert mock_build_vllm_config.call_args.kwargs["quantization_config"] is quantization_config
 
     # The launcher must request auto-assignment (replica_id=None) and the
     # full response so it can wire the master-allocated coordinator into the
@@ -589,7 +600,7 @@ def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(mocker: Mo
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
-    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
+    mocker.patch("vllm_omni.entrypoints.cli.serve.get_stage_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -649,7 +660,7 @@ def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture)
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
-    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
+    mocker.patch("vllm_omni.entrypoints.cli.serve.get_stage_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -734,7 +745,7 @@ def test_run_headless_diffusion_raises_on_nonzero_proc_exit(mocker: MockerFixtur
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
-    mocker.patch("vllm_omni.entrypoints.cli.serve.read_checkpoint_quantization_config", return_value=None)
+    mocker.patch("vllm_omni.entrypoints.cli.serve.get_stage_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(

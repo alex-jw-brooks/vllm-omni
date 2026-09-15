@@ -68,7 +68,7 @@ from vllm_omni.entrypoints.stage_utils import resolve_stage_physical_devices
 from vllm_omni.entrypoints.utils import inject_omni_kv_config
 from vllm_omni.outputs.output_metadata import FinalOutputModalityType
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
+from vllm_omni.quantization.factory import get_stage_quantization_config
 
 logger = init_logger(__name__)
 
@@ -374,9 +374,12 @@ class StageRuntime:
             # Build the quantization config early so both the LLM and diffusion
             # init paths share one instance. Quantization is already normalized
             # to `quantization_config` for all engine types before this point.
-            quantization_config = build_quantization_config(
-                quantization=stage_cfg.engine_args.get("quantization_config", None),
-                quant_config=read_checkpoint_quantization_config(self._model),
+            quantization_config = get_stage_quantization_config(
+                self._model,
+                stage_cfg.engine_args.get("quantization_config"),
+                stage_type=base_metadata.stage_type,
+                trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
+                hf_config_name=stage_cfg.engine_args.get("hf_config_name"),
             )
             if quantization_config is not None:
                 logger.info("created quantization config of type: %s", type(quantization_config).__name__)

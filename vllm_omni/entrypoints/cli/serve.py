@@ -25,7 +25,7 @@ from vllm.logger import init_logger
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
 from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides, parse_stage_overrides
-from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
+from vllm_omni.quantization.factory import get_stage_quantization_config
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 logger = init_logger(__name__)
@@ -1096,11 +1096,12 @@ def run_headless(args: TrackingNamespace) -> None:
         )
         args_dict.pop("replica_id")
 
+    trust_remote_code = getattr(args, "trust_remote_code", None) or None
     resolved = resolve_omni_config(
         model,
         # store_true cannot express an explicit False: absent maps to None
         # ("not specified") so the deploy yaml's per-stage value applies.
-        trust_remote_code=getattr(args, "trust_remote_code", None) or None,
+        trust_remote_code=trust_remote_code,
         cli_overrides=args_dict,
         deploy_config_path=deploy_config_path,
         stage_overrides=stage_overrides,
@@ -1118,9 +1119,12 @@ def run_headless(args: TrackingNamespace) -> None:
 
     # TODO: We can probably unify this a bit more cleanly with the non-headless path
     stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(stage_cfg, args_dict)
-    quantization_config = build_quantization_config(
+    quantization_config = get_stage_quantization_config(
+        model,
         stage_cfg.engine_args.get("quantization_config"),
-        read_checkpoint_quantization_config(model),
+        stage_type=stage_cfg.stage_type,
+        trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
+        hf_config_name=stage_cfg.engine_args.get("hf_config_name"),
     )
 
     prepare_engine_environment()

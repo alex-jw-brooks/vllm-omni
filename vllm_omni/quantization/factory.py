@@ -12,11 +12,13 @@ import functools
 import sys
 from collections.abc import Mapping
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal
 
 from vllm.logger import init_logger
+from vllm.transformers_utils.config import get_hf_text_config
 from vllm.transformers_utils.repo_utils import file_or_path_exists, get_hf_file_to_dict
 
+from vllm_omni.config.model import OmniModelArchConfigConvertor
 from vllm_omni.utils.model_source import materialize_object_storage_configs
 
 
@@ -422,6 +424,36 @@ def read_checkpoint_quantization_config(model: str) -> dict[str, Any] | None:
     if quant is not None and not isinstance(quant, dict):
         raise TypeError(f"quantization_config for {model!r} must be a dict or None, got {type(quant).__name__}")
     return quant
+
+
+def get_stage_quantization_config(
+    model: str,
+    quantization: str | Mapping[str, Any] | QuantizationConfig | None,
+    *,
+    stage_type: Literal["llm", "diffusion"],
+    trust_remote_code: bool,
+    hf_config_name: str | None,
+) -> QuantizationConfig | None:
+    """Build the effective quantization config for one stage."""
+    from vllm_omni.config.config_factory import StageConfigFactory
+
+    checkpoint_quantization_config = read_checkpoint_quantization_config(model)
+    # If it's LLM type, we need to potentially handle the nested text config, otherwise
+    # behavior may be misaligned with the way vLLM builds the final quantization config
+    # with the ModelConfig.
+    if stage_type == "llm":
+        hf_config = StageConfigFactory.get_hf_config(
+            model=model,
+            trust_remote_code=trust_remote_code,
+        )
+        if hf_config is not None:
+            checkpoint_quantization_config = OmniModelArchConfigConvertor(
+                hf_config,
+                get_hf_text_config(hf_config),
+                stage_config_name=hf_config_name,
+            ).get_quantization_config()
+
+    return build_quantization_config(quantization, checkpoint_quantization_config)
 
 
 def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: QuantizationConfig) -> bool:
