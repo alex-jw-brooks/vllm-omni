@@ -51,7 +51,10 @@ from vllm_omni.config.stage_config import (
     reconcile_diffusion_attention_overrides,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
+from vllm_omni.quantization.factory import (
+    build_quantization_config,
+    get_stage_quantization_config,
+)
 
 _EXECUTION_TYPE_TO_STAGE_WORKER: dict[StageExecutionType, tuple[StageType, str | None]] = {
     StageExecutionType.LLM_AR: (StageType.LLM, "ar"),
@@ -1504,7 +1507,7 @@ def _build_common_stage_config_kwargs(
             "parallel_config": parallel_config,
             "compilation_config": _copy_value(engine.compilation_config),
             "profiler_config": _copy_value(engine.profiler_config),
-            "quantization_config": _copy_value(quantization_config),
+            "quantization_config": quantization_config,
         },
         input_proc,
         next_stage_proc,
@@ -1624,6 +1627,32 @@ _STAGE_CONFIG_BUILDERS = {
 }
 
 
+def _build_stage_quantization_config(
+    deploy: DeployConfig,
+    topology: StagePipelineConfig,
+    engine: _StageEngineValues,
+    model: str | None,
+) -> QuantizationConfig | None:
+    """Get the quantization config for a single stage."""
+    quantization = _first_defined(
+        engine.quantization.get("quantization_config"),
+        engine.quantization.get("quantization"),
+        deploy.quantization,
+    )
+    trust_remote_code = _first_defined(
+        engine.model.get("trust_remote_code"),
+        deploy.trust_remote_code,
+        False,
+    )
+    return get_stage_quantization_config(
+        model,
+        quantization,
+        stage_type=_resolve_execution_mode(topology.execution_type)[0].value,
+        trust_remote_code=trust_remote_code,
+        hf_config_name=topology.hf_config_name,
+    )
+
+
 def _build_stage_config(
     pipeline: PipelineConfig,
     deploy: DeployConfig,
@@ -1632,8 +1661,8 @@ def _build_stage_config(
     engine: _StageEngineValues,
     *,
     model: str | None,
-    quantization_config: QuantizationConfig | None,
 ) -> StageConfigType:
+    quantization_config = _build_stage_quantization_config(deploy, topology, engine, model)
     try:
         builder = _STAGE_CONFIG_BUILDERS[topology.execution_type]
     except KeyError as exc:
@@ -1856,7 +1885,7 @@ def _build_diffusion_config_projection(
     if "model" not in diffusion_kwargs and model is not None:
         diffusion_kwargs["model"] = model
     if quantization_config is not None:
-        diffusion_kwargs["quantization_config"] = _copy_value(quantization_config)
+        diffusion_kwargs["quantization_config"] = quantization_config
 
     return _DiffusionConfigProjection.from_kwargs(**{k: v for k, v in diffusion_kwargs.items() if v is not None})
 
@@ -1909,16 +1938,6 @@ class VllmOmniConfig:
         deploy_by_id = {stage.stage_id: stage for stage in deploy.stages}
         model = cli_overrides.get("model")
 
-        # Quantization is pipeline-wide, so just build it upfront and pass it stage initializations.
-        quantization_config = build_quantization_config(
-            _first_defined(
-                cli_overrides.get("quantization_config"),
-                cli_overrides.get("quantization"),
-                deploy.quantization,
-            ),
-            read_checkpoint_quantization_config(model) if model else None,
-        )
-
         stage_configs = tuple(
             _build_stage_config(
                 pipeline_cfg,
@@ -1935,7 +1954,6 @@ class VllmOmniConfig:
                     ),
                 ),
                 model=model,
-                quantization_config=quantization_config,
             )
             for topology in pipeline_cfg.stages
         )

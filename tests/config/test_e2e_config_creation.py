@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from unittest import mock
 
 import pytest
-from transformers import LlamaConfig, LlavaConfig
+from transformers import LlamaConfig, LlavaConfig, Qwen3OmniMoeConfig
 from vllm import SamplingParams
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 
@@ -18,9 +18,16 @@ import vllm_omni.engine.async_omni_engine as async_omni_engine
 import vllm_omni.engine.stage_init_utils as stage_init_utils
 import vllm_omni.engine.stage_runtime as stage_runtime
 from vllm_omni.config.config_factory import StageConfigFactory
+from vllm_omni.config.omni_config import VllmOmniConfig
 from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
-from vllm_omni.config.stage_config import PipelineConfig, StageExecutionType, StagePipelineConfig
+from vllm_omni.config.stage_config import (
+    DeployConfig,
+    PipelineConfig,
+    StageExecutionType,
+    StagePipelineConfig,
+)
 from vllm_omni.entrypoints.omni import Omni
+from vllm_omni.quantization import ComponentQuantizationConfig
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -279,6 +286,17 @@ def built_omni_config(model: str, **kwargs):
 class TestOmniConfigQuantization:
     """Test initialization of quantization configs through the VllmOmniConfig path."""
 
+    def test_deploy_quantization_without_model_is_not_dropped(self):
+        """Ensure that a deploy config quantization is not dropped if model str is missing."""
+        config = VllmOmniConfig.from_pipeline_config(
+            _LLM_PIPELINE,
+            user_deploy_config=DeployConfig(quantization="fp8"),
+        )
+
+        quant_config = config.stage_configs[0].quantization_config
+        assert isinstance(quant_config, QuantizationConfig)
+        assert quant_config.get_name() == "fp8"
+
     def test_llm_cli_quantization_is_preformed_fp8(self, llm_model_dir):
         with built_omni_config(llm_model_dir, quantization="fp8") as cfg:
             qc = cfg.stage_configs[0].quantization_config
@@ -295,10 +313,25 @@ class TestOmniConfigQuantization:
             assert qc.is_checkpoint_fp8_serialized is True
 
     def test_resolves_nested_checkpoint_quantization(self, tmp_path):
+        """Ensure quantization metadata from the root model's text_config resolves."""
         LlavaConfig(text_config=LlamaConfig(quantization_config=_SERIALIZED_FP8)).save_pretrained(tmp_path)
 
         with built_omni_config(str(tmp_path)) as cfg:
             quant_config = cfg.stage_configs[0].quantization_config
+            assert isinstance(quant_config, QuantizationConfig)
+            assert quant_config.get_name() == "fp8"
+            assert quant_config.is_checkpoint_fp8_serialized is True
+
+    def test_resolves_thinker_checkpoint_quantization(self, tmp_path):
+        """Ensure quantization metadata from thinker_config.text_config resolves."""
+        hf_config = Qwen3OmniMoeConfig(enable_audio_output=False)
+        hf_config.thinker_config.text_config.quantization_config = _SERIALIZED_FP8
+        hf_config.save_pretrained(tmp_path)
+
+        with built_omni_config(str(tmp_path)) as cfg:
+            stage_config = cfg.stage_configs[0]
+            assert stage_config.hf_config_name == "thinker_config"
+            quant_config = stage_config.quantization_config
             assert isinstance(quant_config, QuantizationConfig)
             assert quant_config.get_name() == "fp8"
             assert quant_config.is_checkpoint_fp8_serialized is True
@@ -317,3 +350,13 @@ class TestOmniConfigQuantization:
             assert isinstance(qc, QuantizationConfig)
             assert qc.get_name() == "fp8"
             assert qc.is_checkpoint_fp8_serialized is True
+
+    def test_checkpoint_quantization_preserves_component_exclusions(self, tmp_path):
+        model = _write_llm_model_dir(tmp_path, quantization_config=_SERIALIZED_FP8)
+        quantization = {"transformer": "fp8", "vae": None, "default": None}
+
+        with built_omni_config(model, quantization_config=quantization) as cfg:
+            quant_config = cfg.stage_configs[0].quantization_config
+            assert isinstance(quant_config, ComponentQuantizationConfig)
+            assert quant_config.resolve("vae") is None
+            assert quant_config.resolve("text_encoder") is None

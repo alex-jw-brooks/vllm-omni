@@ -25,7 +25,7 @@ from vllm.logger import init_logger
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
 from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides, parse_stage_overrides
-from vllm_omni.quantization.factory import build_quantization_config, read_checkpoint_quantization_config
+from vllm_omni.quantization.factory import get_stage_quantization_config
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
 logger = init_logger(__name__)
@@ -1118,9 +1118,14 @@ def run_headless(args: TrackingNamespace) -> None:
 
     # TODO: We can probably unify this a bit more cleanly with the non-headless path
     stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(stage_cfg, args_dict)
-    quantization_config = build_quantization_config(
+    quantization_config = get_stage_quantization_config(
+        model,
         stage_cfg.engine_args.get("quantization_config"),
-        read_checkpoint_quantization_config(model),
+        stage_type=stage_cfg.stage_type,
+        # If we don't have trust_remote_code in engine args, it's not set or in the
+        # deploy config, so we can safely fall back to False as the correct default.
+        trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
+        hf_config_name=stage_cfg.engine_args.get("hf_config_name"),
     )
 
     prepare_engine_environment()

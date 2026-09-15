@@ -760,7 +760,7 @@ class TestPipelineRegistration:
     @pytest.fixture(autouse=True)
     def stub_checkpoint_quant_read(self):
         """Ensure read_checkpoint_quantization_config is a stub to keep tests runnable offline."""
-        with patch("vllm_omni.config.omni_config.read_checkpoint_quantization_config", return_value=None):
+        with patch("vllm_omni.quantization.factory.read_checkpoint_quantization_config", return_value=None):
             yield
 
     def test_resolve_pipeline_prefers_deploy_pipeline_key(self, clean_pipeline_registry, tmp_path):
