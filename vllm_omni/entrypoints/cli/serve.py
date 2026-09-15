@@ -1096,12 +1096,11 @@ def run_headless(args: TrackingNamespace) -> None:
         )
         args_dict.pop("replica_id")
 
-    trust_remote_code = getattr(args, "trust_remote_code", None) or None
     resolved = resolve_omni_config(
         model,
         # store_true cannot express an explicit False: absent maps to None
         # ("not specified") so the deploy yaml's per-stage value applies.
-        trust_remote_code=trust_remote_code,
+        trust_remote_code=getattr(args, "trust_remote_code", None) or None,
         cli_overrides=args_dict,
         deploy_config_path=deploy_config_path,
         stage_overrides=stage_overrides,
@@ -1123,6 +1122,8 @@ def run_headless(args: TrackingNamespace) -> None:
         model,
         stage_cfg.engine_args.get("quantization_config"),
         stage_type=stage_cfg.stage_type,
+        # If we don't have trust_remote_code in engine args, it's not set or in the
+        # deploy config, so we can safely fall back to False as the correct default.
         trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
         hf_config_name=stage_cfg.engine_args.get("hf_config_name"),
     )

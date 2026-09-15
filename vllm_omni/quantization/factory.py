@@ -427,7 +427,7 @@ def read_checkpoint_quantization_config(model: str) -> dict[str, Any] | None:
 
 
 def get_stage_quantization_config(
-    model: str,
+    model: str | None,
     quantization: str | Mapping[str, Any] | QuantizationConfig | None,
     *,
     stage_type: Literal["llm", "diffusion"],
@@ -437,23 +437,23 @@ def get_stage_quantization_config(
     """Build the effective quantization config for one stage."""
     from vllm_omni.config.config_factory import StageConfigFactory
 
-    checkpoint_quantization_config = read_checkpoint_quantization_config(model)
+    chkpt_quant_cfg = read_checkpoint_quantization_config(model) if model is not None else None
     # If it's LLM type, we need to potentially handle the nested text config, otherwise
     # behavior may be misaligned with the way vLLM builds the final quantization config
     # with the ModelConfig.
-    if stage_type == "llm":
+    if model is not None and stage_type == "llm":
         hf_config = StageConfigFactory.get_hf_config(
             model=model,
             trust_remote_code=trust_remote_code,
         )
         if hf_config is not None:
-            checkpoint_quantization_config = OmniModelArchConfigConvertor(
+            chkpt_quant_cfg = OmniModelArchConfigConvertor(
                 hf_config,
                 get_hf_text_config(hf_config),
                 stage_config_name=hf_config_name,
             ).get_quantization_config()
 
-    return build_quantization_config(quantization, checkpoint_quantization_config)
+    return build_quantization_config(quantization, chkpt_quant_cfg)
 
 
 def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: QuantizationConfig) -> bool:
