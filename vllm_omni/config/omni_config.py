@@ -1634,8 +1634,6 @@ def _build_stage_quantization_config(
     model: str | None,
 ) -> QuantizationConfig | None:
     """Get the quantization config for a single stage."""
-    if model is None:
-        return None
     quantization = _first_defined(
         engine.quantization.get("quantization_config"),
         engine.quantization.get("quantization"),

@@ -18,8 +18,14 @@ import vllm_omni.engine.async_omni_engine as async_omni_engine
 import vllm_omni.engine.stage_init_utils as stage_init_utils
 import vllm_omni.engine.stage_runtime as stage_runtime
 from vllm_omni.config.config_factory import StageConfigFactory
+from vllm_omni.config.omni_config import VllmOmniConfig
 from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
-from vllm_omni.config.stage_config import PipelineConfig, StageExecutionType, StagePipelineConfig
+from vllm_omni.config.stage_config import (
+    DeployConfig,
+    PipelineConfig,
+    StageExecutionType,
+    StagePipelineConfig,
+)
 from vllm_omni.entrypoints.omni import Omni
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -278,6 +284,17 @@ def built_omni_config(model: str, **kwargs):
 
 class TestOmniConfigQuantization:
     """Test initialization of quantization configs through the VllmOmniConfig path."""
+
+    def test_deploy_quantization_without_model_is_not_dropped(self):
+        """Ensure that a deploy config quantization is not dropped if model str is missing."""
+        config = VllmOmniConfig.from_pipeline_config(
+            _LLM_PIPELINE,
+            user_deploy_config=DeployConfig(quantization="fp8"),
+        )
+
+        quant_config = config.stage_configs[0].quantization_config
+        assert isinstance(quant_config, QuantizationConfig)
+        assert quant_config.get_name() == "fp8"
 
     def test_llm_cli_quantization_is_preformed_fp8(self, llm_model_dir):
         with built_omni_config(llm_model_dir, quantization="fp8") as cfg:
