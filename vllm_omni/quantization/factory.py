@@ -311,7 +311,7 @@ def _maybe_build_component_quant_config(
                 f"Per-component value for {prefix!r} must be str, dict, "
                 f"QuantizationConfig, or None, got {type(value).__name__}"
             )
-        resolved = build_quantization_config(value, quant_config)
+        resolved = None if value is None else build_quantization_config(value, quant_config)
         if prefix == "default":
             default_config = resolved
         else:
