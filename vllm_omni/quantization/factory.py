@@ -285,15 +285,24 @@ def _validate_method_consistency(
     """Reject disagreement between an explicit method and checkpoint metadata."""
     if quant_config is None:
         return
-    explicit = quantization if isinstance(quantization, str) else get_quantization_method(quantization)
-    checkpoint = get_quantization_method(quant_config)
+    requested_method = quantization if isinstance(quantization, str) else get_quantization_method(quantization)
+    # Get and normalize the quantization method from the quant_config, including handling modelopt aliasing
+    declared_method = get_quantization_method(quant_config)
+    detected_method = _detect_modelopt_method(quant_config)
+    valid_checkpoint_methods = {
+        _normalize_quant_method_alias(declared_method),
+        _normalize_quant_method_alias(detected_method),
+    }
+
+    # Then explode if the method requested is actually different / not compatible
     if (
-        explicit is not None
-        and checkpoint is not None
-        and _normalize_quant_method_alias(explicit) != _normalize_quant_method_alias(checkpoint)
+        requested_method is not None
+        and declared_method is not None
+        and _normalize_quant_method_alias(requested_method) not in valid_checkpoint_methods
     ):
         raise ValueError(
-            f"Explicit quantization method {explicit!r} conflicts with checkpoint quantization method {checkpoint!r}."
+            f"Explicit quantization method {requested_method!r} conflicts with checkpoint quantization method "
+            f"{detected_method or declared_method!r}."
         )
 
 

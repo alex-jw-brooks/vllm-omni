@@ -312,6 +312,21 @@ class TestOmniConfigQuantization:
             assert qc.get_name() == "fp8"
             assert qc.is_checkpoint_fp8_serialized is True
 
+    def test_explicit_modelopt_fp4_matches_nvfp4_checkpoint(self, tmp_path):
+        """Ensure alias normalization, e.g., to modelopt_fp4, validates properly."""
+        checkpoint_quantization = {
+            "quant_method": "modelopt",
+            "quant_algo": "NVFP4",
+            "producer": {"name": "modelopt"},
+        }
+        model = _write_llm_model_dir(tmp_path, quantization_config=checkpoint_quantization)
+
+        with built_omni_config(model, quantization="modelopt_fp4") as cfg:
+            quant_config = cfg.stage_configs[0].quantization_config
+            assert quant_config is not None
+            assert quant_config.get_name() == "modelopt_fp4"
+            assert quant_config.is_checkpoint_nvfp4_serialized is True
+
     def test_resolves_nested_checkpoint_quantization(self, tmp_path):
         """Ensure quantization metadata from the root model's text_config resolves."""
         LlavaConfig(text_config=LlamaConfig(quantization_config=_SERIALIZED_FP8)).save_pretrained(tmp_path)
