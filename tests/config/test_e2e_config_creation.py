@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from unittest import mock
 
 import pytest
-from transformers import LlamaConfig, LlavaConfig
+from transformers import LlamaConfig, LlavaConfig, Qwen3OmniMoeConfig
 from vllm import SamplingParams
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 
@@ -312,10 +312,25 @@ class TestOmniConfigQuantization:
             assert qc.is_checkpoint_fp8_serialized is True
 
     def test_resolves_nested_checkpoint_quantization(self, tmp_path):
+        """Ensure quantization metadata from the root model's text_config resolves."""
         LlavaConfig(text_config=LlamaConfig(quantization_config=_SERIALIZED_FP8)).save_pretrained(tmp_path)
 
         with built_omni_config(str(tmp_path)) as cfg:
             quant_config = cfg.stage_configs[0].quantization_config
+            assert isinstance(quant_config, QuantizationConfig)
+            assert quant_config.get_name() == "fp8"
+            assert quant_config.is_checkpoint_fp8_serialized is True
+
+    def test_resolves_thinker_checkpoint_quantization(self, tmp_path):
+        """Ensure quantization metadata from thinker_config.text_config resolves."""
+        hf_config = Qwen3OmniMoeConfig(enable_audio_output=False)
+        hf_config.thinker_config.text_config.quantization_config = _SERIALIZED_FP8
+        hf_config.save_pretrained(tmp_path)
+
+        with built_omni_config(str(tmp_path)) as cfg:
+            stage_config = cfg.stage_configs[0]
+            assert stage_config.hf_config_name == "thinker_config"
+            quant_config = stage_config.quantization_config
             assert isinstance(quant_config, QuantizationConfig)
             assert quant_config.get_name() == "fp8"
             assert quant_config.is_checkpoint_fp8_serialized is True
