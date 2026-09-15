@@ -11,6 +11,7 @@ from multiprocessing.reduction import ForkingPickler
 from typing import NamedTuple
 
 import pytest
+from pytest_mock import MockerFixture
 from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS, get_quantization_config
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.layers.quantization.fp8 import Fp8Config
@@ -23,6 +24,7 @@ from vllm_omni.quantization.factory import (
     _normalize_quant_method_alias,
     build_quantization_config,
     get_quantization_method,
+    get_stage_quantization_config,
 )
 from vllm_omni.quantization.inc_config import OmniINCConfig
 from vllm_omni.quantization.int8_config import DiffusionInt8Config
@@ -164,3 +166,43 @@ def test_explicit_method_cannot_override_checkpoint_method():
     """Ensure that we raise if a checkpoint format & provided method are in conflict."""
     with pytest.raises(ValueError, match="conflicts with checkpoint"):
         build_quantization_config("fp8", {QUANT_METHOD_KEY: "modelopt", "quant_algo": "NVFP4"})
+
+
+def test_legacy_modelopt_metadata_without_method_key_is_detected():
+    """Ensure producer/quant_algo ModelOpt checkpoint metadata resolves without a method key."""
+    legacy = {"producer": {"name": "modelopt"}, "quantization": {"quant_algo": "FP8"}}
+    config = build_quantization_config(None, legacy)
+    assert config is not None
+    assert config.get_name() == "modelopt"
+
+
+def test_non_modelopt_metadata_without_method_key_stays_unquantized():
+    """Ensure a checkpoint mapping with no method key and no ModelOpt markers is unquantized."""
+    assert build_quantization_config(None, {"foo": "bar"}) is None
+    with pytest.raises(ValueError, match="must have a"):
+        build_quantization_config({"foo": "bar"})
+
+
+def test_stage_quantization_config_uses_model_revision(mocker: MockerFixture) -> None:
+    """Ensure stage quant config uses the model revision."""
+    read_checkpoint_config = mocker.patch(
+        "vllm_omni.quantization.factory.read_checkpoint_quantization_config",
+        return_value=None,
+    )
+    get_hf_config = mocker.patch(
+        "vllm_omni.config.config_factory.StageConfigFactory.get_hf_config",
+        return_value=None,
+    )
+
+    result = get_stage_quantization_config(
+        "model",
+        None,
+        revision="revision",
+        stage_type="llm",
+        trust_remote_code=True,
+        hf_config_name=None,
+    )
+
+    assert result is None
+    read_checkpoint_config.assert_called_once_with(model="model", revision="revision")
+    get_hf_config.assert_called_once_with(model="model", trust_remote_code=True, revision="revision")

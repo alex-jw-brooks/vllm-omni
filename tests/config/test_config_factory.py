@@ -438,6 +438,31 @@ class TestStageConfig:
 class TestStageConfigFactory:
     """Tests for StageConfigFactory class."""
 
+    def test_hf_config_cache_is_revision_aware(self):
+        configs = {revision: PretrainedConfig(revision=revision) for revision in ("rev-a", "rev-b")}
+        with patch(
+            "vllm_omni.config.config_factory.get_config",
+            side_effect=lambda _model, *, trust_remote_code, revision: configs[revision],
+        ) as get_config:
+            rev_a = StageConfigFactory.get_hf_config(
+                model="revision-aware/model", trust_remote_code=False, revision="rev-a"
+            )
+            assert get_config.call_count == 1
+            assert rev_a is configs["rev-a"]
+
+            rev_b = StageConfigFactory.get_hf_config(
+                model="revision-aware/model", trust_remote_code=False, revision="rev-b"
+            )
+            assert get_config.call_count == 2
+            assert rev_b is configs["rev-b"]
+
+            # Cached lookup for the revision returns the same object & doesn't call again
+            cached_rev_a = StageConfigFactory.get_hf_config(
+                model="revision-aware/model", trust_remote_code=False, revision="rev-a"
+            )
+            assert get_config.call_count == 2
+            assert cached_rev_a is rev_a
+
     def test_default_diffusion_no_yaml(self):
         """Test single-stage diffusion works without YAML config (@ZJY0516)."""
         kwargs = {
@@ -1126,7 +1151,7 @@ class TestPipelineRegistration:
                 "trust_remote_code": True,
                 "model": "fake/model",
             }
-            mock_get_config.assert_called_once_with("fake/model", trust_remote_code=True)
+            mock_get_config.assert_called_once_with("fake/model", trust_remote_code=True, revision=None)
 
         with patch.object(StageConfigFactory, "_create_legacy_from_registry", return_value=([], None)) as mock_legacy:
             StageConfigFactory.create_legacy_stage_configs_from_model(

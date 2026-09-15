@@ -84,7 +84,7 @@ def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict
         normalized.pop("static_lora_scale", None)
 
     diffusion_quantization = normalized.pop("diffusion_quantization_config", None)
-    if normalized.get("quantization_config") is None and diffusion_quantization is not None:
+    if diffusion_quantization is not None:
         normalized["quantization_config"] = diffusion_quantization
 
     # Renamed from kv_cache_* to avoid clashing with vLLM's --kv-cache-dtype.

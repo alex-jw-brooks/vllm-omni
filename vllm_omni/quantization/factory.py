@@ -285,15 +285,24 @@ def _validate_method_consistency(
     """Reject disagreement between an explicit method and checkpoint metadata."""
     if quant_config is None:
         return
-    explicit = quantization if isinstance(quantization, str) else get_quantization_method(quantization)
-    checkpoint = get_quantization_method(quant_config)
+    requested_method = quantization if isinstance(quantization, str) else get_quantization_method(quantization)
+    # Get and normalize the quantization method from the quant_config, including handling modelopt aliasing
+    declared_method = get_quantization_method(quant_config)
+    detected_method = _detect_modelopt_method(quant_config)
+    valid_checkpoint_methods = {
+        _normalize_quant_method_alias(declared_method),
+        _normalize_quant_method_alias(detected_method),
+    }
+
+    # Then explode if the method requested is actually different / not compatible
     if (
-        explicit is not None
-        and checkpoint is not None
-        and _normalize_quant_method_alias(explicit) != _normalize_quant_method_alias(checkpoint)
+        requested_method is not None
+        and declared_method is not None
+        and _normalize_quant_method_alias(requested_method) not in valid_checkpoint_methods
     ):
         raise ValueError(
-            f"Explicit quantization method {explicit!r} conflicts with checkpoint quantization method {checkpoint!r}."
+            f"Explicit quantization method {requested_method!r} conflicts with checkpoint quantization method "
+            f"{detected_method or declared_method!r}."
         )
 
 
@@ -345,18 +354,24 @@ def build_quantization_config(
             f"quantization must be a string, mapping, QuantizationConfig, or None, got {type(quantization).__name__}"
         )
 
+    # Ensure all Omni quant defs are registered before building quantization configs
+    register_omni_quantization_configs()
+
     # If we don't pass quantization, we can still grab it from the checkpoint's config
     if quantization is None:
         if isinstance(quant_config, Mapping):
             quantization = get_quantization_method(quant_config)
+            if quantization is None:
+                # Legacy ModelOpt checkpoints (hf_quant_config.json <= 0.29) record the
+                # algorithm under producer/quant_algo without a method key
+                modelopt = maybe_build_modelopt_from_config(quant_config)
+                if modelopt is not None:
+                    return modelopt
         if quantization is None:
             return None
     else:
         # Otherwise, we need to make sure it agrees with potential quant info in the checkpoint
         _validate_method_consistency(quantization, quant_config)
-
-    # Since we need to build a quant config, ensure Omni quant defs are registered
-    register_omni_quantization_configs()
 
     if isinstance(quantization, Mapping):
         spec = dict(quantization)
@@ -370,6 +385,9 @@ def build_quantization_config(
         from_checkpoint = QUANT_METHOD_KEY in spec
         quantization = _pop_method_name(spec)
         if quantization is None:
+            modelopt = maybe_build_modelopt_from_config(spec)
+            if modelopt is not None:
+                return modelopt
             raise ValueError(
                 f"Dict quantization config must have a {METHOD_KEY!r} or {QUANT_METHOD_KEY!r} key "
                 "or be a per-component config with component prefixes as keys."
@@ -410,16 +428,16 @@ def build_quantization_config(
 
 
 @functools.cache
-def read_checkpoint_quantization_config(model: str) -> dict[str, Any] | None:
+def read_checkpoint_quantization_config(model: str, revision: str | None) -> dict[str, Any] | None:
     """Read a checkpoint's serialized quantization_config from config.json, or the
     hf_quant_config.json sidecar (ModelOpt<=0.29)."""
     source = materialize_object_storage_configs(model)
     quant = None
-    if file_or_path_exists(source, "config.json", None):
-        quant = get_hf_file_to_dict("config.json", source, revision=None).get("quantization_config")
+    if file_or_path_exists(source, "config.json", revision):
+        quant = get_hf_file_to_dict("config.json", source, revision=revision).get("quantization_config")
     # See: https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/transformers_utils/config.py#L765
-    if quant is None and file_or_path_exists(source, "hf_quant_config.json", None):
-        quant = get_hf_file_to_dict("hf_quant_config.json", source, revision=None)
+    if quant is None and file_or_path_exists(source, "hf_quant_config.json", revision):
+        quant = get_hf_file_to_dict("hf_quant_config.json", source, revision=revision)
 
     if quant is not None and not isinstance(quant, dict):
         raise TypeError(f"quantization_config for {model!r} must be a dict or None, got {type(quant).__name__}")
@@ -430,6 +448,7 @@ def get_stage_quantization_config(
     model: str | None,
     quantization: str | Mapping[str, Any] | QuantizationConfig | None,
     *,
+    revision: str | None,
     stage_type: Literal["llm", "diffusion"],
     trust_remote_code: bool,
     hf_config_name: str | None,
@@ -437,7 +456,7 @@ def get_stage_quantization_config(
     """Build the effective quantization config for one stage."""
     from vllm_omni.config.config_factory import StageConfigFactory
 
-    chkpt_quant_cfg = read_checkpoint_quantization_config(model) if model is not None else None
+    chkpt_quant_cfg = read_checkpoint_quantization_config(model=model, revision=revision) if model is not None else None
     # If it's LLM type, we need to potentially handle the nested text config, otherwise
     # behavior may be misaligned with the way vLLM builds the final quantization config
     # with the ModelConfig.
@@ -445,6 +464,7 @@ def get_stage_quantization_config(
         hf_config = StageConfigFactory.get_hf_config(
             model=model,
             trust_remote_code=trust_remote_code,
+            revision=revision,
         )
         if hf_config is not None:
             chkpt_quant_cfg = OmniModelArchConfigConvertor(
