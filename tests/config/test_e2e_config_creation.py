@@ -147,6 +147,9 @@ def built_stage_configs(model: str, **kwargs):
         return None
 
     with (
+        # Avoid leaking the production spawn start method into later tests in this pytest process.
+        # This is currently needed to avoid polluting the comfyui test environment.
+        mock.patch.object(stage_runtime, "prepare_engine_environment"),
         mock.patch.dict(OMNI_PIPELINES, {"llama": _LLM_PIPELINE, "llava": _LLM_PIPELINE}),
         mock.patch.object(stage_runtime, "build_vllm_config", side_effect=_record_vllm),
         mock.patch.object(stage_init_utils, "build_diffusion_config", side_effect=_record_diffusion),
