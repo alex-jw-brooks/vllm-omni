@@ -1185,9 +1185,7 @@ def resolve_async_chunk_enabled(
             return False
         return deploy.async_chunk
 
-    if supports_async_chunk:
-        return True
-    return False
+    return supports_async_chunk
 
 
 def validate_stage_async_chunk_edges(pipeline: PipelineConfig, deploy: DeployConfig) -> None:
