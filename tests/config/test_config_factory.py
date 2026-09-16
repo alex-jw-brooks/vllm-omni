@@ -1306,6 +1306,15 @@ class TestDeployConfigLoading:
         with pytest.raises(ValueError, match=r"stage_args.*PipelineConfig.*stages"):
             load_deploy_config(deploy_path)
 
+    def test_coerces_active_stream_window_to_int(self, tmp_path):
+        """Ensure active stream window coerces str to int."""
+        deploy_path = tmp_path / "deploy.yaml"
+        deploy_path.write_text('active_stream_window: "2"\n', encoding="utf-8")
+        deploy = load_deploy_config(deploy_path)
+        # NOTE: This is arguably bad behavior since it's a one-off for one field,
+        # but this is a regression test for compatibility with the current code.
+        assert deploy.active_stream_window == 2
+
     @pytest.mark.parametrize(
         ("filename", "max_sessions"),
         [

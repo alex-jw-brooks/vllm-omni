@@ -791,7 +791,10 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
     # so the DeployConfig dataclass defaults take effect otherwise.
     for name in PIPELINE_WIDE_ENGINE_FIELDS:
         if name in raw_dict:
-            kwargs[name] = raw_dict[name]
+            value = raw_dict[name]
+            if name == "active_stream_window":
+                value = int(value or 0)
+            kwargs[name] = value
     return DeployConfig(**kwargs)
 
 
