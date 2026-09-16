@@ -3371,6 +3371,7 @@ class TestObjectStorageConfigResolution:
         matching = "s3://any-bucket/my-cosyvoice3-model"
         assert StageConfigFactory.try_infer_model_type(model=matching, trust_remote_code=False) == "cosyvoice3"
 
+
 class TestAsyncChunkDefaults:
     def test_async_chunk_auto_disabled_without_processor(self):
         """Ensure a multi-stage model that doesn't support async chunk turns it off by default."""
