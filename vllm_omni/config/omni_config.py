@@ -51,7 +51,6 @@ from vllm_omni.config.stage_config import (
     _scheduler_path,
     _select_processor_funcs,
     build_stage_runtime_overrides,
-    get_default_async_chunk_enabled,
     load_deploy_config,
     merge_pipeline_deploy,
     merge_sampling_constraints,
@@ -62,6 +61,7 @@ from vllm_omni.config.stage_config import (
     validate_native_mrv2_session,
     validate_stage_async_chunk_edges,
     validate_async_chunk,
+    resolve_async_chunk_enabled,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 
@@ -2236,16 +2236,9 @@ class VllmOmniConfig:
 
         deploy = _apply_platform_overrides(deploy)
 
-        cli_async_chunk = bool(cli_overrides["async_chunk"]) if "async_chunk" in cli_overrides else None
-        if cli_async_chunk:
-            if len(pipeline_cfg.stages) <= 1:
-                deploy.async_chunk = False
-            else:
-                deploy.async_chunk = cli_async_chunk
-        else:
-            deploy.async_chunk = get_default_async_chunk_enabled(pipeline_cfg, deploy)
-
-        validate_async_chunk(pipeline_cfg, deploy)
+        cli_async_chunk = cli_overrides.get("async_chunk")
+        if cli_async_chunk is not None:
+            deploy.async_chunk = bool(cli_async_chunk)
 
         strategy_result = None
         if strategy_specs:
@@ -2303,7 +2296,8 @@ class VllmOmniConfig:
                 cli_overrides["omni_lb_policy"] = strategy_result.omni_lb_policy
 
         deploy_by_id = {stage.stage_id: stage for stage in deploy.stages}
-        deploy.async_chunk = get_default_async_chunk_enabled(pipeline_cfg, deploy)
+        deploy.async_chunk = resolve_async_chunk_enabled(pipeline_cfg, deploy)
+        validate_async_chunk(pipeline_cfg, deploy)
         model = cli_overrides.get("model")
 
         stage_configs = tuple(
