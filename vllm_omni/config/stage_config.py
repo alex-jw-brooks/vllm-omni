@@ -792,6 +792,8 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
     for name in PIPELINE_WIDE_ENGINE_FIELDS:
         if name in raw_dict:
             value = raw_dict[name]
+            # NOTE: This is arguably bad behavior since it's a one-off for
+            # only this field. We should consider deprecating this coercion.
             if name == "active_stream_window":
                 value = int(value or 0)
             kwargs[name] = value
