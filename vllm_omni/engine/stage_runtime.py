@@ -377,6 +377,7 @@ class StageRuntime:
             quantization_config = get_stage_quantization_config(
                 self._model,
                 stage_cfg.engine_args.get("quantization_config"),
+                revision=stage_cfg.engine_args.get("revision"),
                 stage_type=base_metadata.stage_type,
                 trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
                 hf_config_name=stage_cfg.engine_args.get("hf_config_name"),

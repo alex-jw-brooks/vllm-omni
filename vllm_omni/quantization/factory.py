@@ -419,16 +419,16 @@ def build_quantization_config(
 
 
 @functools.cache
-def read_checkpoint_quantization_config(model: str) -> dict[str, Any] | None:
+def read_checkpoint_quantization_config(model: str, revision: str | None) -> dict[str, Any] | None:
     """Read a checkpoint's serialized quantization_config from config.json, or the
     hf_quant_config.json sidecar (ModelOpt<=0.29)."""
     source = materialize_object_storage_configs(model)
     quant = None
-    if file_or_path_exists(source, "config.json", None):
-        quant = get_hf_file_to_dict("config.json", source, revision=None).get("quantization_config")
+    if file_or_path_exists(source, "config.json", revision):
+        quant = get_hf_file_to_dict("config.json", source, revision=revision).get("quantization_config")
     # See: https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/transformers_utils/config.py#L765
-    if quant is None and file_or_path_exists(source, "hf_quant_config.json", None):
-        quant = get_hf_file_to_dict("hf_quant_config.json", source, revision=None)
+    if quant is None and file_or_path_exists(source, "hf_quant_config.json", revision):
+        quant = get_hf_file_to_dict("hf_quant_config.json", source, revision=revision)
 
     if quant is not None and not isinstance(quant, dict):
         raise TypeError(f"quantization_config for {model!r} must be a dict or None, got {type(quant).__name__}")
@@ -439,6 +439,7 @@ def get_stage_quantization_config(
     model: str | None,
     quantization: str | Mapping[str, Any] | QuantizationConfig | None,
     *,
+    revision: str | None,
     stage_type: Literal["llm", "diffusion"],
     trust_remote_code: bool,
     hf_config_name: str | None,
@@ -446,7 +447,7 @@ def get_stage_quantization_config(
     """Build the effective quantization config for one stage."""
     from vllm_omni.config.config_factory import StageConfigFactory
 
-    chkpt_quant_cfg = read_checkpoint_quantization_config(model) if model is not None else None
+    chkpt_quant_cfg = read_checkpoint_quantization_config(model=model, revision=revision) if model is not None else None
     # If it's LLM type, we need to potentially handle the nested text config, otherwise
     # behavior may be misaligned with the way vLLM builds the final quantization config
     # with the ModelConfig.
@@ -454,6 +455,7 @@ def get_stage_quantization_config(
         hf_config = StageConfigFactory.get_hf_config(
             model=model,
             trust_remote_code=trust_remote_code,
+            revision=revision,
         )
         if hf_config is not None:
             chkpt_quant_cfg = OmniModelArchConfigConvertor(

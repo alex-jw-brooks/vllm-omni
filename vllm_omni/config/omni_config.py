@@ -1647,6 +1647,7 @@ def _build_stage_quantization_config(
     return get_stage_quantization_config(
         model,
         quantization,
+        revision=engine.model.get("revision"),
         stage_type=_resolve_execution_mode(topology.execution_type)[0].value,
         trust_remote_code=trust_remote_code,
         hf_config_name=topology.hf_config_name,

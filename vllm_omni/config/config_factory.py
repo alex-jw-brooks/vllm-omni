@@ -133,19 +133,29 @@ class StageConfigFactory:
 
     @classmethod
     @functools.cache
-    def get_hf_config(cls, model: str, trust_remote_code: bool) -> PretrainedConfig | None:
+    def get_hf_config(
+        cls,
+        model: str,
+        trust_remote_code: bool,
+        revision: str | None,
+    ) -> PretrainedConfig | None:
         """Fetch the HF config (if it exists) from the model directory.
 
         Args:
             model: Model name or path.
             trust_remote_code: Whether to trust remote code for HF config loading.
+            revision: Model revision to load.
 
         Returns:
             the model's config or None.
         """
         hf_config = None
         try:
-            return get_config(materialize_object_storage_configs(model), trust_remote_code=trust_remote_code)
+            return get_config(
+                materialize_object_storage_configs(model),
+                trust_remote_code=trust_remote_code,
+                revision=revision,
+            )
         except Exception as e:
             logger.debug(f"`get_config` failed with exception {e}; inferred HF config is None")
         return hf_config
@@ -187,6 +197,7 @@ class StageConfigFactory:
         hf_config = cls.get_hf_config(
             model=model,
             trust_remote_code=trust_remote_code,
+            revision=None,
         )
         if hf_config is not None:
             return hf_config.model_type
@@ -262,7 +273,7 @@ class StageConfigFactory:
     ) -> PipelineConfig | None:
         """Resolve the PipelineConfig for a model path/name."""
         model_type = cls.try_infer_model_type(model=model, trust_remote_code=trust_remote_code)
-        hf_config = cls.get_hf_config(model=model, trust_remote_code=trust_remote_code)
+        hf_config = cls.get_hf_config(model=model, trust_remote_code=trust_remote_code, revision=None)
 
         # Resolve the deploy config & check if the user set the pipeline;
         # If the pipeline is explicitly set, it takes highest priority

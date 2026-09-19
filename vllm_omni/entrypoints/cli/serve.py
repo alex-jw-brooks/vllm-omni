@@ -1121,6 +1121,7 @@ def run_headless(args: TrackingNamespace) -> None:
     quantization_config = get_stage_quantization_config(
         model,
         stage_cfg.engine_args.get("quantization_config"),
+        revision=stage_cfg.engine_args.get("revision"),
         stage_type=stage_cfg.stage_type,
         # If we don't have trust_remote_code in engine args, it's not set or in the
         # deploy config, so we can safely fall back to False as the correct default.

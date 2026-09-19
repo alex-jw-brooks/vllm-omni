@@ -493,6 +493,7 @@ def test_run_headless_llm_registers_with_auto_assigned_replica_id(mocker: Mocker
     stage_cfg = _make_stage_cfg(0, stage_type="llm")
     stage_cfg.engine_args["async_chunk"] = True
     stage_cfg.engine_args["quantization_config"] = "fp8"
+    stage_cfg.engine_args["revision"] = "quant-revision"
     parallel_config = SimpleNamespace(
         data_parallel_size_local=1,
         data_parallel_rank=0,
@@ -547,6 +548,7 @@ def test_run_headless_llm_registers_with_auto_assigned_replica_id(mocker: Mocker
     mock_get_quantization_config.assert_called_once_with(
         "fake-model",
         "fp8",
+        revision="quant-revision",
         stage_type="llm",
         trust_remote_code=False,
         hf_config_name=None,
