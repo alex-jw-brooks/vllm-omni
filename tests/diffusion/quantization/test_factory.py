@@ -168,6 +168,21 @@ def test_explicit_method_cannot_override_checkpoint_method():
         build_quantization_config("fp8", {QUANT_METHOD_KEY: "modelopt", "quant_algo": "NVFP4"})
 
 
+def test_legacy_modelopt_metadata_without_method_key_is_detected():
+    """Ensure producer/quant_algo ModelOpt checkpoint metadata resolves without a method key."""
+    legacy = {"producer": {"name": "modelopt"}, "quantization": {"quant_algo": "FP8"}}
+    config = build_quantization_config(None, legacy)
+    assert config is not None
+    assert config.get_name() == "modelopt"
+
+
+def test_non_modelopt_metadata_without_method_key_stays_unquantized():
+    """Ensure a checkpoint mapping with no method key and no ModelOpt markers is unquantized."""
+    assert build_quantization_config(None, {"foo": "bar"}) is None
+    with pytest.raises(ValueError, match="must have a"):
+        build_quantization_config({"foo": "bar"})
+
+
 def test_stage_quantization_config_uses_model_revision(mocker: MockerFixture) -> None:
     """Ensure stage quant config uses the model revision."""
     read_checkpoint_config = mocker.patch(

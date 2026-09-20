@@ -354,18 +354,24 @@ def build_quantization_config(
             f"quantization must be a string, mapping, QuantizationConfig, or None, got {type(quantization).__name__}"
         )
 
+    # Ensure all Omni quant defs are registered before building quantization configs
+    register_omni_quantization_configs()
+
     # If we don't pass quantization, we can still grab it from the checkpoint's config
     if quantization is None:
         if isinstance(quant_config, Mapping):
             quantization = get_quantization_method(quant_config)
+            if quantization is None:
+                # Legacy ModelOpt checkpoints (hf_quant_config.json <= 0.29) record the
+                # algorithm under producer/quant_algo without a method key
+                modelopt = maybe_build_modelopt_from_config(quant_config)
+                if modelopt is not None:
+                    return modelopt
         if quantization is None:
             return None
     else:
         # Otherwise, we need to make sure it agrees with potential quant info in the checkpoint
         _validate_method_consistency(quantization, quant_config)
-
-    # Since we need to build a quant config, ensure Omni quant defs are registered
-    register_omni_quantization_configs()
 
     if isinstance(quantization, Mapping):
         spec = dict(quantization)
@@ -379,6 +385,9 @@ def build_quantization_config(
         from_checkpoint = QUANT_METHOD_KEY in spec
         quantization = _pop_method_name(spec)
         if quantization is None:
+            modelopt = maybe_build_modelopt_from_config(spec)
+            if modelopt is not None:
+                return modelopt
             raise ValueError(
                 f"Dict quantization config must have a {METHOD_KEY!r} or {QUANT_METHOD_KEY!r} key "
                 "or be a per-component config with component prefixes as keys."
