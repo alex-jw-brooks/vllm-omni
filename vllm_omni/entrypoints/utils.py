@@ -147,6 +147,7 @@ def prepare_stage_config_inputs(
         strategy_config_path=strategy_config_path,
     )
 
+
 # Kwargs for diffusion to directly copy over into the engine args;
 # Note that this excludes kwargs that have any kind of builder utils,
 # e.g., for attention.

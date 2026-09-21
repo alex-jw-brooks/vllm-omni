@@ -57,7 +57,6 @@ from vllm_omni.diffusion.utils.chunked_video import decode_to_mp4
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch, split_diffusion_output_by_request
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.quantization.factory import build_quantization_config, get_quantization_method
 
 logger = logging.getLogger(__name__)
 DEBUG_PERF = False

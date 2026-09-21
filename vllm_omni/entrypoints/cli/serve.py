@@ -31,9 +31,11 @@ from vllm_omni.entrypoints.openai.api_server import (
     omni_run_server,
     run_omni_api_server_worker_proc,
 )
-from vllm_omni.entrypoints.utils import parse_stage_overrides, prepare_stage_config_inputs
-from vllm_omni.entrypoints.openai.api_server import omni_run_server
-from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides, parse_stage_overrides
+from vllm_omni.entrypoints.utils import (
+    _apply_stage_engine_arg_overrides,
+    parse_stage_overrides,
+    prepare_stage_config_inputs,
+)
 from vllm_omni.quantization.factory import get_stage_quantization_config
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
