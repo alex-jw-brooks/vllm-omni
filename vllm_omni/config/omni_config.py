@@ -375,13 +375,11 @@ def _stage_cli_overrides(
             name: _copy_value(value) for name, value in cli_overrides.items() if stage_override_pattern.match(name)
         }
         global_inputs = {name: _copy_value(value) for name, value in cli_overrides.items() if name not in stage_scoped}
-        cli_overrides = {
-            **normalize_and_validate_diffusion_engine_ingress_kwargs(
-                global_inputs,
-                stage_id=stage_id,
-            ),
-            **stage_scoped,
-        }
+        normalized_globals = normalize_and_validate_diffusion_engine_ingress_kwargs(
+            global_inputs,
+            stage_id=stage_id,
+        )
+        cli_overrides = {**normalized_globals, **stage_scoped}
     runtime_overrides = build_stage_runtime_overrides(stage_id, dict(cli_overrides))
     global_stage_fields = _global_stage_cli_fields()
     owned_fields = None if execution_type is None else _STAGE_ENGINE_FIELDS_BY_EXECUTION_TYPE[execution_type]
@@ -900,14 +898,18 @@ class _DiffusionConfigProjection:
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> _DiffusionConfigProjection:
-        from vllm_omni.diffusion.data import normalize_omni_kwargs
+        from vllm_omni.diffusion.data import normalize_omni_kwargs, validate_omni_diffusion_kwargs
         from vllm_omni.diffusion.offloader.config import parse_diffusion_offload_config
 
         normalized = normalize_omni_kwargs(kwargs, is_diffusion=True)
         # Validate before stage construction while retaining the raw mapping
         # needed by dataclass/config serialization across process boundaries.
+        # Reject unknown fields before dropping None values, so a stray key still
+        # surfaces when its value is None instead of being silently discarded.
+        valid_fields = {config_field.name for config_field in fields(cls)}
+        validate_omni_diffusion_kwargs(normalized, valid_fields)
         parse_diffusion_offload_config(normalized.get("diffusion_offload_config"))
-        return cls(**{name: value for name, value in normalized.items() if value is not None})
+        return cls(**{name: value for name, value in normalized.items() if name in valid_fields and value is not None})
 
     def __post_init__(self) -> None:
         # Keep diffusion imports lazy so importing vllm_omni.config does not
@@ -1296,10 +1298,10 @@ def normalize_and_validate_diffusion_engine_ingress_kwargs(
     *,
     stage_id: int | str,
 ) -> dict[str, Any]:
-    """Normalize and validate raw diffusion input without inserting defaults."""
+    """Normalize and validate raw diffusion input into a CLI override payload."""
     from vllm_omni.diffusion.data import (
         OmniDiffusionConfig,
-        normalize_omni_diffusion_kwargs,
+        normalize_omni_kwargs,
         validate_omni_diffusion_kwargs,
     )
     from vllm_omni.engine.arg_utils import orchestrator_field_names
@@ -1310,7 +1312,7 @@ def normalize_and_validate_diffusion_engine_ingress_kwargs(
         for name in _DIFFUSION_SHARED_ONLY_ENGINE_FIELDS | {"quantization"}
         if name in mixed_kwargs
     }
-    normalized = normalize_omni_diffusion_kwargs(mixed_kwargs, apply_defaults=False)
+    normalized = normalize_omni_kwargs(mixed_kwargs, is_diffusion=True)
     if engine_owned.get("quantization") is not None and normalized.get("quantization_config") is not None:
         raise ValueError("Diffusion config fields 'quantization' and 'quantization_config' cannot both be provided.")
     normalized.update(engine_owned)
@@ -1347,7 +1349,7 @@ def extract_diffusion_stage_config_kwargs(
     """Take the diffusion-owned payload from resolved mixed stage arguments."""
     from vllm_omni.diffusion.data import (
         OmniDiffusionConfig,
-        normalize_omni_diffusion_kwargs,
+        normalize_omni_kwargs,
         validate_omni_diffusion_kwargs,
     )
 
@@ -1373,7 +1375,7 @@ def extract_diffusion_stage_config_kwargs(
     # the compatibility adapter without treating it as a deprecated alias.
     mixed_kwargs = {name: _copy_value(value) for name, value in kwargs.items()}
     engine_quantization = mixed_kwargs.pop("quantization", None)
-    normalized = normalize_omni_diffusion_kwargs(mixed_kwargs)
+    normalized = normalize_omni_kwargs(mixed_kwargs, is_diffusion=True)
     if engine_quantization is not None:
         if normalized.get("quantization_config") is not None:
             raise ValueError(
@@ -1692,7 +1694,7 @@ def _build_common_stage_config_kwargs(
     model: str | None,
     quantization_config: QuantizationConfig | None,
 ) -> tuple[dict[str, Any], str | None, str | None]:
-    input_proc, next_stage_proc = _select_processor_funcs(topology, bool(deploy.async_chunk))
+    input_proc, next_stage_proc = _select_processor_funcs(topology, resolve_stage_async_chunk(deploy, stage_deploy))
     parallel_config = _build_parallel_config(deploy, engine.parallel, parallel_config_cls)
 
     return (

@@ -11,19 +11,12 @@ import types
 from dataclasses import dataclass, field
 
 import pytest
-<<<<<<< HEAD
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from vllm.v1.engine.utils import EngineZmqAddresses
 
 from vllm_omni.config.omni_config import OmniStageRuntimeConfig
-from vllm_omni.diffusion.data import AttentionConfig
-from vllm_omni.engine import omni_engine_base as async_omni_engine_module
-=======
-from omegaconf import DictConfig, OmegaConf
-
 from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec
-from vllm_omni.engine import async_omni_engine as async_omni_engine_module
->>>>>>> 5cb658006 (wip simplifying engine arg building)
+from vllm_omni.engine import omni_engine_base as async_omni_engine_module
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.engine.stage_engine_startup import StageReplicaResources
 from vllm_omni.engine.stage_init_utils import (
@@ -35,11 +28,27 @@ from vllm_omni.engine.stage_init_utils import (
     stage_runtime_env,
 )
 from vllm_omni.engine.stage_runtime import StageRuntime
+from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-<<<<<<< HEAD
+@pytest.fixture(autouse=True)
+def _no_checkpoint_quantization(monkeypatch):
+    for target in (
+        "vllm_omni.engine.stage_runtime.get_stage_quantization_config",
+        "vllm_omni.config.omni_config.get_stage_quantization_config",
+    ):
+        monkeypatch.setattr(target, lambda _model, _quantization, **_kwargs: None)
+
+
+def _stage_config(stage_type: str, **engine_args: object) -> DictConfig:
+    return OmegaConf.create(
+        {"stage_type": stage_type, "engine_args": engine_args},
+        flags={"allow_objects": True},
+    )
+
+
 @dataclass
 class _FakeParallelConfig:
     enable_fault_tolerance: bool = False
@@ -51,6 +60,7 @@ class _FakeParallelConfig:
 @dataclass
 class _FakeVllmConfig:
     parallel_config: _FakeParallelConfig = field(default_factory=_FakeParallelConfig)
+    quant_config: object = None
 
 
 @dataclass
@@ -74,21 +84,6 @@ def test_stage_runtime_env_accepts_typed_runtime_config(monkeypatch):
         assert os.environ[env_key] == "typed-value"
 
     assert env_key not in os.environ
-=======
-@pytest.fixture(autouse=True)
-def _no_checkpoint_quantization(monkeypatch):
-    monkeypatch.setattr(
-        "vllm_omni.engine.stage_runtime.get_stage_quantization_config",
-        lambda _model, _quantization, **_kwargs: None,
-    )
-
-
-def _stage_config(stage_type: str, **engine_args: object) -> DictConfig:
-    return OmegaConf.create(
-        {"stage_type": stage_type, "engine_args": engine_args},
-        flags={"allow_objects": True},
-    )
->>>>>>> 5cb658006 (wip simplifying engine arg building)
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):
@@ -2062,7 +2057,6 @@ def test_inject_kv_stage_info_infers_receiver_tp_topology():
     assert stage1.engine_args["omni_kv_config"]["rank_mapping"] == {"from_tp": 4, "to_tp": 2}
 
 
-<<<<<<< HEAD
 def test_inject_kv_stage_info_updates_typed_connector_config():
     from vllm_omni.config.omni_config import (
         OmniStageConnectorConfig,
@@ -2106,11 +2100,9 @@ def test_inject_kv_stage_info_updates_typed_connector_config():
     assert stage0.connector_config.omni_kv_config["connector_config"] == {"kv_connector": "P2pNcclConnector"}
     assert stage0.connector_config.omni_kv_config["engine_input_source"] == []
     assert stage0.connector_config.omni_kv_config["rank_mapping"] == {"from_tp": 4, "to_tp": 2}
-=======
-def test_resolve_stage_configs_injects_global_diffusion_attention_when_missing(monkeypatch):
-    import vllm_omni.engine.async_omni_engine as engine_mod
 
-    engine = object.__new__(AsyncOmniEngine)
+
+def test_apply_stage_engine_arg_overrides_injects_global_diffusion_attention_when_missing():
     stage_cfg = _stage_config(
         "diffusion",
         diffusion_attention_config=None,
@@ -2120,26 +2112,15 @@ def test_resolve_stage_configs_injects_global_diffusion_attention_when_missing(m
         quantization_config=None,
     )
 
-    monkeypatch.setattr(
-        engine_mod,
-        "load_and_resolve_stage_configs",
-        lambda *args, **kwargs: ("dummy-config", [stage_cfg], None),
+    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
+        stage_cfg, {"diffusion_attention_backend": "FLASH_ATTN"}
     )
 
-    _config_path, stage_configs = engine._resolve_stage_configs(
-        model="dummy-model",
-        kwargs={"diffusion_attention_backend": "FLASH_ATTN"},
-        trust_remote_code=False,
-    )
-
-    diffusion_attention_config = stage_configs[0].engine_args.diffusion_attention_config
+    diffusion_attention_config = stage_cfg.engine_args.diffusion_attention_config
     assert diffusion_attention_config["default"]["backend"] == "FLASH_ATTN"
 
 
-def test_resolve_stage_configs_preserves_stage_diffusion_attention(monkeypatch):
-    import vllm_omni.engine.async_omni_engine as engine_mod
-
-    engine = object.__new__(AsyncOmniEngine)
+def test_apply_stage_engine_arg_overrides_preserves_stage_diffusion_attention():
     existing_attention = AttentionConfig(default=AttentionSpec(backend="TORCH_SDPA"))
     stage_cfg = _stage_config(
         "diffusion",
@@ -2150,25 +2131,14 @@ def test_resolve_stage_configs_preserves_stage_diffusion_attention(monkeypatch):
         quantization_config=None,
     )
 
-    monkeypatch.setattr(
-        engine_mod,
-        "load_and_resolve_stage_configs",
-        lambda *args, **kwargs: ("dummy-config", [stage_cfg], None),
+    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
+        stage_cfg, {"diffusion_attention_backend": "FLASH_ATTN"}
     )
 
-    _config_path, stage_configs = engine._resolve_stage_configs(
-        model="dummy-model",
-        kwargs={"diffusion_attention_backend": "FLASH_ATTN"},
-        trust_remote_code=False,
-    )
-
-    assert stage_configs[0].engine_args.diffusion_attention_config == existing_attention
+    assert stage_cfg.engine_args.diffusion_attention_config == existing_attention
 
 
-def test_resolve_stage_configs_does_not_inject_over_stage_diffusion_attention_backend(monkeypatch):
-    import vllm_omni.engine.async_omni_engine as engine_mod
-
-    engine = object.__new__(AsyncOmniEngine)
+def test_apply_stage_engine_arg_overrides_does_not_inject_over_stage_diffusion_attention_backend():
     stage_cfg = _stage_config(
         "diffusion",
         diffusion_attention_backend="TORCH_SDPA",
@@ -2179,48 +2149,28 @@ def test_resolve_stage_configs_does_not_inject_over_stage_diffusion_attention_ba
         quantization_config=None,
     )
 
-    monkeypatch.setattr(
-        engine_mod,
-        "load_and_resolve_stage_configs",
-        lambda *args, **kwargs: ("dummy-config", [stage_cfg], None),
+    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
+        stage_cfg, {"diffusion_attention_backend": "FLASH_ATTN"}
     )
 
-    _config_path, stage_configs = engine._resolve_stage_configs(
-        model="dummy-model",
-        kwargs={"diffusion_attention_backend": "FLASH_ATTN"},
-        trust_remote_code=False,
-    )
-
-    engine_args = stage_configs[0].engine_args
+    engine_args = stage_cfg.engine_args
     assert "diffusion_attention_backend" not in engine_args
     assert engine_args.diffusion_attention_config.default.backend == "TORCH_SDPA"
 
 
-def test_resolve_stage_configs_does_not_inject_diffusion_attention_into_llm_stage(monkeypatch):
-    import vllm_omni.engine.async_omni_engine as engine_mod
-
-    engine = object.__new__(AsyncOmniEngine)
+def test_apply_stage_engine_arg_overrides_does_not_inject_diffusion_attention_into_llm_stage():
     stage_cfg = _stage_config(
         "llm",
         attention_config={"backend": "FLASH_ATTN"},
         enable_sleep_mode=None,
     )
 
-    monkeypatch.setattr(
-        engine_mod,
-        "load_and_resolve_stage_configs",
-        lambda *args, **kwargs: ("dummy-config", [stage_cfg], None),
+    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
+        stage_cfg, {"diffusion_attention_backend": "TORCH_SDPA"}
     )
 
-    _config_path, stage_configs = engine._resolve_stage_configs(
-        model="dummy-model",
-        kwargs={"diffusion_attention_backend": "TORCH_SDPA"},
-        trust_remote_code=False,
-    )
-
-    assert stage_configs[0].engine_args.attention_config == {"backend": "FLASH_ATTN"}
-    assert not hasattr(stage_configs[0].engine_args, "diffusion_attention_config")
->>>>>>> 5cb658006 (wip simplifying engine arg building)
+    assert stage_cfg.engine_args.attention_config == {"backend": "FLASH_ATTN"}
+    assert not hasattr(stage_cfg.engine_args, "diffusion_attention_config")
 
 
 def test_extract_legacy_stage_metadata_rocm_does_not_inject_diffusion_attention(monkeypatch):
@@ -2593,7 +2543,7 @@ def test_native_kv_producer_replica_identity_and_bootstrap_are_isolated(mocker, 
     mocker.patch.object(
         runtime_module,
         "build_vllm_config",
-        return_value=(types.SimpleNamespace(kv_transfer_config=kv_config), object),
+        return_value=(types.SimpleNamespace(kv_transfer_config=kv_config, quant_config=None), object),
     )
 
     for _ in range(2):

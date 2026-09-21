@@ -70,7 +70,6 @@ def _move_diffusion_alias(
 def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict[str, Any]:
     """Normalize legacy diffusion kwargs before config construction and return a handle to the
     normalized kwargs.
->>>>>>> 5cb658006 (wip simplifying engine arg building)
 
     NOTE: This should be the only place we handle kwarg fallbacks/aliases so that we can
     easily deprecate them for removal in future releases if needed.
@@ -86,40 +85,28 @@ def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict
     elif not isinstance(dtype, str):
         raise TypeError(f"Provided dtype must be a string or torch.dtype, got {type(dtype).__name__}")
 
-    # For quantization, map quantization -> quantization_config, regardless of type,
-    # so that we can build out of the same field later.
-    if "quantization" in normalized and normalized.get("quantization_config", None) is None:
-        normalized["quantization_config"] = normalized.pop("quantization")
-    else:
-        normalized.pop("quantization", None)
     if not is_diffusion:
+        # For quantization, map quantization -> quantization_config so we can build
+        # the config from the same field later regardless of engine type.
+        if "quantization" in normalized and normalized.get("quantization_config", None) is None:
+            normalized["quantization_config"] = normalized.pop("quantization")
+        else:
+            normalized.pop("quantization", None)
         return normalized
 
     ### Diffusion specific
-    # Backwards-compatibility: older callers may use a diffusion-specific
-    # "static_lora_scale" kwarg. Normalize it to the canonical "lora_scale".
-    if "static_lora_scale" in normalized:
-        if "lora_scale" not in normalized:
-            normalized["lora_scale"] = normalized["static_lora_scale"]
-        normalized.pop("static_lora_scale", None)
-
-    diffusion_quantization = normalized.pop("diffusion_quantization_config", None)
-    if diffusion_quantization is not None:
-        normalized["quantization_config"] = diffusion_quantization
-
-    # Renamed from kv_cache_* to avoid clashing with vLLM's --kv-cache-dtype.
-    if normalized.get("diffusion_kv_cache_dtype") is None and "kv_cache_dtype" in normalized:
-        normalized["diffusion_kv_cache_dtype"] = normalized.pop("kv_cache_dtype")
-    else:
-        normalized.pop("kv_cache_dtype", None)
-    if normalized.get("diffusion_kv_cache_skip_steps") is None and "kv_cache_skip_steps" in normalized:
-        normalized["diffusion_kv_cache_skip_steps"] = normalized.pop("kv_cache_skip_steps")
-    else:
-        normalized.pop("kv_cache_skip_steps", None)
-    if normalized.get("diffusion_kv_cache_skip_layers") is None and "kv_cache_skip_layers" in normalized:
-        normalized["diffusion_kv_cache_skip_layers"] = normalized.pop("kv_cache_skip_layers")
-    else:
-        normalized.pop("kv_cache_skip_layers", None)
+    # Promote deprecated aliases onto their canonical fields. Each warns on use
+    # and rejects a real conflict (both the legacy and canonical field provided).
+    for legacy_name, canonical_name in (
+        ("static_lora_scale", "lora_scale"),
+        ("quantization", "quantization_config"),
+        ("diffusion_quantization_config", "quantization_config"),
+        ("max_batch_size", "max_num_seqs"),
+        ("kv_cache_dtype", "diffusion_kv_cache_dtype"),
+        ("kv_cache_skip_steps", "diffusion_kv_cache_skip_steps"),
+        ("kv_cache_skip_layers", "diffusion_kv_cache_skip_layers"),
+    ):
+        _move_diffusion_alias(normalized, legacy_name, canonical_name)
 
     # Handle "diffusion_attention_backend" shorthand: merge into
     # diffusion_attention_config before field filtering.
@@ -132,30 +119,30 @@ def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict
                 FutureWarning,
                 stacklevel=2,
             )
-        existing = config_kwargs.get("diffusion_attention_config")
-        config_kwargs["diffusion_attention_config"] = parse_attention_config(
+        existing = normalized.get("diffusion_attention_config")
+        normalized["diffusion_attention_config"] = parse_attention_config(
             existing,
             attention_backend=diffusion_attn_backend,
             fastvideo_vsa_topk=fastvideo_vsa_topk,
         )
 
-    auxiliary_text_encoder = config_kwargs.pop("auxiliary_text_encoder", None)
+    auxiliary_text_encoder = normalized.pop("auxiliary_text_encoder", None)
     if auxiliary_text_encoder is not None:
-        extras = dict(config_kwargs.get("extras") or {})
+        extras = dict(normalized.get("extras") or {})
         if extras.get("auxiliary_text_encoder") is not None:
             raise ValueError(
                 "Diffusion engine field 'auxiliary_text_encoder' cannot be provided both at the top level and in "
                 "'extras'."
             )
         extras["auxiliary_text_encoder"] = auxiliary_text_encoder
-        config_kwargs["extras"] = extras
+        normalized["extras"] = extras
 
     # Check environment variable as fallback for cache_backend.
     # Support both old DIFFUSION_CACHE_ADAPTER and new DIFFUSION_CACHE_BACKEND.
-    if "cache_backend" not in normalized and apply_defaults:
+    if "cache_backend" not in normalized:
         cache_backend = os.environ.get("DIFFUSION_CACHE_BACKEND") or os.environ.get("DIFFUSION_CACHE_ADAPTER")
         normalized["cache_backend"] = cache_backend.lower() if cache_backend else "none"
-    elif "cache_backend" in config_kwargs and config_kwargs["cache_backend"] is None and apply_defaults:
+    elif normalized["cache_backend"] is None:
         # Callers (e.g. example CLIs with `default=None`) pass an explicit
         # None for "no cache"; canonicalize it so every consumer sees the
         # declared `str` value instead of relying on per-model None handling.
@@ -1410,6 +1397,12 @@ class OmniDiffusionConfig:
         if checkpoint is None:
             return
         if should_adopt_checkpoint_quant_config(self.quantization_config, checkpoint):
+            # Adopting because nothing was set is startup auto-detection (first
+            # expert's config.json), not a user policy for every expert; flag it
+            # so cascade transformers each rebuild from their own checkpoint.
+            # TODO - we should remove the quantization_config_is_auto_detected flag
+            if self.quantization_config is None:
+                self.quantization_config_is_auto_detected = True
             self.quantization_config = checkpoint
             logger.info(
                 "Auto-detected quantization '%s' from model config",
@@ -1672,13 +1665,14 @@ class OmniDiffusionConfig:
     def normalize_init_kwargs(cls, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         config_kwargs = normalize_omni_kwargs(kwargs, is_diffusion=True)
 
-        # Filter kwargs to only include valid fields
         valid_fields = {f.name for f in fields(cls)}
-        filtered_kwargs = {
-            key: value for key, value in config_kwargs.items() if key in valid_fields and value is not None
-        }
-
-        return filtered_kwargs
+        # Reject unknown fields before dropping None values, so a stray key still
+        # surfaces when its value is None (e.g. from a CLI default) instead of
+        # being silently discarded.
+        validate_omni_diffusion_kwargs(config_kwargs, valid_fields)
+        # Remaining None values mean "unset"; drop them so non-optional dataclass
+        # defaults are not overwritten.
+        return {key: value for key, value in config_kwargs.items() if key in valid_fields and value is not None}
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":

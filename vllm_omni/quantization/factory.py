@@ -493,46 +493,6 @@ def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: Quantization
     return False
 
 
-def maybe_rebuild_quantization_config(quant_config: QuantizationConfig, disk_qc: dict[str, Any]) -> QuantizationConfig:
-    """Produce the final quantization config, which will either be a newly built config ,
-    or a handle to the original if we can reuse it. Currently this is only applicable for
-    models that need to consider that case where we may have multiple quantization configs,
-    E.g., wan2_2.
-    """
-    qc_method = get_quantization_method(disk_qc)
-    qc_kwargs = {k: v for k, v in disk_qc.items() if k not in (METHOD_KEY, QUANT_METHOD_KEY)}
-    if _disk_marks_serialized(qc_kwargs, quant_config):
-        logger.info(
-            "config.json marks checkpoint as serialized; switching to offline %s mode.",
-            qc_method,
-        )
-        return build_quantization_config(qc_method, disk_qc)
-
-    if (
-        "require_smooth_scale" in qc_kwargs
-        and hasattr(quant_config, "require_smooth_scale")
-        and qc_kwargs["require_smooth_scale"] != quant_config.require_smooth_scale
-    ):
-        logger.info("config.json Smooth requirement differs from active config; rebuilding quant_config.")
-        return build_quant_config(qc_method, **qc_kwargs)
-
-    # AutoRound MXFP checkpoints use data_type="mx_fp" instead of
-    # is_checkpoint_*_serialized; rebuild so the offline MXFP4/MXFP8 path is
-    # selected according to the checkpoint's bit width.
-    if qc_kwargs.get("data_type") == "mx_fp":
-        logger.info("config.json declares data_type='mx_fp'; rebuilding as offline AutoRound MXFP8.")
-        return build_quantization_config(qc_method, disk_qc)
-
-    if (
-        "ignored_layers" in qc_kwargs
-        and hasattr(quant_config, "ignored_layers")
-        and set(qc_kwargs.get("ignored_layers") or []) != set(quant_config.ignored_layers or [])
-    ):
-        logger.info("config.json ignored_layers differs from active config; rebuilding quant_config.")
-        return build_quantization_config(qc_method, disk_qc)
-    return quant_config
-
-
 def _normalize_serialized_mxfp4_layer_policy(qc_method: str, qc_kwargs: dict[str, Any]) -> None:
     """Canonicalize the BF16 layer policy owned by serialized MXFP4 metadata.
 
@@ -580,10 +540,10 @@ def resolve_quantization_config_from_disk(
         qc_method = disk_qc
         qc_kwargs: dict[str, Any] = {}
     else:
-        if not isinstance(disk_qc, Mapping) or "quant_method" not in disk_qc:
+        if not isinstance(disk_qc, Mapping) or QUANT_METHOD_KEY not in disk_qc:
             return quant_config
-        qc_method = disk_qc["quant_method"]
-        qc_kwargs = {k: v for k, v in disk_qc.items() if k != "quant_method"}
+        qc_method = disk_qc[QUANT_METHOD_KEY]
+        qc_kwargs = {k: v for k, v in disk_qc.items() if k != QUANT_METHOD_KEY}
 
     _normalize_serialized_mxfp4_layer_policy(qc_method, qc_kwargs)
 
@@ -593,7 +553,7 @@ def resolve_quantization_config_from_disk(
             qc_method,
             qc_kwargs,
         )
-        return build_quant_config(qc_method, **qc_kwargs)
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
 
     active_method = _normalize_quant_method_alias(quant_config.get_name())
     disk_method = _normalize_quant_method_alias(qc_method)
@@ -623,3 +583,38 @@ def resolve_quantization_config_from_disk(
         # Either a calibrated checkpoint or an explicit caller can require
         # Smooth. Per-expert rebuilds must never weaken that requirement.
         qc_kwargs["require_smooth_scale"] = quant_config.require_smooth_scale or disk_requires_smooth
+
+    if _disk_marks_serialized(qc_kwargs, quant_config):
+        logger.info(
+            "config.json marks checkpoint as serialized; switching to offline %s mode.",
+            qc_method,
+        )
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+
+    if (
+        "require_smooth_scale" in qc_kwargs
+        and hasattr(quant_config, "require_smooth_scale")
+        and qc_kwargs["require_smooth_scale"] != quant_config.require_smooth_scale
+    ):
+        logger.info("config.json Smooth requirement differs from active config; rebuilding quant_config.")
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+
+    # AutoRound MXFP checkpoints use data_type="mx_fp" instead of
+    # is_checkpoint_*_serialized; rebuild so the offline MXFP4/MXFP8 path is
+    # selected according to the checkpoint's bit width.
+    if qc_kwargs.get("data_type") == "mx_fp":
+        logger.info(
+            "config.json declares data_type='mx_fp'; rebuilding as offline AutoRound MXFP%d.",
+            qc_kwargs.get("bits", getattr(quant_config, "weight_bits", 0)),
+        )
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+
+    if (
+        "ignored_layers" in qc_kwargs
+        and hasattr(quant_config, "ignored_layers")
+        and set(qc_kwargs.get("ignored_layers") or []) != set(quant_config.ignored_layers or [])
+    ):
+        logger.info("config.json ignored_layers differs from active config; rebuilding quant_config.")
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+
+    return quant_config

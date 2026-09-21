@@ -674,6 +674,9 @@ class StageRuntime:
         if not native_kv or stage_vllm_config is None:
             return stage_vllm_config
         replica_vllm_config = copy.deepcopy(stage_vllm_config)
+        # Repoint the quant config to the deepcopied object, since we validate with
+        # object identity in post init when creating the ReplicaInitPlan
+        replica_vllm_config.quant_config = stage_vllm_config.quant_config
         kv_config = replica_vllm_config.kv_transfer_config
         kv_config.engine_id = f"{kv_config.engine_id}-s{replica_metadata.stage_id}-r{replica_metadata.replica_id}"
         if kv_config.kv_connector == "MooncakeConnector" and kv_config.kv_role == "kv_producer":
@@ -728,17 +731,25 @@ class StageRuntime:
             num_replicas = replicas_per_stage[stage_idx]
             launch_mode = self._get_launch_mode(stage_id)
 
-            # TODO: (Alex) This should be folded into the VllmOmniConfig.
-            # Build the quantization config early so both the LLM and diffusion
-            # init paths share one instance. Quantization is already normalized
-            # to `quantization_config` for all engine types before this point.
+            # TODO: (Alex) - check if we need the else branch here. A lot of the code
+            # in this file is defensive, but it looks like it this case is probably not needed.
+            if isinstance(stage_cfg, BaseVllmOmniStageConfig):
+                stage_quantization = stage_cfg.quantization_config
+                stage_revision = stage_cfg.model_config.revision
+                stage_trust_remote_code = stage_cfg.model_config.trust_remote_code
+                stage_hf_config_name = stage_cfg.hf_config_name
+            else:
+                stage_quantization = stage_cfg.engine_args.get("quantization_config")
+                stage_revision = stage_cfg.engine_args.get("revision")
+                stage_trust_remote_code = stage_cfg.engine_args.get("trust_remote_code", False)
+                stage_hf_config_name = stage_cfg.engine_args.get("hf_config_name")
             quantization_config = get_stage_quantization_config(
                 self._model,
-                stage_cfg.engine_args.get("quantization_config"),
-                revision=stage_cfg.engine_args.get("revision"),
+                stage_quantization,
+                revision=stage_revision,
                 stage_type=base_metadata.stage_type,
-                trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
-                hf_config_name=stage_cfg.engine_args.get("hf_config_name"),
+                trust_remote_code=stage_trust_remote_code,
+                hf_config_name=stage_hf_config_name,
             )
             if quantization_config is not None:
                 logger.info("created quantization config of type: %s", type(quantization_config).__name__)

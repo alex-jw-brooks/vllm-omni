@@ -43,20 +43,20 @@ def test_mxfp4_config_get_name():
 
 @pytest.mark.parametrize("value", [True, False, None, "2", 2.0, 1, -1, 3])
 def test_mxfp4_scale_alg_rejects_invalid_values(value):
-    from vllm_omni.quantization import build_quant_config
+    from vllm_omni.quantization import build_quantization_config
 
     with pytest.raises(ValueError, match="mxfp4_scale_alg"):
-        build_quant_config({"method": "mxfp4", "mxfp4_scale_alg": value})
+        build_quantization_config({"method": "mxfp4", "mxfp4_scale_alg": value})
 
 
 @pytest.mark.parametrize("runtime_alg", [0, 2])
 @pytest.mark.parametrize("serialized", [False, True])
 def test_runtime_algorithm_survives_offline_storage_rebuild(runtime_alg, serialized):
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
     from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
 
     active = DiffusionMXFP4Config(is_checkpoint_mxfp4_serialized=serialized, mxfp4_scale_alg=runtime_alg)
-    resolved = resolve_quant_config_from_disk(
+    resolved = resolve_quantization_config_from_disk(
         active,
         {
             "quant_method": "mxfp4",
@@ -83,25 +83,25 @@ def test_mxfp4_config_from_config_serialized():
 
 
 def test_mxfp4_config_requires_offline_smooth():
-    from vllm_omni.quantization import build_quant_config
+    from vllm_omni.quantization import build_quantization_config
     from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
 
     values = {"is_checkpoint_mxfp4_serialized": True, "require_smooth_scale": True}
     assert DiffusionMXFP4Config.from_config(values).require_smooth_scale
-    assert build_quant_config({"method": "mxfp4", **values}).require_smooth_scale
+    assert build_quantization_config({"method": "mxfp4", **values}).require_smooth_scale
     with pytest.raises(ValueError, match="offline"):
-        build_quant_config({"method": "mxfp4", "require_smooth_scale": True})
+        build_quantization_config({"method": "mxfp4", "require_smooth_scale": True})
     with pytest.raises(ValueError, match="boolean"):
         DiffusionMXFP4Config.from_config({**values, "require_smooth_scale": "false"})
 
 
 @pytest.mark.parametrize("serialized", [False, True])
 def test_mxfp4_disk_smooth_requirement_preserves_step_policy(serialized):
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
     from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
 
     active = DiffusionMXFP4Config(is_checkpoint_mxfp4_serialized=serialized, w4a8_fallback_steps=[1])
-    resolved = resolve_quant_config_from_disk(
+    resolved = resolve_quantization_config_from_disk(
         active,
         {
             "quant_method": "mxfp4",
@@ -116,7 +116,7 @@ def test_mxfp4_disk_smooth_requirement_preserves_step_policy(serialized):
 
 @pytest.mark.parametrize("disk_requirement", [None, False, True])
 def test_mxfp4_expert_rebuild_cannot_weaken_explicit_smooth_requirement(disk_requirement):
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
     from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
 
     active = DiffusionMXFP4Config(is_checkpoint_mxfp4_serialized=True, require_smooth_scale=True)
@@ -127,14 +127,14 @@ def test_mxfp4_expert_rebuild_cannot_weaken_explicit_smooth_requirement(disk_req
     }
     if disk_requirement is not None:
         disk["require_smooth_scale"] = disk_requirement
-    resolved = resolve_quant_config_from_disk(active, disk)
+    resolved = resolve_quantization_config_from_disk(active, disk)
     assert resolved.require_smooth_scale
     assert resolved.ignored_layers == disk["ignored_layers"]
 
 
 @pytest.mark.parametrize("disk_qc", ["mxfp4", {"quant_method": "mxfp4"}])
 def test_mxfp4_method_only_disk_config_preserves_caller_layer_policy(disk_qc):
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
     from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
 
     active = DiffusionMXFP4Config(
@@ -143,7 +143,7 @@ def test_mxfp4_method_only_disk_config_preserves_caller_layer_policy(disk_qc):
         w4a8_fallback_layers=["blocks.1.attn1.to_qkv"],
     )
 
-    resolved = resolve_quant_config_from_disk(active, disk_qc)
+    resolved = resolve_quantization_config_from_disk(active, disk_qc)
 
     assert resolved is active
     assert resolved.ignored_layers == ["blocks.0.attn2.to_q"]
@@ -152,17 +152,17 @@ def test_mxfp4_method_only_disk_config_preserves_caller_layer_policy(disk_qc):
 
 
 def test_quantization_disk_string_rejects_mismatched_active_method():
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization import build_quantization_config
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
-    active = build_quant_config("mxfp4")
+    active = build_quantization_config("mxfp4")
 
     with pytest.raises(ValueError, match="mxfp4_dualscale.*active quantization config is 'mxfp4'"):
-        resolve_quant_config_from_disk(active, "mxfp4_dualscale")
+        resolve_quantization_config_from_disk(active, "mxfp4_dualscale")
 
 
 def test_quantization_disk_string_accepts_equivalent_method_alias():
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
     class ActiveAliasConfig:
         @staticmethod
@@ -171,7 +171,7 @@ def test_quantization_disk_string_accepts_equivalent_method_alias():
 
     active = ActiveAliasConfig()
 
-    assert resolve_quant_config_from_disk(active, "auto-round") is active
+    assert resolve_quantization_config_from_disk(active, "auto-round") is active
 
 
 def test_mxfp4_config_from_config_ignored_layers():
@@ -195,8 +195,8 @@ def test_mxfp4_config_from_config_modules_to_not_convert_fallback():
     ],
 )
 def test_dualscale_rejects_w4a8_configuration(serialized, policy):
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization import build_quantization_config
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
     from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4DualScaleMixedConfig
 
     config = {"quant_method": "mxfp4_dualscale", "is_checkpoint_serialized": serialized, **policy}
@@ -205,18 +205,18 @@ def test_dualscale_rejects_w4a8_configuration(serialized, policy):
     with pytest.raises(ValueError, match="does not support W4A8"):
         DiffusionMXFP4DualScaleMixedConfig.from_config(config)
     with pytest.raises(ValueError, match="does not support W4A8"):
-        build_quant_config({"transformer": config})
+        build_quantization_config({"transformer": config})
     with pytest.raises(ValueError, match="does not support W4A8"):
-        resolve_quant_config_from_disk(None, config)
+        resolve_quantization_config_from_disk(None, config)
 
 
 @pytest.mark.parametrize("method", ["mxfp4", "mxfp4_dualscale"])
 @pytest.mark.parametrize("steps", [[-1], [True], [1.5], ["2"], "0,2", (0, 2)])
 def test_mxfp4_rejects_invalid_fallback_steps(method, steps):
-    from vllm_omni.quantization import build_quant_config
+    from vllm_omni.quantization import build_quantization_config
 
     with pytest.raises(ValueError, match="non-negative integer"):
-        build_quant_config({"method": method, "w4a8_fallback_steps": steps})
+        build_quantization_config({"method": method, "w4a8_fallback_steps": steps})
 
 
 def test_mxfp4_fallback_steps_follow_request_context():
@@ -225,11 +225,11 @@ def test_mxfp4_fallback_steps_follow_request_context():
         override_forward_context,
         set_forward_context_denoise_step_idx,
     )
-    from vllm_omni.quantization import build_quant_config
+    from vllm_omni.quantization import build_quantization_config
     from vllm_omni.quantization.mxfp4_config import _is_w4a8_fallback_step
 
     steps = [2, 0, 2]
-    cfg = build_quant_config({"method": "mxfp4", "w4a8_fallback_steps": steps})
+    cfg = build_quantization_config({"method": "mxfp4", "w4a8_fallback_steps": steps})
     steps.append(1)
     assert cfg.w4a8_fallback_steps == [0, 2]
     with override_forward_context(None):
@@ -253,11 +253,11 @@ def test_mxfp4_fallback_steps_follow_request_context():
 @pytest.mark.parametrize("steps", [[], [0, 2]])
 @pytest.mark.parametrize("already_serialized", [False, True])
 def test_mxfp4_disk_rebuild_preserves_runtime_fallback(method, flag, steps, already_serialized):
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization import build_quantization_config
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
     layers = ["blocks.10.attn1.to_qkv"] if steps else []
-    active = build_quant_config(
+    active = build_quantization_config(
         {
             "method": method,
             flag: already_serialized,
@@ -268,7 +268,7 @@ def test_mxfp4_disk_rebuild_preserves_runtime_fallback(method, flag, steps, alre
     # Separate experts may have distinct high precision layers. Both must
     # retain the requested step policy during online/offline reconciliation.
     for ignored in [["blocks.0.attn1.to_q"], ["blocks.1.attn1.to_q"]]:
-        resolved = resolve_quant_config_from_disk(
+        resolved = resolve_quantization_config_from_disk(
             active,
             {
                 "quant_method": method,
@@ -290,10 +290,10 @@ def test_mxfp4_disk_rebuild_preserves_runtime_fallback(method, flag, steps, alre
     [{}, {"w4a8_fallback_steps": [1]}, {"w4a8_fallback_layers": ["blocks.10.attn1.to_qkv"]}],
 )
 def test_mxfp4_explicit_omission_disables_saved_policies_for_both_experts(runtime_policy):
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization import build_quantization_config
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
-    active = build_quant_config({"method": "mxfp4", **runtime_policy})
+    active = build_quantization_config({"method": "mxfp4", **runtime_policy})
     resolved_experts = []
     for ignored in (["blocks.0.attn2.to_q"], ["blocks.1.ffn.net_2"]):
         disk = {
@@ -303,11 +303,11 @@ def test_mxfp4_explicit_omission_disables_saved_policies_for_both_experts(runtim
             "w4a8_fallback_steps": [9],
             "w4a8_fallback_layers": ["blocks.9.ffn.net_2"],
         }
-        resolved = resolve_quant_config_from_disk(active, disk)
+        resolved = resolve_quantization_config_from_disk(active, disk)
         assert resolved.w4a8_fallback_steps == runtime_policy.get("w4a8_fallback_steps", [])
         assert resolved.w4a8_fallback_layers == runtime_policy.get("w4a8_fallback_layers", [])
         assert resolved.ignored_layers == ignored
-        detected = resolve_quant_config_from_disk(None, disk)
+        detected = resolve_quantization_config_from_disk(None, disk)
         assert detected.w4a8_fallback_steps == [9]
         assert detected.w4a8_fallback_layers == ["blocks.9.ffn.net_2"]
         resolved_experts.append(resolved)
@@ -320,8 +320,8 @@ def test_mxfp4_explicit_omission_disables_saved_policies_for_both_experts(runtim
     "method,flag", [("mxfp4", "is_checkpoint_mxfp4_serialized"), ("mxfp4_dualscale", "is_checkpoint_serialized")]
 )
 def test_serialized_mxfp4_disk_omission_clears_active_ignored_layers(method, flag):
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization import build_quantization_config
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
     active_spec = {
         "method": method,
@@ -332,9 +332,9 @@ def test_serialized_mxfp4_disk_omission_clears_active_ignored_layers(method, fla
     }
     if method == "mxfp4":
         active_spec["require_smooth_scale"] = True
-    active = build_quant_config(active_spec)
+    active = build_quantization_config(active_spec)
 
-    resolved = resolve_quant_config_from_disk(active, {"quant_method": method, flag: True})
+    resolved = resolve_quantization_config_from_disk(active, {"quant_method": method, flag: True})
 
     assert resolved is not active
     assert resolved.ignored_layers == []
@@ -349,15 +349,15 @@ def test_serialized_mxfp4_disk_omission_clears_active_ignored_layers(method, fla
 )
 @pytest.mark.parametrize("with_active", [False, True])
 def test_serialized_mxfp4_disk_uses_modules_to_not_convert(method, flag, with_active):
-    from vllm_omni.quantization import build_quant_config
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization import build_quantization_config
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
     active = None
     disk_steps = [9] if method == "mxfp4" else []
     active_steps = [1] if method == "mxfp4" else []
     expected_steps = disk_steps
     if with_active:
-        active = build_quant_config(
+        active = build_quantization_config(
             {
                 "method": method,
                 flag: True,
@@ -367,7 +367,7 @@ def test_serialized_mxfp4_disk_uses_modules_to_not_convert(method, flag, with_ac
         )
         expected_steps = active_steps
 
-    resolved = resolve_quant_config_from_disk(
+    resolved = resolve_quantization_config_from_disk(
         active,
         {
             "quant_method": method,
@@ -887,26 +887,26 @@ def test_rocm_create_weights_row_parallel_tp2(_rocm_platform):
 @pytest.mark.parametrize("method", ["mxfp4", "mxfp4_dualscale"])
 @pytest.mark.parametrize("layers", ["blocks.1.attn1.to_qkv", [1], [True], [""], [" a"], ["blocks.*"], ["a..b"]])
 def test_mxfp4_rejects_invalid_fallback_layers(method, layers):
-    from vllm_omni.quantization import build_quant_config
+    from vllm_omni.quantization import build_quantization_config
 
     with pytest.raises(ValueError, match="exact runtime Linear paths"):
-        build_quant_config({"method": method, "w4a8_fallback_layers": layers})
+        build_quantization_config({"method": method, "w4a8_fallback_layers": layers})
 
 
 @pytest.mark.parametrize("method", ["mxfp4"])
 def test_mxfp4_layer_policy_from_checkpoint_and_component_config(method):
-    from vllm_omni.quantization import build_quant_config
+    from vllm_omni.quantization import build_quantization_config
     from vllm_omni.quantization.component_config import resolve_component_quant_config
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
+    from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
     names = ["blocks.10.attn1.to_qkv", "blocks.10.attn1.to_qkv"]
-    components = build_quant_config(
+    components = build_quantization_config(
         {"transformer": {"method": method, "w4a8_fallback_layers": names}, "transformer_2": {"method": method}}
     )
     names.append("blocks.11.attn1.to_qkv")
     assert resolve_component_quant_config(components, "transformer").w4a8_fallback_layers == [names[0]]
     assert resolve_component_quant_config(components, "transformer_2").w4a8_fallback_layers == []
-    detected = resolve_quant_config_from_disk(None, {"quant_method": method, "w4a8_fallback_layers": [names[0]]})
+    detected = resolve_quantization_config_from_disk(None, {"quant_method": method, "w4a8_fallback_layers": [names[0]]})
     assert detected.w4a8_fallback_layers == [names[0]]
     assert type(detected).from_config({"w4a8_fallback_layers": [names[0]]}).w4a8_fallback_layers == [names[0]]
 
@@ -923,13 +923,13 @@ def test_mxfp4_layer_and_step_union_routes_actual_methods(
     from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
 
     from vllm_omni.diffusion.forward_context import ForwardContext, override_forward_context
-    from vllm_omni.quantization import build_quant_config, mxfp4_config
+    from vllm_omni.quantization import build_quantization_config, mxfp4_config
 
     monkeypatch.setattr(mxfp4_config.current_omni_platform, "is_npu", lambda: True)
     selected = "blocks.10.attn1.to_qkv"
     other = "blocks.11.attn2.to_q"
     preserved = "blocks.12.ffn.net_2"
-    config = build_quant_config(
+    config = build_quantization_config(
         {
             "method": kind,
             "mxfp4_scale_alg": scale_alg,

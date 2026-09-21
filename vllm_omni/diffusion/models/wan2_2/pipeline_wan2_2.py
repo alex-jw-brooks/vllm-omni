@@ -19,7 +19,6 @@ from vllm.model_executor.layers.quantization.base_config import QuantizationConf
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm.sequence import IntermediateTensors
 
-from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import DistributedAutoencoderKLWan
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
@@ -58,6 +57,7 @@ from vllm_omni.diffusion.utils.chunked_video import decode_to_mp4
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch, split_diffusion_output_by_request
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 from vllm_omni.platforms import current_omni_platform
+from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 
 logger = logging.getLogger(__name__)
 DEBUG_PERF = False
@@ -193,7 +193,6 @@ def resolve_wan_transformer_quant_config(
 ) -> QuantizationConfig | None:
     """Resolve the expert before applying its checkpoint's storage contract."""
     from vllm_omni.quantization.component_config import ComponentQuantizationConfig
-    from vllm_omni.quantization.factory import resolve_quant_config_from_disk
 
     # Wan experts are siblings: "transformer_2" must not inherit "transformer"
     # through the generic layer-prefix resolver. Select the whole expert name.
@@ -203,7 +202,9 @@ def resolve_wan_transformer_quant_config(
         else quant_config
     )
     quantization_disabled = isinstance(quant_config, ComponentQuantizationConfig) and component_quant_config is None
-    resolved_quant_config = resolve_quant_config_from_disk(component_quant_config, config.get("quantization_config"))
+    resolved_quant_config = resolve_quantization_config_from_disk(
+        component_quant_config, config.get("quantization_config")
+    )
     if quantization_disabled and resolved_quant_config is not None:
         raise ValueError(
             f"Quantization is disabled for component {component!r}, but its checkpoint declares quantization. "
@@ -253,9 +254,7 @@ def create_transformer_from_config(
     if "pos_embed_seq_len" in config:
         kwargs["pos_embed_seq_len"] = config["pos_embed_seq_len"]
 
-    if "quantization_config" in config:
-        quant_config = resolve_quantization_config_from_disk(quant_config, config["quantization_config"])
-
+    quant_config = resolve_wan_transformer_quant_config(config, quant_config, component)
     if quant_config is not None:
         kwargs["quant_config"] = quant_config
     if prefix:
