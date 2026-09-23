@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 """Output modality types for vLLM-Omni.
 
 This module defines the OutputModality enum and TensorAccumulationStrategy
@@ -37,6 +40,7 @@ class OutputModalityNames(str, Enum):
     TEXT = "text"
     IMAGE = "image"
     AUDIO = "audio"
+    VIDEO = "video"
     LATENT = "latent"
 
 
@@ -64,6 +68,7 @@ class OutputModality(Flag):
     TEXT = auto()
     IMAGE = auto()
     AUDIO = auto()
+    VIDEO = auto()
     LATENT = auto()
 
     @classmethod
@@ -87,7 +92,8 @@ class OutputModality(Flag):
             try:
                 result |= cls[p.upper()]
             except KeyError:
-                raise ValueError(f"Unknown modality: {p!r}. Supported: {[m.name.lower() for m in cls]}")
+                supported = [m.name.lower() for m in cls if m.name is not None]
+                raise ValueError(f"Unknown modality: {p!r}. Supported: {supported}")
         return result
 
     @property

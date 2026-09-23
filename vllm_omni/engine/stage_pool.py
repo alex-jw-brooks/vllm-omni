@@ -11,10 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-import numpy as np
-import torch
 from vllm.logger import init_logger
-from vllm.outputs import RequestOutput
 from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.engine.output_processor import RequestState
 from vllm.v1.metrics.stats import IterationStats
@@ -49,9 +46,9 @@ from vllm_omni.metrics.utils import (
     iter_mm_outputs,
 )
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.outputs.mm_outputs import MultimodalCompletionOutput, MultimodalPayload
 from vllm_omni.outputs.output_modality import OutputModality
 from vllm_omni.watermarking import WATERMARKER_REGISTRY, Watermarker
+from vllm_omni.watermarking.utils import watermark_outputs
 
 if TYPE_CHECKING:
     from vllm_omni.engine.orchestrator import OrchestratorRequestState
@@ -1286,72 +1283,6 @@ class StagePool:
             return None
         return cast(StagePoolDiffusionClient, raw_client).get_diffusion_output_nowait()
 
-    @staticmethod
-    def _watermark_payload(
-        request_id: str,
-        modality: str,
-        watermarker: Watermarker,
-        payload: MultimodalPayload | dict[str, Any],
-    ) -> None:
-        """Watermark one modality payload in place."""
-        data = payload.get(modality)
-        if data is None:
-            return
-        if not isinstance(data, (np.ndarray, torch.Tensor)):
-            raise TypeError(f"{modality} output must be an array or tensor")
-        metadata: Mapping[str, object] = payload
-        if modality == "audio" and payload.get("sr") is None:
-            metadata = {"sr": payload.get("audio_sample_rate")}
-        # TODO (Alex): Standardize stage media output types before watermarking and remove this.
-        # For now we have it to ensure watermarking doesn't modify the data type.
-        tensor = torch.from_numpy(data) if isinstance(data, np.ndarray) else data
-        watermarked = watermarker.watermark_output(request_id, tensor, metadata)
-        result = watermarked.numpy() if isinstance(data, np.ndarray) else watermarked
-        if isinstance(payload, MultimodalPayload):
-            payload.tensors[modality] = result
-        else:
-            payload[modality] = result
-
-    def _watermark_outputs(self, outputs: list[Any]) -> None:
-        """Watermark supported payloads in a batch of stage outputs."""
-        for output in outputs:
-            if isinstance(output, OmniEngineCoreOutput):
-                payload = output.multimodal_output
-                if payload is None:
-                    continue
-                for modality, watermarker in self._watermarkers.items():
-                    normalized = MultimodalPayload.from_raw(payload, modality)
-                    if normalized is None:
-                        continue
-                    try:
-                        self._watermark_payload(output.request_id, modality, watermarker, normalized)
-                    except (RuntimeError, TypeError, ValueError):
-                        logger.exception("Failed to watermark %s output for request %s", modality, output.request_id)
-                        watermarker.discard_request_state(output.request_id)
-                    output.multimodal_output = normalized
-                continue
-            if not isinstance(output, RequestOutput):
-                continue
-            payloads: list[MultimodalPayload | dict[str, Any]] = [
-                completion.multimodal_output
-                for completion in output.outputs
-                if isinstance(completion, MultimodalCompletionOutput) and completion.multimodal_output is not None
-            ]
-            if isinstance(output, OmniRequestOutput) and not output.outputs:
-                payload = output.multimodal_output
-                if isinstance(payload, dict):
-                    payloads.append(payload)
-
-            for payload in payloads:
-                for modality, watermarker in self._watermarkers.items():
-                    try:
-                        self._watermark_payload(output.request_id, modality, watermarker, payload)
-                    except (RuntimeError, TypeError, ValueError):
-                        logger.exception("Failed to watermark %s output for request %s", modality, output.request_id)
-                        watermarker.discard_request_state(output.request_id)
-            if output.finished:
-                self._discard_watermark_state([output.request_id])
-
     def _discard_completed_llm_watermark_state(
         self,
         outputs: list[Any],
@@ -1370,7 +1301,7 @@ class StagePool:
         if not self._watermarkers:
             return
         async with self._watermark_lock:
-            worker = asyncio.create_task(asyncio.to_thread(self._watermark_outputs, outputs))
+            worker = asyncio.create_task(asyncio.to_thread(watermark_outputs, outputs, self._watermarkers))
             try:
                 await asyncio.shield(worker)
             except asyncio.CancelledError:

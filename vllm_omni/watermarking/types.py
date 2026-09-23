@@ -12,3 +12,11 @@ class AudioTensor:
 
     samples: torch.Tensor
     sample_rate: int
+
+
+@dataclass(frozen=True)
+class VisualTensor:
+    """Pixels with their RGB channel axis."""
+
+    pixels: torch.Tensor
+    channel_axis: int
