@@ -73,7 +73,6 @@ from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.entrypoints.stage_utils import resolve_stage_physical_devices
 from vllm_omni.entrypoints.utils import inject_omni_kv_config
 from vllm_omni.outputs.output_metadata import FinalOutputModalityType
-from vllm_omni.outputs.output_modality import OutputModality
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
@@ -1319,8 +1318,8 @@ class StageRuntime:
             # Initialize watermarkers based on the output type as needed
             watermarkers = (
                 StagePool.initialize_watermarkers(
-                    OutputModality.from_string(metadata.final_output_type),
-                    self._watermark_config or None,
+                    metadata.final_output_type,
+                    self._watermark_config,
                 )
                 if metadata.final_output
                 else {}

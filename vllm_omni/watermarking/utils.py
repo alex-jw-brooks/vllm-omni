@@ -92,7 +92,7 @@ def watermark_payload(
     elif isinstance(result, torch.Tensor):
         payload.tensors[modality_key] = result
     else:
-        raise TypeError("tensor payload must remain a tensor")
+        raise WatermarkException("tensor payload must remain a tensor")
 
 
 def _watermark_core_output(
@@ -203,6 +203,7 @@ def watermark_outputs(
     """Watermark outputs in place, preserving backend failures unless strict."""
     for output in outputs:
         try:
+            # TODO: Ensure failure behavior is correct for when we are handling multiple modalities
             _watermark_output(output, watermarkers)
         except WatermarkException as error:
             _handle_watermark_failure(output, watermarkers, error, is_strict)

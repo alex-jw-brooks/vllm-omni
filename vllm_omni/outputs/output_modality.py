@@ -40,8 +40,8 @@ class OutputModalityNames(str, Enum):
     TEXT = "text"
     IMAGE = "image"
     AUDIO = "audio"
-    VIDEO = "video"
     LATENT = "latent"
+    VIDEO = "video"
 
 
 # Specify which output modalities may be drained when handling delta messages.
@@ -68,8 +68,8 @@ class OutputModality(Flag):
     TEXT = auto()
     IMAGE = auto()
     AUDIO = auto()
-    VIDEO = auto()
     LATENT = auto()
+    VIDEO = auto()
 
     @classmethod
     def from_string(cls, s: str | None) -> OutputModality:

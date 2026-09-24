@@ -16,7 +16,6 @@ from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.diffusion.utils.media_utils import mux_video_audio_bytes
 from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.outputs.output_modality import OutputModality
 from vllm_omni.watermarking import VideoSealVideoWatermarker, VisualTensor
 from vllm_omni.watermarking.utils import watermark_outputs
 
@@ -141,7 +140,7 @@ def test_stage_pool_initializes_video_watermarker(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setitem(StagePool._watermarker_registry["video"], "videoseal", lambda: watermarker)
 
     result = StagePool.initialize_watermarkers(
-        OutputModality.VIDEO,
+        "video",
         WatermarkConfig({"video": {"algorithm": "videoseal"}}),
     )
 

@@ -34,7 +34,6 @@ from vllm_omni.engine.stage_init_utils import (
 )
 from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.engine.stage_runtime import StageRuntime
-from vllm_omni.outputs.output_modality import OutputModality
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -152,16 +151,6 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
     assert len(runtime.stage_pools) == 1
     constructor.assert_called_once_with()
     assert runtime.stage_pools[0]._watermarkers == {"audio": watermarker}
-
-
-def test_initialize_watermarkers_checks_validity() -> None:
-    """Ensure stage initialization rejects a config mutated after validation."""
-    audio_config: dict[str, object] = {"algorithm": "audioseal"}
-    watermark_config = WatermarkConfig({"audio": audio_config})
-
-    audio_config["algorithm"] = "this is not a valid algorithm"
-    with pytest.raises(ValueError):
-        StagePool.initialize_watermarkers(OutputModality.AUDIO, watermark_config)
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):

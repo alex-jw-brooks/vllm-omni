@@ -652,6 +652,63 @@ async def test_run_single_stage_diffusion(orchestrator_factory) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage_type", ["llm", "diffusion"])
+@pytest.mark.parametrize("watermarking", [True, False])
+async def test_request_watermarking(stage_type: str, watermarking: bool) -> None:
+    watermarker = MagicMock()
+    watermarker.watermark_output.side_effect = lambda _request_id, samples, _metadata: samples
+
+    request = SimpleNamespace(request_id="r")
+    params = SamplingParams(watermarking=watermarking)
+    stage_pool_kwargs = {}
+
+    # Build the output for the correct stage type
+    if stage_type == "llm":
+        processor = FakeOutputProcessor()
+        processor.request_states = {"r": object()}
+        stage_pool_kwargs["output_processor"] = processor
+        output = OmniEngineCoreOutput(
+            request_id="r",
+            new_token_ids=[],
+            multimodal_output={"model_outputs": torch.zeros(8), "sr": 24_000},
+        )
+    else:
+        output = OmniRequestOutput.from_diffusion(
+            request_id="r",
+            images=[],
+            multimodal_output={
+                "audio": torch.zeros(1, 1, 8),
+                "audio_sample_rate": 44_100,
+            },
+            final_output_type="audio",
+        )
+
+    pool = StagePool(
+        0,
+        [FakeStageClient(stage_type=stage_type, final_output=True, final_output_type="audio")],
+        watermarkers={"audio": watermarker},
+        **stage_pool_kwargs,
+    )
+
+    await pool.submit_initial("r", SimpleNamespace(sampling_params_list=[params]), request)
+
+    # Call the corresponding stage processor based on the type
+    if stage_type == "diffusion":
+        await pool.process_diffusion_output(output)
+    else:
+        await pool.process_llm_raw_outputs(
+            0,
+            SimpleNamespace(outputs=[output], timestamp=1.0, scheduler_stats=None),
+        )
+
+    # Then ensure the watermarking behavior is as expected
+    if watermarking:
+        watermarker.watermark_output.assert_called_once()
+    else:
+        watermarker.watermark_output.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_single_stage_diffusion_streaming_forwards_intermediate_chunks(orchestrator_factory) -> None:
     """Intermediate diffusion chunks (finished=False) reach the frontend before the final chunk."""
     stage0 = FakeStageClient(stage_type="diffusion", final_output=True, final_output_type="image")
@@ -1997,6 +2054,7 @@ async def test_stage_pool_watermark_cancellation_waits_before_abort() -> None:
         watermarkers={"audio": watermarker},
     )
     pool._request_bindings["r"] = 0
+    pool._request_watermarking["r"] = True
 
     processing = asyncio.create_task(
         pool.process_llm_raw_outputs(

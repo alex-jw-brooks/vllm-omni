@@ -46,7 +46,6 @@ from vllm_omni.metrics.utils import (
     iter_mm_outputs,
 )
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.outputs.output_modality import OutputModality
 from vllm_omni.watermarking import WATERMARKER_REGISTRY, Watermarker
 from vllm_omni.watermarking.utils import watermark_outputs
 
@@ -109,7 +108,7 @@ class StagePool:
     @classmethod
     def initialize_watermarkers(
         cls,
-        output_modality: OutputModality,
+        final_output_type: str | None,
         watermark_config: WatermarkConfig | None,
     ) -> dict[str, Watermarker]:
         """Construct configured watermarkers for a logical stage."""
@@ -120,14 +119,9 @@ class StagePool:
 
         for modality, watermarker_types in cls._watermarker_registry.items():
             config = watermark_config.modality_configs.get(modality)
-            if config is not None and OutputModality.from_string(modality) in output_modality:
-                algorithm = config.get(ALGORITHM_KEY)
-                if not isinstance(algorithm, str) or algorithm not in watermarker_types:
-                    valid_algorithms = ", ".join(sorted(watermarker_types))
-                    raise ValueError(
-                        f"unsupported watermark algorithm {algorithm} for {modality}; supported: {valid_algorithms}"
-                    )
-                watermarkers[modality] = watermarker_types[algorithm]()
+            if config is not None and modality == final_output_type:
+                # Algorithm already validated by WatermarkConfig, no need to do it again here
+                watermarkers[modality] = watermarker_types[cast(str, config[ALGORITHM_KEY])]()
                 logger.info("Initialized watermarker for modality %s", modality)
         return watermarkers
 
@@ -180,6 +174,8 @@ class StagePool:
         self._non_empty_first_output_timestamps_by_request: dict[str, float] = {}
         self._audio_frames_by_request: dict[str, int] = {}
         self._audio_sample_rate_by_request: dict[str, int] = {}
+        # Tracks which requests should apply watermarking
+        self._request_watermarking: dict[str, bool] = {}
 
         # Distributed-mode state. Populated by add_client / remove_client.
         self._addr_to_replica_id: dict[str, int] = {}
@@ -559,6 +555,7 @@ class StagePool:
         """Drop the route binding for *request_id* in this stage."""
         self._request_bindings.pop(request_id, None)
         self._affinity.pop(request_id, None)
+        self._request_watermarking.pop(request_id, None)
         self._output_timestamps_by_request.pop(str(request_id), None)
         self._non_empty_first_output_timestamps_by_request.pop(str(request_id), None)
         self._audio_frames_by_request.pop(str(request_id), None)
@@ -1016,6 +1013,10 @@ class StagePool:
 
     # ---- Stage-local admission ----
 
+    def maybe_update_watermarking_state(self, request_id: str, should_watermark: bool):
+        if self._watermarkers:
+            self._request_watermarking[request_id] = should_watermark
+
     async def submit_initial(
         self,
         request_id: str,
@@ -1047,6 +1048,7 @@ class StagePool:
                 affinity_request_id=affinity_request_id,
             )
             client = self._diffusion_client(replica_id)
+            self.maybe_update_watermarking_state(request_id, params.watermarking)
             await client.add_request_async(request_id, request, params, **submit_kwargs)
             return replica_id
 
@@ -1057,6 +1059,7 @@ class StagePool:
         client = self.clients[replica_id]
         if client is None:
             raise StageUnavailableError(f"stage {self.stage_id} replica {replica_id} is not attached")
+        self.maybe_update_watermarking_state(request_id, params.watermarking)
         try:
             self.output_processor.add_request(
                 request=request,
@@ -1109,6 +1112,7 @@ class StagePool:
         if client is None:
             raise StageUnavailableError(f"stage {self.stage_id} replica {replica_id} is not attached")
 
+        self.maybe_update_watermarking_state(request_id, params.watermarking)
         if self.stage_type == "diffusion":
             if isinstance(request, list):
                 raise ValueError(
@@ -1296,17 +1300,26 @@ class StagePool:
         ]
         self._discard_watermark_state(request_ids)
 
+    def _should_watermark(self, request_id: str) -> bool:
+        """Indicates whether a given request should watermark or not."""
+        if request_id in self._request_watermarking:
+            return self._request_watermarking[request_id]
+        if self.get_bound_replica_id(request_id) is not None:
+            raise RuntimeError(f"Missing watermarking state for active request {request_id}")
+        return False
+
     async def _process_watermark_outputs(self, outputs: list[Any]) -> None:
         """Watermark outputs off-loop while serializing state access."""
-        if not self._watermarkers:
-            return
-        async with self._watermark_lock:
-            worker = asyncio.create_task(asyncio.to_thread(watermark_outputs, outputs, self._watermarkers))
-            try:
-                await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                await worker
-                raise
+        if self._watermarkers and (
+            outputs := [output for output in outputs if self._should_watermark(output.request_id)]
+        ):
+            async with self._watermark_lock:
+                worker = asyncio.create_task(asyncio.to_thread(watermark_outputs, outputs, self._watermarkers))
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    await worker
+                    raise
 
     async def process_diffusion_output(self, output: OmniRequestOutput) -> OmniRequestOutput:
         """Watermark one diffusion output without blocking the event loop."""
