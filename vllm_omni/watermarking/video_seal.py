@@ -5,9 +5,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import torch
+from omegaconf import OmegaConf
 from vllm.logger import init_logger
 from vllm.utils.import_utils import PlaceholderModule
 
@@ -20,6 +22,7 @@ logger = init_logger(__name__)
 
 if TYPE_CHECKING:
     from videoseal.models.videoseal import Videoseal
+    from videoseal.utils.cfg import VideosealConfig
 
 try:
     import videoseal
@@ -193,8 +196,52 @@ class VideoSealImageWatermarker(Watermarker[VisualTensor, _VideoSealState]):
 
     @staticmethod
     def _load_model() -> Videoseal:
+        """Loads a Videoseal (1.0) model; this is needed because Videoseal does not
+        resolve file paths correctly when installed through pip.
+
+        See: https://github.com/facebookresearch/videoseal/issues/73; once this issue is resolved,
+        we can remove this workaround.
+        """
+        from videoseal.augmentation.augmenter import get_dummy_augmenter
+        from videoseal.models import Videoseal, build_embedder, build_extractor
+        from videoseal.modules.jnd import JND
+
+        cfg_path = Path(videoseal.__file__).parent / "cards" / "videoseal_1.0.yaml"
+        if not cfg_path.exists():
+            raise FileNotFoundError(f"videoseal config path {cfg_path} does not exist!")
+
+        card = cast("VideosealConfig", OmegaConf.load(cfg_path))
+        args = card.args
+        embedder = build_embedder(card.embedder.model, card.embedder.params, args.nbits, args.hidden_size_multiplier)
+        extractor = build_extractor(card.extractor.model, card.extractor.params, args.img_size_proc, args.nbits)
+        augmenter = get_dummy_augmenter()
+        # This is the underlying attenuation object that gets initialized from jnd_1_1.
+        # https://github.com/facebookresearch/videoseal/blob/main/videoseal/cards/videoseal_1.0.yaml
+        attenuation = JND(in_channels=1, out_channels=1)
+
         with torch.random.fork_rng(devices=[]):
-            model = cast("Videoseal", videoseal.load("videoseal"))
+            model = Videoseal(
+                embedder,
+                extractor,
+                augmenter,
+                attenuation=attenuation,
+                scaling_w=args.scaling_w,
+                scaling_i=args.scaling_i,
+                img_size=args.img_size_proc,
+                chunk_size=args.videoseal_chunk_size,
+                step_size=args.videoseal_step_size,
+            )
+            checkpoint = torch.hub.load_state_dict_from_url(
+                card.checkpoint_path,
+                map_location="cpu",
+                weights_only=True,
+            )
+            incompatible = model.load_state_dict(checkpoint["model"], strict=False)
+            if incompatible.missing_keys or incompatible.unexpected_keys:
+                raise RuntimeError(
+                    "VideoSeal checkpoint is incompatible with the packaged model card: "
+                    f"missing={incompatible.missing_keys}, unexpected={incompatible.unexpected_keys}"
+                )
         model.eval().to(torch.device("cpu"))
         return model
 
