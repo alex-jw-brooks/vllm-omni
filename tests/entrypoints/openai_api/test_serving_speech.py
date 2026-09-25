@@ -27,9 +27,11 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
+from vllm import SamplingParams
 from vllm.entrypoints.serve import create_error_response
 from vllm.entrypoints.serve.engine.protocol import ErrorInfo, ErrorResponse
 
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.config.stage_config import StagePipelineConfig
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched.request_scheduler import RequestScheduler
@@ -249,7 +251,9 @@ def test_app(mocker: MockerFixture, tmp_path, monkeypatch):
         yield create_mock_audio_output_for_test(request_id=request_id)
 
     mock_engine_client.generate = mocker.MagicMock(side_effect=mock_generate_fn)
-    mock_engine_client.default_sampling_params_list = [{}]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {})
+    )
     mock_engine_client.tts_batch_max_items = 32
 
     # Mock models to have an is_base_model method
@@ -556,7 +560,9 @@ class TestSpeechAPI:
         monkeypatch.setenv("SPEAKER_SAMPLES_DIR", str(tmp_path))
         monkeypatch.setenv("VLLM_OMNI_SPEAKER_REGISTRATION_POLICY", "append")
         engine_client = mocker.MagicMock()
-        engine_client.default_sampling_params_list = [{}]
+        engine_client.default_sampling_params_list, engine_client.default_sampling_kwargs_list = stage_defaults(
+            (SamplingParams, {})
+        )
         with pytest.raises(ValueError, match="VLLM_OMNI_SPEAKER_REGISTRATION_POLICY"):
             OmniOpenAIServingSpeech(
                 engine_client=engine_client, models=mocker.MagicMock(), request_logger=mocker.MagicMock()
@@ -836,8 +842,9 @@ class TestSpeechAPI:
         mock_engine = mocker.MagicMock()
 
         # Mock default sampling params
-        mock_sampling_param = OmniDiffusionSamplingParams(extra_args={"existing_arg": "value"})
-        mock_engine.default_sampling_params_list = [mock_sampling_param]
+        mock_engine.default_sampling_params_list, mock_engine.default_sampling_kwargs_list = stage_defaults(
+            (OmniDiffusionSamplingParams, {"extra_args": {"existing_arg": "value"}})
+        )
 
         # Mock generate to yield a valid OmniRequestOutput
         async def mock_generate(*args, **kwargs):
@@ -905,7 +912,9 @@ class TestSpeechAPI:
     ) -> None:
         """Different request guidance values must not enter one request batch."""
         mock_engine = mocker.MagicMock()
-        mock_engine.default_sampling_params_list = [OmniDiffusionSamplingParams(num_inference_steps=12)]
+        mock_engine.default_sampling_params_list, mock_engine.default_sampling_kwargs_list = stage_defaults(
+            (OmniDiffusionSamplingParams, {"num_inference_steps": 12})
+        )
         passed_sampling_params = []
 
         async def mock_generate(*args, **kwargs):
@@ -961,7 +970,9 @@ class TestSpeechAPI:
         expected_message: str,
     ) -> None:
         mock_engine = mocker.MagicMock()
-        mock_engine.default_sampling_params_list = [OmniDiffusionSamplingParams()]
+        mock_engine.default_sampling_params_list, mock_engine.default_sampling_kwargs_list = stage_defaults(
+            (OmniDiffusionSamplingParams, {})
+        )
         server = OmniOpenAIServingSpeech.for_diffusion(diffusion_engine=mock_engine, model_name="test-model")
 
         response = await server.create_speech(OpenAICreateSpeechRequest(input="Hello", extra_params=extra_params))
@@ -2341,7 +2352,10 @@ class TestTTSMethods:
             speech_server._adapter.capabilities,
             precomputed_speakers={},
         )
-        speech_server.engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        (
+            speech_server.engine_client.default_sampling_params_list,
+            speech_server.engine_client.default_sampling_kwargs_list,
+        ) = stage_defaults((SamplingParams, {"max_tokens": 2048}))
         speech_server.engine_client.generate = mocker.MagicMock(return_value="generator")
         speech_server._adapter._build_prompt = mocker.AsyncMock(
             return_value={"prompt_token_ids": [1], "additional_information": {}}
@@ -2362,7 +2376,10 @@ class TestTTSMethods:
             speech_server._adapter.capabilities,
             precomputed_speakers={},
         )
-        speech_server.engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        (
+            speech_server.engine_client.default_sampling_params_list,
+            speech_server.engine_client.default_sampling_kwargs_list,
+        ) = stage_defaults((SamplingParams, {"max_tokens": 2048}))
         speech_server.engine_client.generate = mocker.MagicMock(return_value=iter(()))
         speech_server._adapter._build_prompt = mocker.AsyncMock(
             return_value={"prompt_token_ids": [1], "additional_information": {}}
@@ -2389,7 +2406,10 @@ class TestTTSMethods:
                 }
             },
         )
-        speech_server.engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        (
+            speech_server.engine_client.default_sampling_params_list,
+            speech_server.engine_client.default_sampling_kwargs_list,
+        ) = stage_defaults((SamplingParams, {"max_tokens": 2048}))
         speech_server.engine_client.generate = mocker.MagicMock(return_value=iter(()))
         speech_server._adapter._build_prompt = mocker.AsyncMock(
             return_value={
@@ -3269,7 +3289,10 @@ class TestTTSMethods:
             speech_server._adapter.capabilities,
             precomputed_speakers={},
         )
-        speech_server.engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        (
+            speech_server.engine_client.default_sampling_params_list,
+            speech_server.engine_client.default_sampling_kwargs_list,
+        ) = stage_defaults((SamplingParams, {"max_tokens": 2048}))
         speech_server.engine_client.generate = mocker.MagicMock(return_value=iter(()))
         speech_server._adapter._build_prompt = mocker.AsyncMock(
             return_value={"prompt_token_ids": [1], "additional_information": {}}
@@ -3436,7 +3459,9 @@ class TestStreamingResponse:
             yield _make_output(finished=True)
 
         mock_engine_client.generate = mocker.MagicMock(side_effect=mock_generate_streaming)
-        mock_engine_client.default_sampling_params_list = [{}]
+        mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = (
+            stage_defaults((SamplingParams, {}))
+        )
         mock_models = mocker.MagicMock()
         mock_models.is_base_model.return_value = True
 
@@ -3662,7 +3687,9 @@ class TestStreamingResponse:
         mock_engine_client = mocker.MagicMock()
         mock_engine_client.errored = False
         mock_engine_client.generate = mocker.MagicMock(side_effect=mock_generate_streaming)
-        mock_engine_client.default_sampling_params_list = [{}]
+        mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = (
+            stage_defaults((SamplingParams, {}))
+        )
         mock_models = mocker.MagicMock()
         mock_models.is_base_model.return_value = True
 
@@ -4535,7 +4562,9 @@ def fish_speech_server(mocker: MockerFixture):
     mock_engine_client = mocker.MagicMock()
     mock_engine_client.errored = False
     mock_engine_client.model_config = mocker.MagicMock(model="fishaudio/s2-pro")
-    mock_engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=200)]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"max_tokens": 200})
+    )
     mock_engine_client.tts_batch_max_items = 32
     mock_engine_client.generate = mocker.MagicMock(return_value="generator")
     mock_engine_client.stage_configs = [
@@ -4638,7 +4667,10 @@ class TestFishSpeechServing:
             }
         )
 
-        fish_speech_server.engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        (
+            fish_speech_server.engine_client.default_sampling_params_list,
+            fish_speech_server.engine_client.default_sampling_kwargs_list,
+        ) = stage_defaults((SamplingParams, {"max_tokens": 2048}))
         request = OpenAICreateSpeechRequest(input="hello fish", max_new_tokens=4096)
         request_id, generator, _ = asyncio.run(fish_speech_server._prepare_speech_generation(request))
 
@@ -4658,7 +4690,10 @@ class TestFishSpeechServing:
             }
         )
 
-        fish_speech_server.engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        (
+            fish_speech_server.engine_client.default_sampling_params_list,
+            fish_speech_server.engine_client.default_sampling_kwargs_list,
+        ) = stage_defaults((SamplingParams, {"max_tokens": 2048}))
         request_id, generator, _ = asyncio.run(
             fish_speech_server._prepare_speech_generation(OpenAICreateSpeechRequest(input="hello fish"))
         )
@@ -4739,7 +4774,9 @@ class TestWAVStreaming:
             yield _make_output(finished=True)
 
         mock_engine_client.generate = mocker.MagicMock(side_effect=mock_generate_streaming)
-        mock_engine_client.default_sampling_params_list = [{}]
+        mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = (
+            stage_defaults((SamplingParams, {}))
+        )
         mock_models = mocker.MagicMock()
         mock_models.is_base_model.return_value = True
 
@@ -4813,7 +4850,9 @@ def cosyvoice3_server(mocker: MockerFixture):
     mock_engine_client = mocker.MagicMock()
     mock_engine_client.errored = False
     mock_engine_client.model_config = mocker.MagicMock(model="FunAudioLLM/Fun-CosyVoice3-0.5B-2512")
-    mock_engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"max_tokens": 2048})
+    )
     mock_engine_client.tts_batch_max_items = 32
     mock_engine_client.generate = mocker.MagicMock(return_value="generator")
     mock_engine_client.stage_configs = [
@@ -4957,9 +4996,9 @@ def glm_tts_server(mocker: MockerFixture):
         model="zai-org/GLM-TTS",
         hf_config=SimpleNamespace(min_token_text_ratio=2, max_token_text_ratio=20),
     )
-    mock_engine_client.default_sampling_params_list = [
-        SimpleNamespace(max_tokens=2048, min_tokens=None, extra_args=None)
-    ]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"max_tokens": 2048})
+    )
     mock_engine_client.tts_batch_max_items = 32
     mock_engine_client.generate = mocker.MagicMock(return_value="generator")
     mock_engine_client.stage_configs = [
@@ -5062,9 +5101,9 @@ def ming_tts_server(mocker: MockerFixture):
         model="inclusionAI/Ming-omni-tts-0.5B",
         hf_config=SimpleNamespace(min_token_text_ratio=2, max_token_text_ratio=20),
     )
-    mock_engine_client.default_sampling_params_list = [
-        SimpleNamespace(max_tokens=2048, min_tokens=None, extra_args=None)
-    ]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"max_tokens": 2048})
+    )
     mock_engine_client.tts_batch_max_items = 32
     mock_engine_client.generate = mocker.MagicMock(return_value="generator")
     mock_engine_client.stage_configs = [
@@ -5126,9 +5165,9 @@ def ming_flash_omni_tts_server(mocker: MockerFixture):
     mock_engine_client.model_config = mocker.MagicMock(
         model="inclusionAI/Ming-omni-tts-0.5B",
     )
-    mock_engine_client.default_sampling_params_list = [
-        SimpleNamespace(max_tokens=2048, min_tokens=None, extra_args=None)
-    ]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"max_tokens": 2048})
+    )
     mock_engine_client.tts_batch_max_items = 32
     mock_engine_client.generate = mocker.MagicMock(return_value="generator")
     mock_engine_client.stage_configs = [
@@ -5187,7 +5226,9 @@ class TestTTSAsyncOffloading:
         mock_engine_client = mocker.MagicMock()
         mock_engine_client.errored = False
         mock_engine_client.model_config = mocker.MagicMock(model="mistralai/Voxtral")
-        mock_engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = (
+            stage_defaults((SamplingParams, {"max_tokens": 2048}))
+        )
         mock_engine_client.tts_batch_max_items = 32
         mock_engine_client.generate = mocker.MagicMock(return_value="generator")
         mock_engine_client.stage_configs = [
@@ -5220,7 +5261,9 @@ class TestTTSAsyncOffloading:
         mock_engine_client = mocker.MagicMock()
         mock_engine_client.errored = False
         mock_engine_client.model_config = mocker.MagicMock(model="Qwen/Qwen3-TTS", hf_config=mocker.MagicMock())
-        mock_engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=2048)]
+        mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = (
+            stage_defaults((SamplingParams, {"max_tokens": 2048}))
+        )
         mock_engine_client.tts_batch_max_items = 32
         mock_engine_client.generate = mocker.MagicMock(return_value="generator")
         mock_engine_client.tts_max_instructions_length = None
@@ -5295,9 +5338,10 @@ class TestTTSAsyncOffloading:
         self, qwen3_tts_server, mocker: MockerFixture
     ):
         """Deploy default seed should seed Qwen3 TTS residual MTP sampling."""
-        qwen3_tts_server.engine_client.default_sampling_params_list = [
-            SimpleNamespace(max_tokens=2048, seed=42, extra_args=None)
-        ]
+        (
+            qwen3_tts_server.engine_client.default_sampling_params_list,
+            qwen3_tts_server.engine_client.default_sampling_kwargs_list,
+        ) = stage_defaults((SamplingParams, {"max_tokens": 2048, "seed": 42}))
         qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
         qwen3_tts_server._adapter._build_tts_params = mocker.MagicMock(
             return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}
@@ -5352,8 +5396,9 @@ class TestTTSAsyncOffloading:
         from vllm import SamplingParams
         from vllm.sampling_params import RequestOutputKind
 
-        defaults = [SamplingParams(), SamplingParams()]
+        defaults, default_kwargs = stage_defaults((SamplingParams, {}), (SamplingParams, {}))
         qwen3_tts_server.engine_client.default_sampling_params_list = defaults
+        qwen3_tts_server.engine_client.default_sampling_kwargs_list = default_kwargs
         qwen3_tts_server._adapter.validate = mocker.MagicMock(return_value=None)
         qwen3_tts_server._adapter._build_tts_params = mocker.MagicMock(
             return_value={"text": ["hello"], "task_type": ["CustomVoice"], "speaker": ["Vivian"]}

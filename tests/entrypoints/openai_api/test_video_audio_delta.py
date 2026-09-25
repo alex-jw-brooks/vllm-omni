@@ -15,6 +15,7 @@ from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.v1.engine import FinishReason
 
 from tests.helpers.serving_chat import build_serving_chat
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.entrypoints.omni_base import OmniBase
 from vllm_omni.entrypoints.openai.serving_video_stream import QwenOmniStreamingVideoHandler
 from vllm_omni.entrypoints.openai.video_stream_base import (
@@ -174,6 +175,10 @@ async def test_real_producer_deltas_reach_video_client(
         produced.append(OmniRequestOutput.from_stage_output(result, final_output_type="audio"))
 
     class Engine:
+        default_sampling_params_list, default_sampling_kwargs_list = stage_defaults(
+            (SamplingParams, {"output_kind": RequestOutputKind.CUMULATIVE})
+        )
+
         async def generate(self, *, prompt, request_id, output_modalities, sampling_params_list=None):
             if explicit_sampling:
                 assert sampling_params_list is not None

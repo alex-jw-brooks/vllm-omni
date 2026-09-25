@@ -18,6 +18,7 @@ from pytest_mock import MockerFixture
 from starlette.testclient import TestClient
 
 from tests.helpers.media import generate_synthetic_image
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.entrypoints.openai.protocol.videos import VideoGenerationRequest
 from vllm_omni.entrypoints.openai.serving_video_output_stream import OmniStreamingVideoOutputHandler
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
@@ -47,7 +48,9 @@ def _build_test_app(
     engine_client = mocker.MagicMock()
     engine_client.abort = mocker.AsyncMock()
     engine_client.submit_interaction_async = mocker.AsyncMock()
-    engine_client.default_sampling_params_list = [OmniDiffusionSamplingParams()]
+    engine_client.default_sampling_params_list, engine_client.default_sampling_kwargs_list = stage_defaults(
+        (OmniDiffusionSamplingParams, {})
+    )
     engine_client.stage_configs = [
         SimpleNamespace(
             stage_type="diffusion",
@@ -78,14 +81,6 @@ def _build_test_app(
     mocker.patch(
         "vllm_omni.entrypoints.openai.serving_video_output_stream.create_streaming_video_encoder",
         encoder_factory,
-    )
-    mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video_output_stream.build_stage_sampling_params_list",
-        return_value=[OmniDiffusionSamplingParams()],
-    )
-    mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video_output_stream.get_default_sampling_params_list",
-        return_value=[OmniDiffusionSamplingParams()],
     )
 
     handler = OmniStreamingVideoOutputHandler(
@@ -129,7 +124,7 @@ class TestStreamingVideoOutputWebSocket:
         )
         request = VideoGenerationRequest(**request_data)
 
-        _prompt, sampling_params, _video_params = asyncio.run(handler._build_prompt_and_sampling_params(request))
+        _prompt, (sampling_params,), _video_params = asyncio.run(handler._build_prompt_and_sampling_params(request))
 
         assert sampling_params.quality == "high"
 
@@ -143,7 +138,9 @@ class TestStreamingVideoOutputWebSocket:
             streaming_chunks=[],
             mock_generate=mock_generate,
         )
-        engine_client.default_sampling_params_list = [OmniDiffusionSamplingParams(quality="high")]
+        engine_client.default_sampling_params_list, engine_client.default_sampling_kwargs_list = stage_defaults(
+            (OmniDiffusionSamplingParams, {"quality": "high"})
+        )
         request_data = handler._coerce_request_data(
             {
                 "type": "session.start",
@@ -152,7 +149,7 @@ class TestStreamingVideoOutputWebSocket:
         )
         request = VideoGenerationRequest(**request_data)
 
-        _prompt, sampling_params, _video_params = asyncio.run(handler._build_prompt_and_sampling_params(request))
+        _prompt, (sampling_params,), _video_params = asyncio.run(handler._build_prompt_and_sampling_params(request))
 
         assert sampling_params.quality == "high"
 
@@ -400,7 +397,9 @@ def _build_handler_for_async_tests(
     engine_client = mocker.MagicMock()
     engine_client.abort = mocker.AsyncMock()
     engine_client.submit_interaction_async = mocker.AsyncMock()
-    engine_client.default_sampling_params_list = [OmniDiffusionSamplingParams()]
+    engine_client.default_sampling_params_list, engine_client.default_sampling_kwargs_list = stage_defaults(
+        (OmniDiffusionSamplingParams, {})
+    )
     engine_client.stage_configs = [
         SimpleNamespace(
             stage_type="diffusion",
@@ -429,14 +428,6 @@ def _build_handler_for_async_tests(
     mocker.patch(
         "vllm_omni.entrypoints.openai.serving_video_output_stream.create_streaming_video_encoder",
         encoder_factory,
-    )
-    mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video_output_stream.build_stage_sampling_params_list",
-        return_value=[OmniDiffusionSamplingParams()],
-    )
-    mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video_output_stream.get_default_sampling_params_list",
-        return_value=[OmniDiffusionSamplingParams()],
     )
 
     handler = OmniStreamingVideoOutputHandler(
@@ -1036,7 +1027,11 @@ class TestStreamingVideoOutputExtraParams:
     @staticmethod
     def _handler() -> OmniStreamingVideoOutputHandler:
         handler = object.__new__(OmniStreamingVideoOutputHandler)
-        handler._engine_client = SimpleNamespace(default_sampling_params_list=[])
+        default_sampling_params_list, default_sampling_kwargs_list = stage_defaults((OmniDiffusionSamplingParams, {}))
+        handler._engine_client = SimpleNamespace(
+            default_sampling_params_list=default_sampling_params_list,
+            default_sampling_kwargs_list=default_sampling_kwargs_list,
+        )
         return handler
 
     async def test_preencode_mp4_is_rejected_for_streaming_sessions(self):
@@ -1052,6 +1047,6 @@ class TestStreamingVideoOutputExtraParams:
     async def test_other_extra_params_still_reach_the_engine(self):
         request = VideoGenerationRequest(prompt="p", extra_params={"flow_shift": 3.0})
 
-        _, gen_params, _ = await self._handler()._build_prompt_and_sampling_params(request)
+        _, (gen_params,), _ = await self._handler()._build_prompt_and_sampling_params(request)
 
         assert gen_params.extra_args["flow_shift"] == 3.0

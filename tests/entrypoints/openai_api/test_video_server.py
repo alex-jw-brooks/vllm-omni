@@ -26,6 +26,7 @@ from PIL import Image
 from pytest_mock import MockerFixture
 from vllm import envs
 
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.diffusion.data import DIFFUSION_REQUEST_LIFECYCLE_KEY, DIFFUSION_REQUEST_STARTED
 from vllm_omni.diffusion.utils.media_utils import mux_video_audio_bytes
 from vllm_omni.entrypoints.openai import api_server, video_api_utils
@@ -81,7 +82,9 @@ class FakeAsyncOmni:
                 final_output_type="video",
             )
         ]
-        self.default_sampling_params_list = [OmniDiffusionSamplingParams()]
+        self.default_sampling_params_list, self.default_sampling_kwargs_list = stage_defaults(
+            (OmniDiffusionSamplingParams, {})
+        )
         self.model_class_name = "WanPipeline"
         self.captured_prompt = None
         self.captured_reference_video_bytes = None
@@ -1700,18 +1703,21 @@ def test_default_sampling_params_apply_to_video_requests(test_client, mocker: Mo
         return_value=b"fake-video",
     )
     engine = test_client.app.state.openai_serving_video._engine_client
-    engine.default_sampling_params_list = [
-        OmniDiffusionSamplingParams(
-            num_inference_steps=4,
-            guidance_scale=7.5,
-            quality="high",
-            generator_device="cpu",
-            enable_frame_interpolation=True,
-            frame_interpolation_exp=2,
-            frame_interpolation_scale=0.5,
-            frame_interpolation_model_path="default-rife",
-        )
-    ]
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (
+            OmniDiffusionSamplingParams,
+            {
+                "num_inference_steps": 4,
+                "guidance_scale": 7.5,
+                "quality": "high",
+                "generator_device": "cpu",
+                "enable_frame_interpolation": True,
+                "frame_interpolation_exp": 2,
+                "frame_interpolation_scale": 0.5,
+                "frame_interpolation_model_path": "default-rife",
+            },
+        ),
+    )
 
     response = test_client.post(
         "/v1/videos",
@@ -1741,16 +1747,19 @@ def test_request_params_override_default_video_sampling_params(test_client, mock
         return_value=b"fake-video",
     )
     engine = test_client.app.state.openai_serving_video._engine_client
-    engine.default_sampling_params_list = [
-        OmniDiffusionSamplingParams(
-            num_inference_steps=4,
-            guidance_scale=7.5,
-            enable_frame_interpolation=True,
-            frame_interpolation_exp=2,
-            frame_interpolation_scale=0.5,
-            frame_interpolation_model_path="default-rife",
-        )
-    ]
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (
+            OmniDiffusionSamplingParams,
+            {
+                "num_inference_steps": 4,
+                "guidance_scale": 7.5,
+                "enable_frame_interpolation": True,
+                "frame_interpolation_exp": 2,
+                "frame_interpolation_scale": 0.5,
+                "frame_interpolation_model_path": "default-rife",
+            },
+        ),
+    )
 
     response = test_client.post(
         "/v1/videos",
@@ -3218,17 +3227,20 @@ def test_sync_frame_interpolation_params_pass_to_sampling_params(test_client, mo
 def test_sync_default_sampling_params_apply_to_video_requests(test_client, mocker: MockerFixture):
     _mock_encode_video_bytes(mocker)
     engine = test_client.app.state.openai_serving_video._engine_client
-    engine.default_sampling_params_list = [
-        OmniDiffusionSamplingParams(
-            num_inference_steps=4,
-            guidance_scale=7.5,
-            quality="high",
-            enable_frame_interpolation=True,
-            frame_interpolation_exp=2,
-            frame_interpolation_scale=0.5,
-            frame_interpolation_model_path="default-rife",
-        )
-    ]
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (
+            OmniDiffusionSamplingParams,
+            {
+                "num_inference_steps": 4,
+                "guidance_scale": 7.5,
+                "quality": "high",
+                "enable_frame_interpolation": True,
+                "frame_interpolation_exp": 2,
+                "frame_interpolation_scale": 0.5,
+                "frame_interpolation_model_path": "default-rife",
+            },
+        ),
+    )
 
     response = test_client.post(
         "/v1/videos/sync",

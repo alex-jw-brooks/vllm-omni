@@ -20,6 +20,7 @@ from PIL import Image
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 
 from tests.helpers.serving_chat import build_serving_chat
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.config.stage_config import StageConfig
 from vllm_omni.entrypoints.openai import video_stream_base, video_stream_envs
 from vllm_omni.entrypoints.openai.serving_video_stream import (
@@ -153,11 +154,11 @@ def run_sampling_session(monkeypatch):
             StageConfig(stage_id=index, model_stage=name)
             for index, name in enumerate(("thinker", "talker", "code2wav"))
         ]
-        engine.default_sampling_params_list = [
-            SamplingParams(temperature=0.4, max_tokens=64, top_p=0.85),
-            SamplingParams(temperature=0.7, max_tokens=96),
-            SamplingParams(temperature=0.8, max_tokens=128),
-        ]
+        engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+            (SamplingParams, {"temperature": 0.4, "max_tokens": 64, "top_p": 0.85}),
+            (SamplingParams, {"temperature": 0.7, "max_tokens": 96}),
+            (SamplingParams, {"temperature": 0.8, "max_tokens": 128}),
+        )
 
         async def generate(**kwargs):
             yield _text_result("answer")

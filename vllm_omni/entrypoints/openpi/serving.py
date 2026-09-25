@@ -182,10 +182,6 @@ class ServingRealtimeRobotOpenPI:
         `AsyncOmni.generate()` and routed to the diffusion stage.
         """
         from vllm_omni.diffusion.request import OmniDiffusionRequest
-        from vllm_omni.entrypoints.openai.stage_params import (
-            clone_sampling_params,
-            get_default_sampling_params_list,
-        )
         from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
         # The engine applies stage default_sampling_params only to requests
@@ -198,9 +194,9 @@ class ServingRealtimeRobotOpenPI:
         sampling = obs.get("sampling_params") or {}
         robot_obs = {key: value for key, value in obs.items() if key != "sampling_params"}
         sampling_params = OmniDiffusionSamplingParams()
-        for default_params in get_default_sampling_params_list(self.engine_client):
+        for default_params in getattr(self.engine_client, "default_sampling_params_list", ()):
             if isinstance(default_params, OmniDiffusionSamplingParams):
-                sampling_params = clone_sampling_params(default_params)
+                sampling_params = default_params.clone()
                 break
 
         extra_args = sampling_params.extra_args or {}

@@ -15,7 +15,9 @@ import pytest
 import torch
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
+from vllm import SamplingParams
 
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.entrypoints.openai.protocol.audio import OpenAICreateSpeechRequest
 from vllm_omni.entrypoints.openai.serving_speech import OmniOpenAIServingSpeech
 from vllm_omni.entrypoints.openai.tts_adapters import detect_tts_model_type, resolve_adapter
@@ -225,7 +227,9 @@ def gepard_server(mocker: MockerFixture):
     mock_engine_client = mocker.MagicMock()
     mock_engine_client.errored = False
     mock_engine_client.model_config = mocker.MagicMock(model=_MODEL, async_chunk=False, revision=None)
-    mock_engine_client.default_sampling_params_list = [SimpleNamespace(max_tokens=1000, seed=42, extra_args=None)]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"max_tokens": 1000, "seed": 42})
+    )
     mock_engine_client.tts_batch_max_items = 32
     mock_engine_client.generate = mocker.MagicMock(side_effect=lambda **_k: _gen())
     mock_engine_client.stage_configs = [

@@ -117,11 +117,6 @@ def _build_hunyuan_edit_extra_args(
     return extra_args
 
 
-def _update_if_not_none(object: Any, key: str, val: Any) -> None:
-    if val is not None:
-        setattr(object, key, val)
-
-
 def _normalize_image(image: Any) -> Any:
     """Normalize a single image output to a PIL-compatible format."""
     if isinstance(image, Image.Image):

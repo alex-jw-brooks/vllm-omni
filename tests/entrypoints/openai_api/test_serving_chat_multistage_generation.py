@@ -11,6 +11,9 @@ import pytest
 from PIL import Image
 from vllm.sampling_params import SamplingParams
 
+from tests.helpers.stage_defaults import stage_defaults
+from vllm_omni.entrypoints.openai.sampling_requests import DiffusionSamplingRequest
+from vllm_omni.entrypoints.openai.utils import parse_lora_request
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -32,11 +35,11 @@ def test_build_multistage_generation_inputs_applies_stage_specific_overrides(ser
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.2, seed=11),
-            OmniDiffusionSamplingParams(),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.2, "seed": 11}),
+        (OmniDiffusionSamplingParams, {}),
+        (OmniDiffusionSamplingParams, {}),
     )
     reference_image = Image.new("RGB", (24, 24), color="green")
     extra_body = {
@@ -49,7 +52,16 @@ def test_build_multistage_generation_inputs_applies_stage_specific_overrides(ser
         "resolution": 1024,
         "lora": {"name": "adapter-a", "path": "/tmp/adapter-a", "scale": 0.6},
     }
-    gen_params = OmniDiffusionSamplingParams(height=768, width=1024, seed=0, num_outputs_per_prompt=2)
+    lora_request, lora_scale = parse_lora_request(extra_body["lora"])
+    sampling_request = DiffusionSamplingRequest.from_extra_body(
+        extra_body,
+        height=768,
+        width=1024,
+        seed=0,
+        num_outputs_per_prompt=2,
+        lora_request=lora_request,
+        lora_scale=lora_scale,
+    )
 
     engine_prompt, sampling_params_list = OmniOpenAIServingChat._build_multistage_generation_inputs(
         serving_chat,
@@ -57,7 +69,7 @@ def test_build_multistage_generation_inputs_applies_stage_specific_overrides(ser
         prompt="draw a robot",
         extra_body=extra_body,
         reference_images=[reference_image],
-        gen_params=gen_params,
+        diffusion_request=sampling_request,
     )
 
     assert engine_prompt["prompt"] == "draw a robot"
@@ -70,8 +82,6 @@ def test_build_multistage_generation_inputs_applies_stage_specific_overrides(ser
     assert sampling_params_list[0].temperature == 0.2
     assert sampling_params_list[0].seed == 0
     assert sampling_params_list[0].extra_args == {"target_h": 768, "target_w": 1024}
-    assert sampling_params_list[1] is not gen_params
-    assert sampling_params_list[2] is not gen_params
     assert sampling_params_list[1] is not sampling_params_list[2]
     assert sampling_params_list[1].height == 768
     assert sampling_params_list[1].width == 1024
@@ -88,7 +98,6 @@ def test_build_multistage_generation_inputs_applies_stage_specific_overrides(ser
     assert sampling_params_list[2].num_inference_steps == 28
     assert sampling_params_list[2].lora_request.name == "adapter-a"
     assert sampling_params_list[2].lora_scale == 0.6
-    assert gen_params.lora_request is None
     assert engine.default_sampling_params_list[1].height is None
     assert engine.default_sampling_params_list[1].lora_request is None
     assert engine.default_sampling_params_list[2].resolution == 640
@@ -108,7 +117,10 @@ def test_build_multistage_generation_inputs_leaves_mm_uuids_to_content_hash(serv
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[SamplingParams(temperature=0.0), OmniDiffusionSamplingParams()],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     for images in ([Image.new("RGB", (32, 32), color="red")], [Image.new("RGB", (32, 32), c) for c in ("red", "blue")]):
         engine_prompt, _ = OmniOpenAIServingChat._build_multistage_generation_inputs(
@@ -117,7 +129,7 @@ def test_build_multistage_generation_inputs_leaves_mm_uuids_to_content_hash(serv
             prompt="edit me",
             extra_body=dict(extra_body),
             reference_images=images,
-            gen_params=OmniDiffusionSamplingParams(seed=0),
+            diffusion_request=DiffusionSamplingRequest(seed=0),
         )
         assert engine_prompt["multi_modal_data"]
         assert "multi_modal_uuids" not in engine_prompt
@@ -217,10 +229,10 @@ def test_build_multistage_generation_inputs_multi_image_emits_n_img_placeholders
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.0),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     IMG = "<img>"
     images = [Image.new("RGB", (32, 32), color="red") for _ in range(3)]
@@ -232,7 +244,7 @@ def test_build_multistage_generation_inputs_multi_image_emits_n_img_placeholders
             prompt="edit me",
             extra_body={"bot_task": "think"},
             reference_images=images[:n],
-            gen_params=OmniDiffusionSamplingParams(),
+            diffusion_request=DiffusionSamplingRequest(),
         )
         prompt_str = engine_prompt["prompt"]
         assert prompt_str.count("<img>") == n, (
@@ -284,10 +296,10 @@ def test_build_multistage_generation_inputs_tokenizer_path_emits_prompt_token_id
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.0),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     PROMPT_KEY = "prompt"
     USP_KEY = "use_system_prompt"
@@ -301,7 +313,7 @@ def test_build_multistage_generation_inputs_tokenizer_path_emits_prompt_token_id
             prompt="edit me",
             extra_body={"bot_task": "think"},
             reference_images=images[:n],
-            gen_params=OmniDiffusionSamplingParams(),
+            diffusion_request=DiffusionSamplingRequest(),
             tokenizer=tok,
         )
         # (1) prompt_token_ids must be set and non-empty
@@ -334,10 +346,10 @@ def test_build_multistage_generation_inputs_bot_task_semantic_changes_trigger_an
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.0),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     images = [Image.new("RGB", (32, 32), color="red")]
 
@@ -350,7 +362,7 @@ def test_build_multistage_generation_inputs_bot_task_semantic_changes_trigger_an
         prompt="edit me",
         extra_body={"task": "it2i", "bot_task": "think"},
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(),
+        diffusion_request=DiffusionSamplingRequest(),
     )
     # think_recaption -> en_think_recaption system prompt (different content).
     recap_prompt, _ = OmniOpenAIServingChat._build_multistage_generation_inputs(
@@ -359,7 +371,7 @@ def test_build_multistage_generation_inputs_bot_task_semantic_changes_trigger_an
         prompt="edit me",
         extra_body={"task": "it2i", "bot_task": "think_recaption"},
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(),
+        diffusion_request=DiffusionSamplingRequest(),
     )
     assert think_prompt["prompt"] != recap_prompt["prompt"], (
         "bot_task semantic must change the rendered system prompt: "
@@ -380,10 +392,10 @@ def test_build_multistage_generation_inputs_sys_type_override(serving_chat):
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.0),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     images = [Image.new("RGB", (32, 32), color="red")]
 
@@ -394,7 +406,7 @@ def test_build_multistage_generation_inputs_sys_type_override(serving_chat):
         prompt="edit me",
         extra_body={"task": "it2i", "bot_task": "think_recaption"},
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(),
+        diffusion_request=DiffusionSamplingRequest(),
     )
     # sys_type=en_unified overrides -> same system body as bot_task=think.
     overridden, _ = OmniOpenAIServingChat._build_multistage_generation_inputs(
@@ -403,7 +415,7 @@ def test_build_multistage_generation_inputs_sys_type_override(serving_chat):
         prompt="edit me",
         extra_body={"task": "it2i", "bot_task": "think_recaption", "sys_type": "en_unified"},
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(),
+        diffusion_request=DiffusionSamplingRequest(),
     )
     plain_think, _ = OmniOpenAIServingChat._build_multistage_generation_inputs(
         serving_chat,
@@ -411,7 +423,7 @@ def test_build_multistage_generation_inputs_sys_type_override(serving_chat):
         prompt="edit me",
         extra_body={"task": "it2i", "bot_task": "think"},
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(),
+        diffusion_request=DiffusionSamplingRequest(),
     )
 
     # Override must (a) differ from the no-override default, and (b) equal
@@ -440,10 +452,10 @@ def test_build_multistage_generation_inputs_custom_system_prompt(serving_chat):
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.0),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     images = [Image.new("RGB", (32, 32), color="red")]
 
@@ -460,7 +472,7 @@ def test_build_multistage_generation_inputs_custom_system_prompt(serving_chat):
             "system_prompt": marker,
         },
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(),
+        diffusion_request=DiffusionSamplingRequest(),
     )
     assert marker in out["prompt"], (
         f"custom system_prompt content must reach the rendered prompt; "
@@ -496,10 +508,10 @@ def test_build_multistage_generation_inputs_sets_ar_stop_token_ids_with_explicit
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.0),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     images = [Image.new("RGB", (32, 32), color="red")]
 
@@ -511,7 +523,7 @@ def test_build_multistage_generation_inputs_sets_ar_stop_token_ids_with_explicit
         prompt="draw a cat",
         extra_body={"bot_task": "think"},
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(height=768, width=1024),
+        diffusion_request=DiffusionSamplingRequest(height=768, width=1024),
         tokenizer=FakeTokenizer(),
     )
 
@@ -543,10 +555,10 @@ def test_build_multistage_generation_inputs_no_stop_token_ids_without_size(servi
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ],
-        default_sampling_params_list=[
-            SamplingParams(temperature=0.0),
-            OmniDiffusionSamplingParams(),
-        ],
+    )
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (SamplingParams, {"temperature": 0.0}),
+        (OmniDiffusionSamplingParams, {}),
     )
     images = [Image.new("RGB", (32, 32), color="red")]
 
@@ -558,7 +570,7 @@ def test_build_multistage_generation_inputs_no_stop_token_ids_without_size(servi
         prompt="draw a cat",
         extra_body={},
         reference_images=images,
-        gen_params=OmniDiffusionSamplingParams(),
+        diffusion_request=DiffusionSamplingRequest(),
     )
 
     # SamplingParams defaults stop_token_ids=[], not None.
@@ -612,10 +624,10 @@ def test_build_multistage_generation_inputs_omitted_bot_task_matches_prompt_defa
                 SimpleNamespace(stage_type="llm", is_comprehension=True),
                 SimpleNamespace(stage_type="diffusion", is_comprehension=False),
             ],
-            default_sampling_params_list=[
-                SamplingParams(temperature=0.0),
-                OmniDiffusionSamplingParams(),
-            ],
+        )
+        engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+            (SamplingParams, {"temperature": 0.0}),
+            (OmniDiffusionSamplingParams, {}),
         )
         _, sampling_params_list = OmniOpenAIServingChat._build_multistage_generation_inputs(
             serving_chat,
@@ -623,7 +635,7 @@ def test_build_multistage_generation_inputs_omitted_bot_task_matches_prompt_defa
             prompt="draw a cat",
             extra_body=extra_body,
             reference_images=[Image.new("RGB", (32, 32), color="red")],
-            gen_params=OmniDiffusionSamplingParams(height=768, width=1024),
+            diffusion_request=DiffusionSamplingRequest(height=768, width=1024),
             tokenizer=FakeTokenizer(),
         )
         return sampling_params_list[0].stop_token_ids

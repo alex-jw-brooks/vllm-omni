@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field, ValidationError
 from vllm.logger import init_logger
 
 from vllm_omni.entrypoints.openai import video_stream_envs
+from vllm_omni.entrypoints.openai.protocol.sampling import build_sampling_params_list, parse_sampling_params_list
 from vllm_omni.entrypoints.openai.video_frame_filter import FrameSimilarityFilter
 from vllm_omni.entrypoints.openai.video_stream_context import (
     text_only_message,
@@ -673,7 +674,12 @@ class OmniStreamingVideoHandler:
         try:
             chat_request = ChatCompletionRequest(**request_kwargs)
             if config.sampling_params_list:
-                params = self._chat_service._to_sampling_params_list(config.sampling_params_list)
+                stage_kwargs_list = parse_sampling_params_list(
+                    config.sampling_params_list,
+                    engine_client.default_sampling_params_list,
+                    engine_client.default_sampling_kwargs_list,
+                )
+                params = build_sampling_params_list(engine_client.default_sampling_params_list, stage_kwargs_list)
                 # Explicit params must retain the engine's streaming output mode.
                 sampling_kwargs["sampling_params_list"] = coerce_param_message_types(params, is_streaming=True)
         except Exception as e:

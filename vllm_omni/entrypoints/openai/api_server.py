@@ -116,7 +116,6 @@ from vllm_omni.entrypoints.openai.chat_template import _load_model_chat_template
 from vllm_omni.entrypoints.openai.diffusion import (
     MAX_UINT32_SEED,
     _generate_with_async_omni,
-    apply_stage_default_sampling_params,
 )
 from vllm_omni.entrypoints.openai.errors import (
     _create_speech_error_json_response,
@@ -136,7 +135,6 @@ from vllm_omni.entrypoints.openai.images.helpers import (
     _generated_size_str,
     _get_max_edit_input_images,
     _load_input_images,
-    _update_if_not_none,
 )
 from vllm_omni.entrypoints.openai.lora import _get_lora_from_json_str, _parse_lora_request
 from vllm_omni.entrypoints.openai.models import serving as openai_models_serving
@@ -168,6 +166,7 @@ from vllm_omni.entrypoints.openai.rollout_session import (
     RolloutSessionClosedError,
     RolloutSessionNotFoundError,
 )
+from vllm_omni.entrypoints.openai.sampling_requests import DiffusionSamplingRequest
 from vllm_omni.entrypoints.openai.serving_audio_generate import OmniOpenAIServingAudioGenerate
 from vllm_omni.entrypoints.openai.serving_chat import OmniOpenAIServingChat
 from vllm_omni.entrypoints.openai.serving_rl_rollout import ServingRLRollout
@@ -208,7 +207,7 @@ from vllm_omni.entrypoints.serve.utils.routes import (
 )
 from vllm_omni.entrypoints.utils import PureDiffusionLauncherAdapter
 from vllm_omni.errors import OmniClientError
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
+from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.utils.forced_aligner import build_forced_aligner_config
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
 
@@ -2125,11 +2124,9 @@ async def generate_images(
                 response_metrics=response_metrics,
             )
 
-        # Build params - pass through user values directly
         prompt = OmniTextPrompt(prompt=request.prompt, modalities=["image"])
         if request.negative_prompt is not None:
             prompt["negative_prompt"] = request.negative_prompt
-        gen_params = OmniDiffusionSamplingParams(num_outputs_per_prompt=request.n)
         extra_args = dict(request.extra_params or {})
         if request.use_system_prompt is not None:
             extra_args["use_system_prompt"] = request.use_system_prompt
@@ -2139,12 +2136,8 @@ async def generate_images(
             extra_args["bot_task"] = request.bot_task
         if request.flow_shift is not None:
             extra_args["flow_shift"] = request.flow_shift
-        if extra_args:
-            gen_params.extra_args = extra_args
         # Parse per-request LoRA (compatible with chat's extra_body.lora shape).
-        lora_request, lora_scale = _parse_lora_request(request.lora) if request.lora is not None else (None, None)
-        _update_if_not_none(gen_params, "lora_request", lora_request)
-        _update_if_not_none(gen_params, "lora_scale", lora_scale)
+        lora_request, lora_scale = _parse_lora_request(request.lora)
 
         # Parse and add size if provided
         if request.size:
@@ -2166,22 +2159,24 @@ async def generate_images(
         app_state_args = getattr(raw_request.app.state, "args", None)
         _check_max_generated_image_size(app_state_args, width, height)
 
-        _update_if_not_none(gen_params, "width", width)
-        _update_if_not_none(gen_params, "height", height)
-
-        # 3.3 Add optional parameters ONLY if provided
-        _update_if_not_none(gen_params, "num_inference_steps", request.num_inference_steps)
-        _update_if_not_none(gen_params, "guidance_scale", request.guidance_scale)
-        _update_if_not_none(gen_params, "true_cfg_scale", request.true_cfg_scale)
-        # If seed is not provided, generate a random one to ensure
-        # a proper generator is initialized in the backend.
-        # This fixes issues where using the default global generator
-        # might produce blurry images in some environments.
-        _update_if_not_none(
-            gen_params, "seed", request.seed if request.seed is not None else random.randint(0, MAX_UINT32_SEED)
+        sampling_request = DiffusionSamplingRequest(
+            num_outputs_per_prompt=request.n,
+            width=width,
+            height=height,
+            num_inference_steps=request.num_inference_steps,
+            guidance_scale=request.guidance_scale,
+            true_cfg_scale=request.true_cfg_scale,
+            # If seed is not provided, generate a random one to ensure
+            # a proper generator is initialized in the backend.
+            # This fixes issues where using the default global generator
+            # might produce blurry images in some environments.
+            seed=request.seed if request.seed is not None else random.randint(0, MAX_UINT32_SEED),
+            generator_device=request.generator_device,
+            layers=request.layers,
+            extra_args=extra_args,
+            lora_request=lora_request,
+            lora_scale=lora_scale,
         )
-        _update_if_not_none(gen_params, "generator_device", request.generator_device)
-        _update_if_not_none(gen_params, "layers", request.layers)
 
         request_id = f"img_gen-{random_uuid()}"
         raw_request.state.request_metadata = RequestResponseMetadata(request_id=request_id)
@@ -2191,7 +2186,7 @@ async def generate_images(
         # Generate images using AsyncOmni.
         result = await _generate_with_async_omni(
             engine_client=engine_client,
-            gen_params=gen_params,
+            sampling_request=sampling_request,
             stage_configs=stage_configs,
             prompt=prompt,
             request_id=request_id,
@@ -2358,29 +2353,15 @@ async def edit_images(
             omni_prompt["multi_modal_data"]["reference_image"] = loaded[0]
 
         # 3 Build sample params
-        gen_params = OmniDiffusionSamplingParams()
-        # 3.0 Init with system default values
         app_state_args = getattr(raw_request.app.state, "args", None)
-        default_sample_param = getattr(app_state_args, "default_sampling_params", None)
-        # Currently only have one diffusion stage.
-        diffusion_stage_ids = [i for i, cfg in enumerate(stage_configs) if get_stage_type(cfg) == "diffusion"]
-        if not diffusion_stage_ids:
+        if not any(get_stage_type(cfg) == "diffusion" for cfg in stage_configs):
             raise HTTPException(
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
                 detail="No diffusion stage found in multi-stage pipeline.",
             )
-        diffusion_stage_id = diffusion_stage_ids[0]
-        apply_stage_default_sampling_params(
-            default_sample_param,
-            gen_params,
-            str(diffusion_stage_id),
-        )
-        _update_if_not_none(gen_params, "num_outputs_per_prompt", n)
         # 3.1 Parse per-request LoRA (compatible with chat's extra_body.lora shape).
         lora_dict = _get_lora_from_json_str(lora)
         lora_request, lora_scale = _parse_lora_request(lora_dict)
-        _update_if_not_none(gen_params, "lora_request", lora_request)
-        _update_if_not_none(gen_params, "lora_scale", lora_scale)
         # 3.2 Validate resolution if provided
         if resolution is not None and resolution not in SUPPORTED_LAYERED_RESOLUTIONS:
             raise HTTPException(
@@ -2429,35 +2410,11 @@ async def edit_images(
             omni_prompt["height"] = height
             omni_prompt["width"] = width
 
-        _update_if_not_none(gen_params, "width", width)
-        _update_if_not_none(gen_params, "height", height)
-        gen_params.width_not_provided = size_was_auto
-        gen_params.height_not_provided = size_was_auto
-
-        # 3.4 Add optional parameters ONLY if provided
-        _update_if_not_none(gen_params, "num_inference_steps", num_inference_steps)
-        _update_if_not_none(gen_params, "guidance_scale", guidance_scale)
-        _update_if_not_none(gen_params, "guidance_scale_2", guidance_scale_2)
-        _update_if_not_none(gen_params, "strength", strength)
-        _update_if_not_none(gen_params, "true_cfg_scale", true_cfg_scale)
         # If seed is not provided, generate a random one to ensure
         # a proper generator is initialized in the backend.
         # This fixes issues where using the default global generator
         # might produce blurry images in some environments.
-        _update_if_not_none(gen_params, "seed", seed if seed is not None else random.randint(0, MAX_UINT32_SEED))
-        _update_if_not_none(gen_params, "generator_device", generator_device)
-        _update_if_not_none(gen_params, "layers", layers)
-        _update_if_not_none(gen_params, "resolution", resolution)
-
-        extra_args = dict(getattr(gen_params, "extra_args", {}) or {})
-        edit_extra_args = _build_hunyuan_edit_extra_args(
-            bot_task=bot_task,
-            sys_type=sys_type,
-            system_prompt=system_prompt,
-        )
-        extra_args.update(edit_extra_args)
-        if extra_args:
-            gen_params.extra_args = extra_args
+        effective_seed = seed if seed is not None else random.randint(0, MAX_UINT32_SEED)
 
         # 4. Generate images
         request_id = f"img_edit-{random_uuid()}"
@@ -2485,7 +2442,6 @@ async def edit_images(
                 _img.save(buf, format="PNG")
                 ref_b64_list.append(base64.b64encode(buf.getvalue()).decode())
 
-            effective_seed = seed if seed is not None else random.randint(0, MAX_UINT32_SEED)
             extra_body: dict[str, Any] = {
                 "seed": effective_seed,
                 "num_outputs_per_prompt": n,
@@ -2554,9 +2510,32 @@ async def edit_images(
             images, stage_durations, peak_memory_mb, cot_output, response_metrics = generation_result
         else:
             # Single-stage diffusion: use the direct path.
+            sampling_request = DiffusionSamplingRequest(
+                num_outputs_per_prompt=n,
+                width=width,
+                height=height,
+                width_not_provided=size_was_auto,
+                height_not_provided=size_was_auto,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+                strength=strength,
+                true_cfg_scale=true_cfg_scale,
+                seed=effective_seed,
+                generator_device=generator_device,
+                layers=layers,
+                resolution=resolution,
+                extra_args=_build_hunyuan_edit_extra_args(
+                    bot_task=bot_task,
+                    sys_type=sys_type,
+                    system_prompt=system_prompt,
+                ),
+                lora_request=lora_request,
+                lora_scale=lora_scale,
+            )
             result = await _generate_with_async_omni(
                 engine_client=engine_client,
-                gen_params=gen_params,
+                sampling_request=sampling_request,
                 stage_configs=stage_configs,
                 prompt=omni_prompt,
                 request_id=request_id,

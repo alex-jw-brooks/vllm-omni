@@ -60,6 +60,7 @@ class InlineStageDiffusionClient(StageClientBase):
         self.final_output_type = metadata.final_output_type
         self.model_stage = getattr(metadata, "model_stage", None)
         self.default_sampling_params = metadata.default_sampling_params
+        self.default_sampling_kwargs = metadata.default_sampling_kwargs
         self.requires_multimodal_data = metadata.requires_multimodal_data
         self.custom_process_input_func = metadata.custom_process_input_func
         self.prompt_transform_func = None

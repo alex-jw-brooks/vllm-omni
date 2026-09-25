@@ -235,6 +235,7 @@ class OmniBase(PDDisaggregationMixin):
         self.mod_metrics = OmniModalityMetrics(model_name=model, log_stats=log_stats)
 
         self.default_sampling_params_list = self.engine.default_sampling_params_list
+        self.default_sampling_kwargs_list = self.engine.default_sampling_kwargs_list
         self.sampling_constraints_list = self._get_sampling_constraints_list(self.engine.stage_configs)
         if not self.output_modalities:
             self.output_modalities = [

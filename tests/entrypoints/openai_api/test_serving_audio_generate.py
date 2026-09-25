@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from vllm.v1.engine.exceptions import EngineGenerateError
 
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.entrypoints.omni_base import OmniEngineDeadError
 from vllm_omni.entrypoints.openai import api_server as api_server_module
 from vllm_omni.entrypoints.openai.protocol.audio import (
@@ -55,7 +56,9 @@ def _make_engine_client(*, audio_key: str = "audio", sample_rate: int = 44100):
     mock_engine_client = MagicMock()
     mock_engine_client.errored = False
     mock_engine_client.model_type = "StableAudioPipeline"
-    mock_engine_client.default_sampling_params_list = [{}]
+    mock_engine_client.default_sampling_params_list, mock_engine_client.default_sampling_kwargs_list = stage_defaults(
+        (OmniDiffusionSamplingParams, {})
+    )
 
     async def mock_generate_fn(*args, **kwargs):
         yield create_mock_audio_output(
@@ -286,19 +289,15 @@ class TestParameterWiring:
         assert sp.num_inference_steps == 200
 
     @pytest.mark.asyncio
-    async def test_seed_creates_generator(self, server_and_engine):
+    async def test_seed_reaches_diffusion_params(self, server_and_engine):
         server, engine = server_and_engine
         req = OpenAICreateAudioGenerateRequest(input="test", seed=42)
 
-        with patch("vllm_omni.entrypoints.openai.serving_audio_generate.torch") as mock_torch:
-            mock_gen = MagicMock()
-            mock_gen.manual_seed.return_value = mock_gen
-            mock_torch.Generator.return_value = mock_gen
+        await server.create_audio_generate(req)
 
-            await server.create_audio_generate(req)
-
-            mock_torch.Generator.assert_called_once()
-            mock_gen.manual_seed.assert_called_once_with(42)
+        # The diffusion worker builds the generator from the seed on its device.
+        sp = engine.generate.call_args[1]["sampling_params_list"][0]
+        assert (sp.seed, sp.generator) == (42, None)
 
     @pytest.mark.asyncio
     async def test_seed_none_skips_generator(self, server_and_engine):

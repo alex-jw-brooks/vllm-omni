@@ -23,6 +23,7 @@ from vllm import SamplingParams
 from vllm.entrypoints.openai.models.protocol import BaseModelPath
 from vllm.sampling_params import RequestOutputKind
 
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.api_server import router
 from vllm_omni.entrypoints.openai.image_api_utils import (
@@ -164,7 +165,9 @@ class FakeAsyncOmni:
             SimpleNamespace(stage_type="llm", is_comprehension=True),
             SimpleNamespace(stage_type="diffusion", is_comprehension=False),
         ]
-        self.default_sampling_params_list = [SamplingParams(temperature=0.1), OmniDiffusionSamplingParams()]
+        self.default_sampling_params_list, self.default_sampling_kwargs_list = stage_defaults(
+            (SamplingParams, {"temperature": 0.1}), (OmniDiffusionSamplingParams, {})
+        )
         self.captured_sampling_params_list = None
         self.captured_prompt = None
         self._images = images or [Image.new("RGB", (64, 64), color="green")]
@@ -190,6 +193,9 @@ def mock_async_diffusion(mocker: MockerFixture):
         def __init__(self) -> None:
             self.is_running = True
             self.check_health = mocker.AsyncMock()
+            self.default_sampling_params_list, self.default_sampling_kwargs_list = stage_defaults(
+                (OmniDiffusionSamplingParams, {})
+            )
             self.captured_sampling_params_list = None
             self.captured_prompt = None
             self.generate_calls = 0
@@ -260,19 +266,20 @@ def async_omni_test_client():
                 SimpleNamespace(stage_type="llm", is_comprehension=True),
                 SimpleNamespace(stage_type="diffusion", is_comprehension=False),
             ]
-            default_sampling_params_list = [
-                SamplingParams(temperature=0.1),
-                OmniDiffusionSamplingParams(
-                    num_inference_steps=4,
-                    guidance_scale=7.5,
-                    generator_device="cpu",
+            default_sampling_params_list, default_sampling_kwargs_list = stage_defaults(
+                (SamplingParams, {"temperature": 0.1}),
+                (
+                    OmniDiffusionSamplingParams,
+                    {"num_inference_steps": 4, "guidance_scale": 7.5, "generator_device": "cpu"},
                 ),
-            ]
+            )
             self.engine = SimpleNamespace(
                 stage_configs=stage_configs,
                 default_sampling_params_list=default_sampling_params_list,
+                default_sampling_kwargs_list=default_sampling_kwargs_list,
             )
             self.default_sampling_params_list = default_sampling_params_list
+            self.default_sampling_kwargs_list = default_sampling_kwargs_list
             self.captured_sampling_params_list = None
             self.captured_prompt = None
             self._images = [Image.new("RGB", (64, 64), color="green")]
@@ -328,15 +335,17 @@ def async_omni_rgba_test_client():
                 SimpleNamespace(stage_type="llm", is_comprehension=True),
                 SimpleNamespace(stage_type="diffusion", is_comprehension=False),
             ]
-            default_sampling_params_list = [
-                SamplingParams(temperature=0.1),
-                OmniDiffusionSamplingParams(),
-            ]
+            default_sampling_params_list, default_sampling_kwargs_list = stage_defaults(
+                (SamplingParams, {"temperature": 0.1}),
+                (OmniDiffusionSamplingParams, {}),
+            )
             self.engine = SimpleNamespace(
                 stage_configs=stage_configs,
                 default_sampling_params_list=default_sampling_params_list,
+                default_sampling_kwargs_list=default_sampling_kwargs_list,
             )
             self.default_sampling_params_list = default_sampling_params_list
+            self.default_sampling_kwargs_list = default_sampling_kwargs_list
             self.captured_sampling_params_list = None
             self.captured_prompt = None
             self._images = [Image.new("RGBA", (64, 64), color=(0, 255, 0, 128))]
@@ -392,15 +401,17 @@ def async_omni_stage_configs_only_client():
                 SimpleNamespace(stage_type="llm", is_comprehension=True),
                 SimpleNamespace(stage_type="diffusion", is_comprehension=False),
             ]
-            default_sampling_params_list = [
-                SamplingParams(temperature=0.1),
-                OmniDiffusionSamplingParams(),
-            ]
+            default_sampling_params_list, default_sampling_kwargs_list = stage_defaults(
+                (SamplingParams, {"temperature": 0.1}),
+                (OmniDiffusionSamplingParams, {}),
+            )
             self.engine = SimpleNamespace(
                 stage_configs=stage_configs,
                 default_sampling_params_list=default_sampling_params_list,
+                default_sampling_kwargs_list=default_sampling_kwargs_list,
             )
             self.default_sampling_params_list = default_sampling_params_list
+            self.default_sampling_kwargs_list = default_sampling_kwargs_list
             self.captured_sampling_params_list = None
             self.captured_prompt = None
             self._images = [Image.new("RGB", (64, 64), color="green")]
@@ -453,15 +464,17 @@ def streaming_image_edit_client():
                 SimpleNamespace(stage_type="llm", is_comprehension=True),
                 SimpleNamespace(stage_type="diffusion", is_comprehension=False),
             ]
-            default_sampling_params_list = [
-                SamplingParams(temperature=0.1),
-                OmniDiffusionSamplingParams(),
-            ]
+            default_sampling_params_list, default_sampling_kwargs_list = stage_defaults(
+                (SamplingParams, {"temperature": 0.1}),
+                (OmniDiffusionSamplingParams, {}),
+            )
             self.engine = SimpleNamespace(
                 stage_configs=stage_configs,
                 default_sampling_params_list=default_sampling_params_list,
+                default_sampling_kwargs_list=default_sampling_kwargs_list,
             )
             self.default_sampling_params_list = default_sampling_params_list
+            self.default_sampling_kwargs_list = default_sampling_kwargs_list
             self.captured_sampling_params_list = None
             self.captured_prompt = None
             self.od_config = SimpleNamespace(supports_multimodal_inputs=True)
@@ -724,15 +737,17 @@ def test_generate_images_async_omni_glm_image_sets_stage0_max_tokens():
                 SimpleNamespace(stage_type="diffusion", is_comprehension=False, model_arch="GlmImagePipeline"),
             ]
             # YAML default max_tokens for GLM-Image AR stage (upper bound for 2048x2048 t2i)
-            default_sampling_params_list = [
-                SamplingParams(temperature=0.1, seed=42, max_tokens=4353),
-                OmniDiffusionSamplingParams(height=1024, width=1024),
-            ]
+            default_sampling_params_list, default_sampling_kwargs_list = stage_defaults(
+                (SamplingParams, {"temperature": 0.1, "seed": 42, "max_tokens": 4353}),
+                (OmniDiffusionSamplingParams, {"height": 1024, "width": 1024}),
+            )
             self.engine = SimpleNamespace(
                 stage_configs=stage_configs,
                 default_sampling_params_list=default_sampling_params_list,
+                default_sampling_kwargs_list=default_sampling_kwargs_list,
             )
             self.default_sampling_params_list = default_sampling_params_list
+            self.default_sampling_kwargs_list = default_sampling_kwargs_list
             self.captured_sampling_params_list = None
             self.captured_prompt = None
             self._images = [Image.new("RGB", (64, 64), color="green")]
@@ -1881,6 +1896,11 @@ def test_image_edit_parameter_default(async_omni_test_client):
 
 def test_image_edit_parameter_default_single_stage(test_client):
     img_bytes_1 = make_test_image_bytes((24, 16))
+    engine = test_client.app.state.engine_client
+    # Stage defaults (e.g. from --default-sampling-params) apply to edits.
+    engine.default_sampling_params_list, engine.default_sampling_kwargs_list = stage_defaults(
+        (OmniDiffusionSamplingParams, {"num_inference_steps": 4, "guidance_scale": 7.5, "generator_device": "cpu"})
+    )
 
     # uploadfile with image key
     response = test_client.post(
@@ -1891,7 +1911,6 @@ def test_image_edit_parameter_default_single_stage(test_client):
         },
     )
     assert response.status_code == 200
-    engine = test_client.app.state.engine_client
     captured_sampling_params = engine.captured_sampling_params_list[0]
 
     assert captured_sampling_params.width == 24

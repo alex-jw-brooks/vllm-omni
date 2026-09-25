@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 import copy
 import operator
 
@@ -144,6 +147,21 @@ def test_extract_stage_metadata_matches_legacy_projection():
     assert diffusion.default_sampling_params.seed == 7
     assert diffusion.custom_process_input_func is operator.neg
     assert diffusion.cfg_kv_collect_func is operator.concat
+
+
+def test_extract_stage_metadata_records_default_sampling_kwargs():
+    # Requests rebuild stage params from these kwargs, so both paths must keep them.
+    pipeline, deploy = _metadata_inputs()
+    omni_config = VllmOmniConfig.from_pipeline_config(pipeline, user_deploy_config=copy.deepcopy(deploy))
+    legacy_configs = [stage.to_omegaconf() for stage in merge_pipeline_deploy(pipeline, copy.deepcopy(deploy))]
+
+    structured = [
+        extract_stage_metadata_from_omni_stage_config(omni_config.stage_by_id(config.stage_id)).default_sampling_kwargs
+        for config in legacy_configs
+    ]
+    legacy = [extract_legacy_stage_metadata(config).default_sampling_kwargs for config in legacy_configs]
+
+    assert structured == legacy == [{"temperature": 0.25}, {"temperature": 0.75}, {"seed": 7}]
 
 
 def test_extract_stage_metadata_preserves_legacy_one_argument_api():

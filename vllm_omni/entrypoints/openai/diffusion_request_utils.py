@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -7,10 +7,7 @@ from collections.abc import Collection, Mapping
 
 from vllm.logger import init_logger
 
-from vllm_omni.inputs.data import (
-    DIFFUSION_QUALITY_LEVELS,
-    OmniDiffusionSamplingParams,
-)
+from vllm_omni.inputs.data import DIFFUSION_QUALITY_LEVELS
 
 logger = init_logger(__name__)
 
@@ -97,15 +94,3 @@ def normalize_diffusion_request_args(
     if quality is not None and quality not in DIFFUSION_QUALITY_LEVELS:
         raise ValueError(f"quality must be one of {list(DIFFUSION_QUALITY_LEVELS)}, got {quality!r}")
     return normalized_extra_args, request_args
-
-
-def apply_normalized_diffusion_request_extra_args(
-    sampling_params: OmniDiffusionSamplingParams,
-    normalized_extra_args: Mapping[str, object],
-) -> None:
-    """Overlay request extras without discarding stage defaults."""
-    if normalized_extra_args:
-        sampling_params.extra_args = {
-            **(sampling_params.extra_args or {}),
-            **normalized_extra_args,
-        }

@@ -24,7 +24,7 @@ import anyio
 import numpy as np
 import soundfile as sf
 import torch
-from fastapi import HTTPException, Request, UploadFile
+from fastapi import Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from vllm.entrypoints.generate.base.protocol import RequestResponseMetadata
 from vllm.entrypoints.generate.base.serving import GenerateBaseServing as OpenAIServing
@@ -1947,8 +1947,9 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         # FINAL_ONLY semantics and let the streaming response send the final
         # waveform once. Scoped to qwen3_tts: other async_chunk=False models
         # keep the DELTA coercion they stream with today.
-        # list() makes a copy to avoid mutating the params.
-        sampling_params_list = list(self.engine_client.default_sampling_params_list)
+        sampling_params_list = request.to_sampling_params_list(
+            self.engine_client.default_sampling_params_list, self.engine_client.default_sampling_kwargs_list
+        )
         async_chunk = getattr(self.model_config, "async_chunk", True)
         qwen3_full_payload = self._tts_model_type == "qwen3_tts" and not bool(async_chunk)
         is_streaming_request = request.is_streaming() and not qwen3_full_payload
@@ -2010,38 +2011,13 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             text = request.input[: max(cap - base_len, 0)]
             logger.debug("TTS speech request %s: text=%r", request_id, text)
 
-        # Apply model-specific extra parameters
-        if request.extra_params is not None and sampling_params_list:
-            if not isinstance(request.extra_params, dict):
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST.value,
-                    detail="extra_params must be a JSON object/dict.",
-                )
-            import copy
-
-            sampling_params_list = copy.deepcopy(sampling_params_list)
-            for name in ("temperature", "top_p", "top_k"):
-                if (value := request.extra_params.get(name)) is not None:
-                    setattr(sampling_params_list[0], name, value)
-            if sampling_params_list[0].extra_args is None:
-                sampling_params_list[0].extra_args = {}
-            sampling_params_list[0].extra_args.update(request.extra_params)
+        if request.extra_params is not None:
             logger.info("Applied extra_params: %s", request.extra_params)
 
         # Apply adapter-owned sampling overrides, including request-level token
         # limits and model-specific dynamic token or stop-token configuration.
         if sampling_params_list and (adapter := self._get_tts_adapter()) is not None:
             sampling_params_list = adapter.apply_sampling_overrides(sampling_params_list, request, prompt, request_id)
-
-        if request.seed is not None and sampling_params_list:
-            import copy
-
-            sampling_params_list = copy.deepcopy(sampling_params_list)
-            stage0_params = sampling_params_list[0]
-            stage0_params.seed = request.seed
-            if stage0_params.extra_args is None:
-                stage0_params.extra_args = {}
-            stage0_params.extra_args["tts_local_seed"] = request.seed
 
         # When word_timestamps is requested, also ask for the aligner stage's
         # output so the orchestrator drives the request through the forced-aligner
@@ -2054,9 +2030,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             if is_streaming_request:
                 # The aligner consumes the terminal waveform, so retain earlier
                 # audio chunks instead of draining them after each DELTA output.
-                sampling_params_list = [
-                    sp.clone() if isinstance(sp, SamplingParams) else sp for sp in sampling_params_list
-                ]
                 for sp in sampling_params_list:
                     if isinstance(sp, SamplingParams):
                         sp.output_kind = RequestOutputKind.CUMULATIVE
@@ -2374,41 +2347,11 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 cap = raw_max if isinstance(raw_max, int) else 200
                 text = request.input[: max(cap - base_len, 0)]
                 logger.debug("Diffusion TTS speech request %s: text=%r", request_id, text)
-            if request.extra_params is not None and not isinstance(request.extra_params, dict):
-                raise ValueError("extra_params must be a JSON object/dict.")
-            extra = dict(request.extra_params or {})
-            if request.seed is not None:
-                extra["seed"] = request.seed
-            # Apply extra_params from the request to sampling params
-            sampling_params_list = self._diffusion_engine.default_sampling_params_list
-            if extra:
-                import copy
-
-                sampling_params_list = copy.deepcopy(sampling_params_list)
-                if sampling_params_list[0].extra_args is None:
-                    sampling_params_list[0].extra_args = {}
-                sampling_params_list[0].extra_args.update(extra)
-
-                sampling = sampling_params_list[0]
-
-                # This change allows StepScheduler read total_steps from upper
-                # sampling.num_inference_steps, check diffusion/sched/step_scheduler:_get_total_steps
-                if "num_inference_steps" in extra:
-                    value = extra["num_inference_steps"]
-                    try:
-                        sampling.num_inference_steps = int(value)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError("num_inference_steps must be an integer") from exc
-
-                if "guidance_scale" in extra:
-                    value = extra["guidance_scale"]
-                    try:
-                        sampling.guidance_scale = float(value)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError("guidance_scale must be a number") from exc
-
-                logger.info("Applied extra_params to diffusion: %s", extra)
-
+            sampling_params_list = request.to_sampling_params_list(
+                self._diffusion_engine.default_sampling_params_list, self._diffusion_engine.default_sampling_kwargs_list
+            )
+            if request.extra_params or request.seed is not None:
+                logger.info("Applied extra_params to diffusion: %s", sampling_params_list[0].extra_args)
             generator = self._diffusion_engine.generate(
                 prompt=prompt,
                 request_id=request_id,

@@ -150,6 +150,7 @@ class StageDiffusionClient(StageClientBase):
         self.final_output_type = metadata.final_output_type
         self.model_stage = metadata.model_stage
         self.default_sampling_params = metadata.default_sampling_params
+        self.default_sampling_kwargs = metadata.default_sampling_kwargs
         self.prompt_transform_func = metadata.prompt_transform_func
         self.prompt_expand_func = metadata.prompt_expand_func
         self.requires_multimodal_data = getattr(metadata, "requires_multimodal_data", False)

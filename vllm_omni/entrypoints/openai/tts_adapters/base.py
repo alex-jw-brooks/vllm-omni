@@ -294,7 +294,8 @@ class TTSModelAdapter(ABC):
         """Apply model-specific sampling mutations.
 
         The orchestrator guarantees the call order:
-        stream-coercion -> extra_params -> THIS -> seed. Default: identity.
+        request params (``extra_params``, ``seed``) -> stream-coercion -> THIS.
+        Default: identity.
         """
         return sampling_params_list
 

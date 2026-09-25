@@ -5,6 +5,10 @@ from typing import Annotated, Any, Literal
 
 import numpy as np
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from vllm import SamplingParams
+
+from vllm_omni.entrypoints.openai.protocol.sampling import OmniSamplingRequest, SamplingOverrides
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 # Bound int request fields to avoid overflow issues.
 _INT64_MIN = -(2**63)
@@ -55,7 +59,7 @@ def _normalize_speaker_embedding_value(value):
     return [float(x) for x in value]
 
 
-class OpenAICreateSpeechRequest(BaseModel):
+class OpenAICreateSpeechRequest(BaseModel, OmniSamplingRequest):
     input: str
     model: str | None = None
     # Accept both "voice" (OpenAI convention) and "speaker" (model/internal
@@ -333,6 +337,45 @@ class OpenAICreateSpeechRequest(BaseModel):
     def is_streaming(self) -> bool:
         return self.is_raw_audio_stream() or self.is_sse_stream()
 
+    def sampling_overrides(self, stage_id: int, default: SamplingParams) -> SamplingOverrides:
+        # Model-specific args target the first (AR) stage.
+        if stage_id != 0:
+            return {}
+        extra_args = dict(self.extra_params or {})
+        overrides: dict[str, object] = {}
+        for name, cast in (("temperature", float), ("top_p", float), ("top_k", int)):
+            if (value := extra_args.get(name)) is not None:
+                try:
+                    overrides[name] = cast(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{name} must be a number") from exc
+        if self.seed is not None:
+            overrides["seed"] = self.seed
+            extra_args["tts_local_seed"] = self.seed
+        if extra_args:
+            overrides["extra_args"] = extra_args
+        return overrides
+
+    def diffusion_overrides(self, stage_id: int, default: OmniDiffusionSamplingParams) -> SamplingOverrides:
+        if stage_id != 0:
+            return {}
+        extra_args = dict(self.extra_params or {})
+        if self.seed is not None:
+            extra_args["seed"] = self.seed
+        overrides: dict[str, object] = {"extra_args": extra_args} if extra_args else {}
+        # The step scheduler reads total steps from the top-level field.
+        if "num_inference_steps" in extra_args:
+            try:
+                overrides["num_inference_steps"] = int(extra_args["num_inference_steps"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("num_inference_steps must be an integer") from exc
+        if "guidance_scale" in extra_args:
+            try:
+                overrides["guidance_scale"] = float(extra_args["guidance_scale"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("guidance_scale must be a number") from exc
+        return overrides
+
     @model_validator(mode="after")
     def validate_streaming_constraints(self) -> "OpenAICreateSpeechRequest":
         if self.is_streaming():
@@ -347,7 +390,7 @@ class OpenAICreateSpeechRequest(BaseModel):
         return self
 
 
-class OpenAICreateAudioGenerateRequest(BaseModel):
+class OpenAICreateAudioGenerateRequest(BaseModel, OmniSamplingRequest):
     """Request model for audio generation via diffusion models (e.g. Stable Audio)."""
 
     input: str = Field(
@@ -407,6 +450,22 @@ class OpenAICreateAudioGenerateRequest(BaseModel):
         if v == "sse":
             raise ValueError("'sse' is not a supported stream_format yet. Please use 'audio'.")
         return v
+
+    def diffusion_overrides(self, stage_id: int, default: OmniDiffusionSamplingParams) -> SamplingOverrides:
+        overrides: dict[str, object] = {"num_outputs_per_prompt": 1}
+        if self.seed is not None:
+            overrides["seed"] = self.seed
+        if self.guidance_scale is not None:
+            overrides["guidance_scale"] = self.guidance_scale
+        if self.num_inference_steps is not None:
+            overrides["num_inference_steps"] = self.num_inference_steps
+        if self.audio_length is not None:
+            audio_start = self.audio_start if self.audio_start is not None else 0.0
+            overrides["extra_args"] = {
+                "audio_start_in_s": audio_start,
+                "audio_end_in_s": audio_start + self.audio_length,
+            }
+        return overrides
 
 
 class CreateAudio(BaseModel):

@@ -577,6 +577,9 @@ class StageMetadata:
     # Multi-replica: replica_id distinguishes replicas of the same stage.
     # For single-replica stages this defaults to 0.
     replica_id: int = 0
+    # Constructor kwargs of default_sampling_params, so requests can rebuild
+    # them with overrides. None for pooling stages, which are never rebuilt.
+    default_sampling_kwargs: dict[str, Any] | None = None
 
 
 def _apply_rocm_attention_backend(
@@ -628,10 +631,12 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
     # is_pooling_model signal); pick params by that signal, not execution_type.
     is_pooling = str(engine_args.get("runner", "")).lower() == "pooling"
     default_params: OmniSamplingParams | PoolingParams
+    default_kwargs: dict[str, Any] | None = default_sp
     if stage_type == "diffusion":
         default_params = OmniDiffusionSamplingParams(**default_sp)
     elif is_pooling:
         default_params = PoolingParams(**default_pp)
+        default_kwargs = None
     else:  # generative llm: ar / generation
         default_params = SamplingParams(**default_sp)
 
@@ -672,6 +677,7 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
             final_output=final_output,
             final_output_type=final_output_type,
             default_sampling_params=default_params,
+            default_sampling_kwargs=default_kwargs,
             custom_process_input_func=custom_process_input_func,
             model_stage=model_stage,
             runtime_cfg=runtime_cfg,
@@ -693,6 +699,7 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
         final_output=final_output,
         final_output_type=final_output_type,
         default_sampling_params=default_params,
+        default_sampling_kwargs=default_kwargs,
         custom_process_input_func=custom_process_input_func,
         model_stage=model_stage,
         runtime_cfg=runtime_cfg,
@@ -719,13 +726,15 @@ def extract_stage_metadata_from_omni_stage_config(
     """Project one typed stage config into production runtime metadata."""
     stage_type: Literal["llm", "diffusion"] = "diffusion" if stage_config.stage_type == StageType.DIFFUSION else "llm"
     pooling_config = stage_config.pooling_config
+    sampling_kwargs: dict[str, Any] | None = None
     if stage_type == "llm" and (pooling_config.runner or "").lower() == "pooling":
         sampling_params: OmniSamplingParams | PoolingParams = (
             copy.deepcopy(pooling_config.default_pooling_params) or PoolingParams()
         )
     else:
         sampling_params_cls = SamplingParams if stage_type == "llm" else OmniDiffusionSamplingParams
-        sampling_params = sampling_params_cls(**(stage_config.model_config.default_sampling_params or {}))
+        sampling_kwargs = dict(stage_config.model_config.default_sampling_params or {})
+        sampling_params = sampling_params_cls(**sampling_kwargs)
     custom_process_input_func = _resolve_omni_metadata_hook(stage_config.custom_process_input_func)
 
     if stage_type == "diffusion":
@@ -739,6 +748,7 @@ def extract_stage_metadata_from_omni_stage_config(
             final_output=stage_config.final_output,
             final_output_type=stage_config.final_output_type,
             default_sampling_params=sampling_params,
+            default_sampling_kwargs=sampling_kwargs,
             custom_process_input_func=custom_process_input_func,
             model_stage=stage_config.model_stage,
             runtime_cfg=stage_config.runtime_config,
@@ -756,6 +766,7 @@ def extract_stage_metadata_from_omni_stage_config(
         final_output=stage_config.final_output,
         final_output_type=stage_config.final_output_type,
         default_sampling_params=sampling_params,
+        default_sampling_kwargs=sampling_kwargs,
         custom_process_input_func=custom_process_input_func,
         model_stage=stage_config.model_stage,
         runtime_cfg=stage_config.runtime_config,

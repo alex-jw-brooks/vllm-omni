@@ -1,9 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+
+
+def select_declared_extra_args(declared_params: frozenset[str], user_kwargs: Mapping[str, object]) -> dict[str, object]:
+    """Return the pipeline-declared request params the caller set to a non-null value."""
+    return {key: user_kwargs[key] for key in declared_params if user_kwargs.get(key) is not None}
 
 
 def apply_declared_extra_args(
@@ -21,7 +28,7 @@ def apply_declared_extra_args(
     it is safe to call on non-diffusion (e.g. AR) sampling params whose
     ``extra_args`` defaults to ``None``.
     """
-    declared = {key: user_kwargs[key] for key in declared_params if user_kwargs.get(key) is not None}
+    declared = select_declared_extra_args(declared_params, user_kwargs)
     if not declared:
         return
     sampling_params.extra_args = {**(sampling_params.extra_args or {}), **declared}

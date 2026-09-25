@@ -22,6 +22,7 @@ import janus
 import torch
 from vllm import envs as vllm_envs
 from vllm.logger import init_logger
+from vllm.pooling_params import PoolingParams
 from vllm.v1.engine.input_processor import InputProcessor
 
 from vllm_omni.config.config_factory import StageConfigFactory, with_trust_remote_code_override
@@ -293,7 +294,8 @@ class OmniEngineBase:
         self.prompt_transform_func: Any | None = None
         self.prompt_expand_func: Any | None = None
         self.supported_tasks: tuple[str, ...] = ("generate",)
-        self.default_sampling_params_list: list[OmniSamplingParams] = []
+        self.default_sampling_params_list: list[OmniSamplingParams | PoolingParams] = []
+        self.default_sampling_kwargs_list: list[dict[str, Any] | None] = []
         self.stage_metadata: list[StageRuntimeInfo] = []
         # Janus queues are constructed eagerly here (not deferred to the
         # orchestrator thread) so the master server's ROUTER thread always
@@ -412,6 +414,7 @@ class OmniEngineBase:
             None,
         )
         self.default_sampling_params_list = [client.default_sampling_params for client in self.stage_clients]
+        self.default_sampling_kwargs_list = [client.default_sampling_kwargs for client in self.stage_clients]
         self.stage_metadata = [
             StageRuntimeInfo(
                 final_output=client.final_output,

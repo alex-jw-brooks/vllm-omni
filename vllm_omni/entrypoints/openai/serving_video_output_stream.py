@@ -29,7 +29,6 @@ Protocol:
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import time
 import uuid
@@ -43,24 +42,23 @@ from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from PIL import Image
 from pydantic import ValidationError
 from vllm.logger import init_logger
+from vllm.pooling_params import PoolingParams
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
+from vllm_omni.entrypoints.openai.lora import _parse_lora_request
 from vllm_omni.entrypoints.openai.protocol.videos import VideoGenerationRequest, VideoParams
-from vllm_omni.entrypoints.openai.stage_params import (
-    build_stage_sampling_params_list,
-    get_default_sampling_params_list,
-)
-from vllm_omni.entrypoints.openai.utils import is_video_generation_pipeline, parse_lora_request
+from vllm_omni.entrypoints.openai.sampling_requests import VideoSamplingRequest
+from vllm_omni.entrypoints.openai.utils import is_video_generation_pipeline
 from vllm_omni.entrypoints.openai.video_api_utils import (
     StreamingVideoFormat,
     create_streaming_video_encoder,
     decode_input_reference,
 )
 from vllm_omni.inputs.data import (
-    OmniDiffusionSamplingParams,
     OmniInteractionEvent,
     OmniInteractionPrompt,
+    OmniSamplingParams,
     OmniTextPrompt,
 )
 from vllm_omni.outputs import OmniRequestOutput
@@ -496,12 +494,12 @@ class OmniStreamingVideoOutputHandler:
         progress: _SessionProgress,
     ) -> AsyncGenerator[tuple[bytes, dict[str, Any]], None]:
         """Yield encoded video bytes from diffusion streaming outputs."""
-        prompt, gen_params, vp = await self._build_prompt_and_sampling_params(request)
+        prompt, sampling_params_list, vp = await self._build_prompt_and_sampling_params(request)
         video_codec_options = {"preset": "ultrafast", "threads": "0", "tune": "zerolatency"}
         if isinstance(request.extra_params, dict) and "video_codec_options" in request.extra_params:
             video_codec_options = request.extra_params["video_codec_options"]
 
-        output_fps = vp.fps or gen_params.resolved_frame_rate or 16
+        output_fps = vp.fps or 16
         encoder = create_streaming_video_encoder(
             output_format=output_format,
             fps=output_fps,
@@ -509,7 +507,7 @@ class OmniStreamingVideoOutputHandler:
         )
         completed = False
         try:
-            async for result in self._iter_generation_outputs(prompt, gen_params, request_id, progress):
+            async for result in self._iter_generation_outputs(prompt, sampling_params_list, request_id, progress):
                 if result.error:
                     raise RuntimeError(str(result.error))
                 videos = self._extract_video_outputs(result)
@@ -547,44 +545,16 @@ class OmniStreamingVideoOutputHandler:
     async def _build_prompt_and_sampling_params(
         self,
         request: VideoGenerationRequest,
-    ) -> tuple[OmniTextPrompt, OmniDiffusionSamplingParams, VideoParams]:
+    ) -> tuple[OmniTextPrompt, list[OmniSamplingParams | PoolingParams], VideoParams]:
         """Build text-only diffusion inputs for the streaming endpoint."""
         prompt: OmniTextPrompt = OmniTextPrompt(prompt=request.prompt)
         if request.negative_prompt is not None:
             prompt["negative_prompt"] = request.negative_prompt
 
-        gen_params = self._resolve_default_sampling_params()
         vp = request.resolve_video_params()
         input_image = await self._decode_image_reference(request)
         if input_image is not None:
             prompt["multi_modal_data"] = {"image": input_image}
-
-        if vp.width is not None and vp.height is not None:
-            gen_params.width = vp.width
-            gen_params.height = vp.height
-        if vp.num_frames is not None:
-            gen_params.num_frames = vp.num_frames
-        if vp.fps is not None:
-            gen_params.fps = vp.fps
-            gen_params.frame_rate = float(vp.fps)
-
-        provided_fields = request.model_fields_set
-        if "num_inference_steps" in provided_fields and request.num_inference_steps is not None:
-            gen_params.num_inference_steps = request.num_inference_steps
-        if "quality" in provided_fields:
-            gen_params.quality = request.quality
-        if "guidance_scale" in provided_fields and request.guidance_scale is not None:
-            gen_params.guidance_scale = request.guidance_scale
-        if "guidance_scale_2" in provided_fields and request.guidance_scale_2 is not None:
-            gen_params.guidance_scale_2 = request.guidance_scale_2
-        if "true_cfg_scale" in provided_fields and request.true_cfg_scale is not None:
-            gen_params.true_cfg_scale = request.true_cfg_scale
-        if "seed" in provided_fields and request.seed is not None:
-            gen_params.seed = request.seed
-        if "boundary_ratio" in provided_fields and request.boundary_ratio is not None:
-            gen_params.boundary_ratio = request.boundary_ratio
-        if "flow_shift" in provided_fields and request.flow_shift is not None:
-            gen_params.extra_args["flow_shift"] = request.flow_shift
 
         if request.extra_params is not None:
             if not isinstance(request.extra_params, dict):
@@ -600,10 +570,20 @@ class OmniStreamingVideoOutputHandler:
                     status_code=HTTPStatus.BAD_REQUEST.value,
                     detail="preencode_mp4 is not supported for streaming video sessions.",
                 )
-            gen_params.extra_args.update(request.extra_params)
 
-        self._apply_lora(request.lora, gen_params)
-        return prompt, gen_params, vp
+        lora_request, lora_scale = _parse_lora_request(request.lora)
+        sampling_request = VideoSamplingRequest(
+            request=request,
+            video_params=vp,
+            # The stream encoder always runs at ``vp.fps``, so the model must too.
+            fps=vp.fps,
+            lora_request=lora_request,
+            lora_scale=lora_scale,
+        )
+        sampling_params_list = sampling_request.to_sampling_params_list(
+            self._engine_client.default_sampling_params_list, self._engine_client.default_sampling_kwargs_list
+        )
+        return prompt, sampling_params_list, vp
 
     @staticmethod
     async def _decode_image_reference(request: VideoGenerationRequest) -> Image.Image | None:
@@ -625,34 +605,10 @@ class OmniStreamingVideoOutputHandler:
             )
         return media_data
 
-    def _resolve_default_sampling_params(self) -> OmniDiffusionSamplingParams:
-        default_sampling_params_list = self._engine_client.default_sampling_params_list
-        for params in default_sampling_params_list:
-            if isinstance(params, OmniDiffusionSamplingParams):
-                return copy.deepcopy(params)
-        return OmniDiffusionSamplingParams()
-
-    @staticmethod
-    def _apply_lora(lora_body: Any, gen_params: OmniDiffusionSamplingParams) -> None:
-        try:
-            lora_request, lora_scale = parse_lora_request(lora_body)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST.value,
-                detail=str(e),
-            ) from e
-
-        if lora_request is None:
-            return
-
-        gen_params.lora_request = lora_request
-        if lora_scale is not None:
-            gen_params.lora_scale = lora_scale
-
     async def _iter_generation_outputs(
         self,
         prompt: OmniTextPrompt,
-        gen_params: OmniDiffusionSamplingParams,
+        sampling_params_list: list[OmniSamplingParams | PoolingParams],
         request_id: str,
         progress: _SessionProgress,
     ) -> AsyncGenerator[OmniRequestOutput, None]:
@@ -668,13 +624,6 @@ class OmniStreamingVideoOutputHandler:
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
                 detail="No final video output stage found in video generation pipeline.",
             )
-
-        sampling_params_list = build_stage_sampling_params_list(
-            list(stage_configs),
-            get_default_sampling_params_list(self._engine_client),
-            diffusion_params=gen_params,
-            replace_diffusion_params=True,
-        )
 
         async for output in self._engine_client.generate(
             prompt=prompt,

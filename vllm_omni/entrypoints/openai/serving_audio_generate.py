@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 import asyncio
 
-import torch
 from fastapi import Request
 from fastapi.responses import Response
 from vllm.entrypoints.generate.base.serving import GenerateBaseServing as OpenAIServing
@@ -13,7 +15,6 @@ from vllm_omni.entrypoints.openai.protocol.audio import (
     CreateAudio,
     OpenAICreateAudioGenerateRequest,
 )
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -69,31 +70,9 @@ class OmniOpenAIServingAudioGenerate(OpenAIServing, AudioMixin):
             if request.negative_prompt:
                 prompt["negative_prompt"] = request.negative_prompt
 
-            # Build sampling params for diffusion
-            sampling_params_list = [OmniDiffusionSamplingParams(num_outputs_per_prompt=1)]
-
-            # Create generator if seed provided
-            if request.seed is not None:
-                from vllm_omni.platforms import current_omni_platform
-
-                rng = torch.Generator(device=current_omni_platform.device_type).manual_seed(request.seed)
-                sampling_params_list[0].generator = rng
-
-            if request.guidance_scale is not None:
-                sampling_params_list[0].guidance_scale = request.guidance_scale
-
-            if request.num_inference_steps is not None:
-                sampling_params_list[0].num_inference_steps = request.num_inference_steps
-
-            # Set up audio duration parameters
-            if request.audio_length is not None:
-                audio_length = request.audio_length
-                audio_start = request.audio_start if request.audio_start is not None else 0.0
-                audio_end_in_s = audio_start + audio_length
-                sampling_params_list[0].extra_args = {
-                    "audio_start_in_s": audio_start,
-                    "audio_end_in_s": audio_end_in_s,
-                }
+            sampling_params_list = request.to_sampling_params_list(
+                self.engine_client.default_sampling_params_list, self.engine_client.default_sampling_kwargs_list
+            )
 
             logger.info("Audio generation request %s", request_id)
             _rl = getattr(self, "request_logger", None)

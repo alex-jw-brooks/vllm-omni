@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import copy
 import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -18,28 +17,27 @@ from fastapi import HTTPException
 from PIL import Image
 from vllm.engine.protocol import EngineClient
 from vllm.logger import init_logger
+from vllm.pooling_params import PoolingParams
 
 from vllm_omni.diffusion.data import is_diffusion_request_started_output
 from vllm_omni.diffusion.model_metadata import DiffusionModelMetadata, get_diffusion_model_metadata
 from vllm_omni.diffusion.utils.media_utils import count_mp4_frames, normalize_preencode_batch_frames
 from vllm_omni.entrypoints.async_omni import ABORT_TIMEOUT_S, AsyncOmni
+from vllm_omni.entrypoints.openai.lora import _parse_lora_request
 from vllm_omni.entrypoints.openai.protocol.videos import (
     VideoAction,
     VideoData,
     VideoGenerationRequest,
     VideoGenerationResponse,
 )
-from vllm_omni.entrypoints.openai.stage_params import (
-    build_stage_sampling_params_list,
-    get_default_sampling_params_list,
-)
-from vllm_omni.entrypoints.openai.utils import is_video_generation_pipeline, parse_lora_request
+from vllm_omni.entrypoints.openai.sampling_requests import VideoSamplingRequest
+from vllm_omni.entrypoints.openai.utils import is_video_generation_pipeline
 from vllm_omni.entrypoints.openai.video_api_utils import (
     _encode_video_bytes,
     _PlanarFrameConverter,
     encode_video_base64,
 )
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParams, OmniTextPrompt
 from vllm_omni.metrics import count_video_frames
 from vllm_omni.model_extras import get_video_generation_defaults, should_preserve_reference_image_size
 from vllm_omni.model_extras.video_generation import VideoGenerationDefaults
@@ -294,8 +292,6 @@ class OmniOpenAIServingVideo:
         if request.negative_prompt is not None:
             prompt["negative_prompt"] = request.negative_prompt
 
-        gen_params = self._resolve_default_sampling_params()
-
         input_image = None if reference_image is None else reference_image.data
         input_video = None if reference_video is None else reference_video.data
         if input_image is not None and input_video is not None and not self.supports_mixed_reference_inputs:
@@ -303,7 +299,6 @@ class OmniOpenAIServingVideo:
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail="This diffusion model does not support mixed image and video references.",
             )
-        provided_fields = request.model_fields_set
         fps_provided = self._request_fps_provided(request)
         num_frames_provided = self._request_num_frames_provided(request)
         video_defaults = self._resolve_video_generation_defaults(request)
@@ -321,8 +316,6 @@ class OmniOpenAIServingVideo:
                     status_code=HTTPStatus.BAD_REQUEST.value,
                     detail=(f"This diffusion model requires {video_defaults.num_frames} frames; got {vp.num_frames}."),
                 )
-            if "num_inference_steps" not in provided_fields and gen_params.num_inference_steps is None:
-                gen_params.num_inference_steps = video_defaults.num_inference_steps
 
         # Some native pipelines have a fixed duration. Validate both the
         # OpenAI top-level field and model-specific aliases before dispatching
@@ -383,63 +376,8 @@ class OmniOpenAIServingVideo:
             )
         if multi_modal_data:
             prompt["multi_modal_data"] = multi_modal_data
-        if vp.width is not None and vp.height is not None:
-            gen_params.width = vp.width
-            gen_params.height = vp.height
-        if vp.num_frames is not None:
-            gen_params.num_frames = vp.num_frames
-        gen_params.num_outputs_per_prompt = request.num_outputs_per_prompt
-        if request.seconds is not None:
-            if video_defaults is None or video_defaults.duration_seconds is None:
-                gen_params.extra_args.setdefault("duration", float(request.seconds))
-        if request.aspect_ratio is not None:
-            gen_params.extra_args["aspect_ratio"] = request.aspect_ratio
-        if request.short_edge is not None:
-            gen_params.extra_args["short_edge"] = request.short_edge
-        if request.start_time_seconds is not None:
-            gen_params.extra_args["start_time_seconds"] = request.start_time_seconds
-        # Model-owned defaults are part of the serving contract. Other models
-        # preserve their engine defaults when the user did not provide fps.
-        if (fps_provided or video_defaults is not None) and vp.fps is not None:
-            gen_params.fps = vp.fps
-            gen_params.frame_rate = float(vp.fps)
-        if "enable_frame_interpolation" in provided_fields:
-            gen_params.enable_frame_interpolation = request.enable_frame_interpolation
-        if "frame_interpolation_exp" in provided_fields:
-            gen_params.frame_interpolation_exp = request.frame_interpolation_exp
-        if "frame_interpolation_scale" in provided_fields:
-            gen_params.frame_interpolation_scale = request.frame_interpolation_scale
-        if "frame_interpolation_model_path" in provided_fields:
-            gen_params.frame_interpolation_model_path = request.frame_interpolation_model_path
 
-        if "num_inference_steps" in provided_fields and request.num_inference_steps is not None:
-            gen_params.num_inference_steps = request.num_inference_steps
-        if "quality" in provided_fields:
-            gen_params.quality = request.quality
-        if "guidance_scale" in provided_fields and request.guidance_scale is not None:
-            gen_params.guidance_scale = request.guidance_scale
-        if "guidance_scale_2" in provided_fields and request.guidance_scale_2 is not None:
-            gen_params.guidance_scale_2 = request.guidance_scale_2
-        if "true_cfg_scale" in provided_fields and request.true_cfg_scale is not None:
-            gen_params.true_cfg_scale = request.true_cfg_scale
-        if "seed" in provided_fields and request.seed is not None:
-            gen_params.seed = request.seed
-        if "boundary_ratio" in provided_fields and request.boundary_ratio is not None:
-            gen_params.boundary_ratio = request.boundary_ratio
-
-        logger.info(
-            "Boundary ratio parse: request=%s gen_params=%s",
-            request.boundary_ratio,
-            gen_params.boundary_ratio,
-        )
-        if "flow_shift" in provided_fields and request.flow_shift is not None:
-            gen_params.extra_args["flow_shift"] = request.flow_shift
-        if "generate_sound" in provided_fields:
-            gen_params.extra_args["generate_sound"] = request.generate_sound
-        if "sound_duration" in provided_fields and request.sound_duration is not None:
-            gen_params.extra_args["sound_duration"] = request.sound_duration
-
-        # Apply model-specific extra parameters
+        # Validate model-specific extra parameters
         if request.extra_params is not None:
             if not isinstance(request.extra_params, dict):
                 raise HTTPException(
@@ -451,9 +389,6 @@ class OmniOpenAIServingVideo:
                     normalize_preencode_batch_frames(request.extra_params["preencode_batch_frames"])
                 except ValueError as exc:
                     raise HTTPException(status_code=HTTPStatus.BAD_REQUEST.value, detail=str(exc)) from exc
-            # Merge extra_params into extra_args
-            gen_params.extra_args.update(request.extra_params)
-
             # Redact inline arrays when logging so RoboLab policy requests do
             # not flood the server log with image/state payloads.
             loggable = request.extra_params
@@ -471,19 +406,40 @@ class OmniOpenAIServingVideo:
                 loggable = {**loggable, **redacted}
             logger.info("Applied extra_params: %s", loggable)
 
-        self._apply_lora(request.lora, gen_params)
-
-        logger.info(
-            "Video sampling params: steps=%s guidance=%s guidance_2=%s seed=%s",
-            gen_params.num_inference_steps,
-            gen_params.guidance_scale,
-            gen_params.guidance_scale_2,
-            gen_params.seed,
+        lora_request, lora_scale = _parse_lora_request(request.lora)
+        fixed_duration = video_defaults is not None and video_defaults.duration_seconds is not None
+        sampling_request = VideoSamplingRequest(
+            request=request,
+            video_params=vp,
+            # Model-owned defaults are part of the serving contract. Other models
+            # preserve their engine defaults when the user did not provide fps.
+            fps=vp.fps if fps_provided or video_defaults is not None else None,
+            default_num_inference_steps=None if video_defaults is None else video_defaults.num_inference_steps,
+            duration=None if request.seconds is None or fixed_duration else float(request.seconds),
+            lora_request=lora_request,
+            lora_scale=lora_scale,
+            emit_request_lifecycle=on_started is not None,
         )
-
+        sampling_params_list = sampling_request.to_sampling_params_list(
+            self._engine_client.default_sampling_params_list, self._engine_client.default_sampling_kwargs_list
+        )
+        gen_params = next((p for p in sampling_params_list if isinstance(p, OmniDiffusionSamplingParams)), None)
+        if gen_params is not None:
+            logger.info(
+                "Boundary ratio parse: request=%s gen_params=%s",
+                request.boundary_ratio,
+                gen_params.boundary_ratio,
+            )
+            logger.info(
+                "Video sampling params: steps=%s guidance=%s guidance_2=%s seed=%s",
+                gen_params.num_inference_steps,
+                gen_params.guidance_scale,
+                gen_params.guidance_scale_2,
+                gen_params.seed,
+            )
         result = await self._run_generation(
             prompt,
-            gen_params,
+            sampling_params_list,
             reference_id,
             on_started=on_started,
         )
@@ -656,38 +612,10 @@ class OmniOpenAIServingVideo:
             return False
         return "num_frames" in video_params.model_fields_set and video_params.num_frames is not None
 
-    def _resolve_default_sampling_params(self) -> OmniDiffusionSamplingParams:
-        default_sampling_params_list = getattr(self._engine_client, "default_sampling_params_list", None)
-        if default_sampling_params_list:
-            for params in default_sampling_params_list:
-                if isinstance(params, OmniDiffusionSamplingParams):
-                    # Requests mutate sampling params in-place, including
-                    # nested dict fields like extra_args. Deep-copy the stage
-                    # defaults so one request cannot leak state into another.
-                    return copy.deepcopy(params)
-        return OmniDiffusionSamplingParams()
-
-    @staticmethod
-    def _apply_lora(lora_body: Any, gen_params: OmniDiffusionSamplingParams) -> None:
-        try:
-            lora_request, lora_scale = parse_lora_request(lora_body)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST.value,
-                detail=str(e),
-            ) from e
-
-        if lora_request is None:
-            return
-
-        gen_params.lora_request = lora_request
-        if lora_scale is not None:
-            gen_params.lora_scale = lora_scale
-
     async def _run_generation(
         self,
         prompt: OmniTextPrompt,
-        gen_params: OmniDiffusionSamplingParams,
+        sampling_params_list: list[OmniSamplingParams | PoolingParams],
         request_id: str,
         *,
         on_started: Callable[[], Awaitable[None]] | None = None,
@@ -710,13 +638,6 @@ class OmniOpenAIServingVideo:
 
         # Common generation logic for both paths
         engine_client = cast(AsyncOmni, self._engine_client)
-        gen_params.emit_request_lifecycle = on_started is not None
-        sampling_params_list = build_stage_sampling_params_list(
-            list(stage_configs),
-            get_default_sampling_params_list(engine_client),
-            diffusion_params=gen_params,
-            replace_diffusion_params=True,
-        )
 
         result = None
         started_notified = False

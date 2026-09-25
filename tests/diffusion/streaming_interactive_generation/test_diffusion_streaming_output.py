@@ -27,6 +27,7 @@ from vllm.utils.network_utils import get_open_zmq_ipc_path
 
 import vllm_omni.diffusion.worker.diffusion_model_runner as model_runner_module
 from tests.engine.test_orchestrator import OrchestratorFixture, _build_harness, _wait_for
+from tests.helpers.stage_defaults import stage_defaults
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.inline_stage_diffusion_client import InlineStageDiffusionClient
 from vllm_omni.diffusion.stage_diffusion_client import StageDiffusionClient
@@ -315,14 +316,6 @@ class TestPipelineStreamingOutputToEntrypoint:
             "vllm_omni.entrypoints.openai.serving_video_output_stream.is_video_generation_pipeline",
             return_value=True,
         )
-        mocker.patch(
-            "vllm_omni.entrypoints.openai.serving_video_output_stream.build_stage_sampling_params_list",
-            return_value=[OmniDiffusionSamplingParams()],
-        )
-        mocker.patch(
-            "vllm_omni.entrypoints.openai.serving_video_output_stream.get_default_sampling_params_list",
-            return_value=[OmniDiffusionSamplingParams()],
-        )
 
         handler = OmniStreamingVideoOutputHandler(
             engine_client=omni,
@@ -368,7 +361,9 @@ class TestPipelineStreamingOutputToEntrypoint:
                 )
             ]
             self.stage_configs: list[Any] = [SimpleNamespace(stage_type="diffusion")]
-            self.default_sampling_params_list = [OmniDiffusionSamplingParams()]
+            self.default_sampling_params_list, self.default_sampling_kwargs_list = stage_defaults(
+                (OmniDiffusionSamplingParams, {})
+            )
             self.num_stages = 1
             self.supported_tasks = ("generate",)
             self._alive = True
@@ -461,6 +456,7 @@ class TestPipelineStreamingOutputToEntrypoint:
         omni._compute_final_stage_id = lambda output_modalities: 0
         omni._compute_final_output_stage_ids = lambda output_modalities: [0]
         omni.default_sampling_params_list = engine.default_sampling_params_list
+        omni.default_sampling_kwargs_list = engine.default_sampling_kwargs_list
         omni._log_summary_and_cleanup = lambda request_id: omni.request_states.pop(request_id, None)
         return omni
 

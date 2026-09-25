@@ -24,7 +24,6 @@ from vllm_omni.config.omni_config import (
     VllmOmniDiffusionStageConfig,
 )
 from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import build_prompt_tokens, resolve_stop_token_ids
-from vllm_omni.entrypoints.openai.stage_params import clone_sampling_params
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.model_extras import get_ar_input_builder, get_ar_tokenizer_validator, get_model_class_name
 from vllm_omni.platforms import current_omni_platform
@@ -535,7 +534,7 @@ def test_shared_script_ar_path_reaches_generation(
         num_outputs_per_prompt=1,
     )
     defaults = list(omni.default_sampling_params_list or [])
-    sampling_params_list = [clone_sampling_params(p) for p in defaults]
+    sampling_params_list = [p.clone() for p in defaults]
     for idx, params in enumerate(sampling_params_list):
         if isinstance(params, OmniDiffusionSamplingParams):
             sampling_params_list[idx] = diffusion_params

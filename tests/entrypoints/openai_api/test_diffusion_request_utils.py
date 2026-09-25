@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
 import pytest
 
-from vllm_omni.entrypoints.openai.diffusion_request_utils import (
-    apply_normalized_diffusion_request_extra_args,
-    normalize_diffusion_request_args,
-)
+from tests.helpers.stage_defaults import stage_defaults
+from vllm_omni.entrypoints.openai.diffusion_request_utils import normalize_diffusion_request_args
+from vllm_omni.entrypoints.openai.sampling_requests import DiffusionSamplingRequest
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -40,10 +39,8 @@ def test_normalizer_routes_values_without_erasing_defaults(
     expected: str,
 ) -> None:
     normalized, _ = normalize_diffusion_request_args(**_source_args(source, value))
-    sampling_params = OmniDiffusionSamplingParams(
-        extra_args={"solver": "euler", "stage_default": True},
-    )
-    apply_normalized_diffusion_request_extra_args(sampling_params, normalized)
+    defaults = stage_defaults((OmniDiffusionSamplingParams, {"extra_args": {"solver": "euler", "stage_default": True}}))
+    (sampling_params,) = DiffusionSamplingRequest(extra_args=normalized).to_sampling_params_list(*defaults)
 
     assert sampling_params.extra_args == {"solver": expected, "stage_default": True}
 

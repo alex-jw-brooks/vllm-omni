@@ -16,7 +16,6 @@ from vllm_omni.diffusion.data import logger
 from vllm_omni.diffusion.utils.image_output import extract_images_from_outputs
 from vllm_omni.diffusion.utils.param_utils import apply_declared_extra_args
 from vllm_omni.entrypoints.omni import Omni
-from vllm_omni.entrypoints.openai.stage_params import clone_sampling_params
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.lora.request import LoRARequest
 from vllm_omni.lora.utils import stable_lora_int_id
@@ -712,7 +711,7 @@ def main():
         model_class_name,
     )
     defaults = list(omni.default_sampling_params_list or [])
-    sampling_params_list = [clone_sampling_params(p) for p in defaults]
+    sampling_params_list = [p.clone() for p in defaults]
     if not sampling_params_list:
         sampling_params_list = [diffusion_params]
 
