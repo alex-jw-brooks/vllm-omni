@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 
 from vllm.inputs import PromptType
 from vllm.logger import init_logger
+from vllm.pooling_params import PoolingParams
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.kv_hints import KvHintsEnvelope
 
@@ -283,6 +284,26 @@ class AsyncOmniEngine(OmniEngineBase):
             raise ValueError(
                 f"Missing sampling params for stage 0. Got {len(effective_sampling_params_list)} stage params."
             )
+
+        # Watermarking is currently not supported on pooling stages, so the PoolingParams don't have the attribute.
+        is_pooling = any(isinstance(param, PoolingParams) for param in effective_sampling_params_list)
+        if not is_pooling:
+            # Ensure watermarking is consistent across all stages
+            watermarking = all(params.watermarking for params in effective_sampling_params_list)
+            if any(params.watermarking != watermarking for params in effective_sampling_params_list):
+                logger.warning(
+                    "Request %s has mixed watermarking values across stages; disabling watermarking for all stages.",
+                    request_id,
+                )
+
+            for stage_id, stage_params in enumerate(effective_sampling_params_list):
+                # Normalize inconsistent stages
+                if stage_params.watermarking != watermarking:
+                    # Copy to ensure we don't mutate the stage's default params
+                    stage_params = copy.copy(stage_params)
+                    stage_params.watermarking = watermarking
+                    effective_sampling_params_list[stage_id] = stage_params
+
         params = effective_sampling_params_list[0]
 
         # Keep the original prompt for downstream stages (they need the raw

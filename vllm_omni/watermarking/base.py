@@ -19,6 +19,10 @@ RequestStateT = TypeVar("RequestStateT")
 AudioImplStateT = TypeVar("AudioImplStateT")
 
 
+class WatermarkFailureError(Exception):
+    """Raised when a watermark backend fails."""
+
+
 class Watermarker(ABC, Generic[MediaT, RequestStateT]):
     """Manage shared watermarking resources and per-request state."""
 

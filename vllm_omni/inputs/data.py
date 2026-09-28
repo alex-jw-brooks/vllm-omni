@@ -210,6 +210,9 @@ class OmniDiffusionSamplingParams:
     to manage numerous individual parameters.
     """
 
+    # Whether final outputs should be watermarked (when configured)
+    watermarking: bool = True
+
     # Additional text-related parameters
     max_sequence_length: int | None = None
     prompt_template: dict[str, Any] | None = None
@@ -412,6 +415,7 @@ class OmniDiffusionSamplingParams:
             seed = getattr(params, "seed", None)
             if seed is not None:
                 mapped.setdefault("seed", seed)
+            mapped["watermarking"] = params.watermarking
             return cls(**mapped)
         raise TypeError(
             "Diffusion stage requires OmniDiffusionSamplingParams or vllm.SamplingParams, "
