@@ -1151,7 +1151,16 @@ def _build_extras(
     return extras
 
 
-def resolve_async_chunk_enabled(
+def update_deploy_config_async_chunk_enabled(
+    pipeline: PipelineConfig,
+    deploy: DeployConfig,
+) -> None:
+    """Set the pipeline wide async chunk value & validate it."""
+    deploy.async_chunk = _resolve_pipeline_async_chunk_enabled(pipeline, deploy)
+    validate_stage_async_chunk_edges(pipeline, deploy)
+
+
+def _resolve_pipeline_async_chunk_enabled(
     pipeline: PipelineConfig,
     deploy: DeployConfig,
 ) -> bool:
@@ -1173,19 +1182,24 @@ def resolve_async_chunk_enabled(
 
     has_inter_stage_edges = any(stage.input_sources for stage in pipeline.stages)
     has_next_stage_inps = any(stage.async_chunk_process_next_stage_input_func for stage in pipeline.stages)
+    has_kv_transfer_cfg = any(stage.engine_extras.get("kv_transfer_config") for stage in deploy.stages)
     supports_async_chunk = has_inter_stage_edges and has_next_stage_inps
 
     # If async chunk was set, make sure it's supported if
     # requested; otherwise warn and disable it.
     if deploy.async_chunk is not None:
-        if deploy.async_chunk and not supports_async_chunk:
-            logger.warning(
-                "Deploy config set async_chunk=True, but the pipeline config does not support it; it will be disabled."
-            )
-            return False
+        if deploy.async_chunk:
+            if not supports_async_chunk:
+                logger.warning(
+                    "Deploy config set async_chunk=True, but the pipeline config does not support it; disabling it."
+                )
+                return False
+            if has_kv_transfer_cfg:
+                logger.warning("Native AR-to-DiT KV transfer requires async_chunk=False; async chunk will be disabled.")
+                return False
         return deploy.async_chunk
 
-    return supports_async_chunk
+    return supports_async_chunk and not has_kv_transfer_cfg
 
 
 def validate_stage_async_chunk_edges(pipeline: PipelineConfig, deploy: DeployConfig) -> None:
@@ -1206,27 +1220,6 @@ def validate_stage_async_chunk_edges(pipeline: PipelineConfig, deploy: DeployCon
                 )
 
 
-def validate_async_chunk(pipeline: PipelineConfig, deploy: DeployConfig) -> None:
-    has_inter_stage_edges = any(stage.input_sources for stage in pipeline.stages)
-    if deploy.async_chunk and any(stage.engine_extras.get("kv_transfer_config") for stage in deploy.stages):
-        raise ValueError("Native AR-to-DiT KV transfer requires async_chunk=False.")
-    if (
-        deploy.async_chunk
-        and has_inter_stage_edges
-        and not any(stage.async_chunk_process_next_stage_input_func for stage in pipeline.stages)
-    ):
-        raise ValueError(
-            f"Pipeline {pipeline.model_type!r} has async_chunk=True in deploy but no stage "
-            "declares a dedicated async-chunk next-stage processor "
-            "(``async_chunk_process_next_stage_input_func``). "
-            "Either set async_chunk=False or implement an async-chunk producer on the pipeline."
-        )
-
-    # Additionally check stage resolved async chunk settings
-    # since now individual stages can opt out of async chunk
-    validate_stage_async_chunk_edges(pipeline, deploy)
-
-
 def merge_pipeline_deploy(
     pipeline: PipelineConfig,
     deploy: DeployConfig,
@@ -1239,8 +1232,7 @@ def merge_pipeline_deploy(
     # to this point. We are in the process of better organizing the creation of the
     # DeployConfig/PipelineConfig, and this path will be removed with the incorporation
     # of the OmniConfig.
-    deploy.async_chunk = resolve_async_chunk_enabled(pipeline, deploy)
-    validate_async_chunk(pipeline, deploy)
+    update_deploy_config_async_chunk_enabled(pipeline, deploy)
 
     result: list[StageConfig] = []
     for ps in pipeline.stages:

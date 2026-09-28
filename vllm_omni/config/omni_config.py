@@ -62,6 +62,7 @@ from vllm_omni.config.stage_config import (
     validate_stage_async_chunk_edges,
     validate_async_chunk,
     resolve_async_chunk_enabled,
+    update_deploy_config_async_chunk_enabled,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 
@@ -2244,7 +2245,7 @@ class VllmOmniConfig:
         if strategy_specs:
             from vllm_omni.config.composable_parallel import apply_strategy_specs
 
-            strategy_stages = merge_pipeline_deploy(pipeline_cfg, copy.deepcopy(deploy), {})
+            strategy_stages = merge_pipeline_deploy(pipeline_cfg, copy.deepcopy(deploy))
             strategy_result = apply_strategy_specs(strategy_stages, strategy_specs)
             strategy_overrides: dict[str, Any] = {}
             axis_fields = {
@@ -2296,8 +2297,7 @@ class VllmOmniConfig:
                 cli_overrides["omni_lb_policy"] = strategy_result.omni_lb_policy
 
         deploy_by_id = {stage.stage_id: stage for stage in deploy.stages}
-        deploy.async_chunk = resolve_async_chunk_enabled(pipeline_cfg, deploy)
-        validate_async_chunk(pipeline_cfg, deploy)
+        update_deploy_config_async_chunk_enabled(pipeline_cfg, deploy)
         model = cli_overrides.get("model")
 
         stage_configs = tuple(

@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
+import logging
 import warnings
 from dataclasses import fields, replace
-import logging
 from inspect import Parameter, signature
 from multiprocessing.reduction import ForkingPickler
 from pathlib import Path
@@ -55,6 +55,7 @@ from vllm_omni.config.stage_config import (
     load_deploy_config,
     merge_pipeline_deploy,
     resolve_deploy_yaml,
+    update_deploy_config_async_chunk_enabled,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.engine.stage_engine_startup import _serialize_stage_config
@@ -65,22 +66,27 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 _DEPLOY_DIR = Path(__file__).parents[2] / "vllm_omni" / "deploy"
 
 
-@pytest.mark.parametrize("async_chunk", [False, True])
-def test_native_kv_transfer_requires_completed_ar_stage(async_chunk):
-    from types import SimpleNamespace
-
-    pipeline = SimpleNamespace(stages=(), model_type="test")
+@pytest.mark.parametrize("async_chunk", [None, False, True])
+def test_native_kv_transfer_disables_async_chunk(async_chunk):
+    """Ensure that a multistage pipeline that supports async chunk disables it if we have a kv transfer config."""
+    pipeline = PipelineConfig(
+        model_type="test",
+        stages=(
+            # async_chunk_process_next_stage_input_func doesn't matter, it just needs to exist for this test.
+            StagePipelineConfig(stage_id=0, model_stage="ar", async_chunk_process_next_stage_input_func="foo.bar"),
+            StagePipelineConfig(stage_id=1, model_stage="dit", input_sources=(0,), final_output=True),
+        ),
+    )
+    kv_transfer_config = {"kv_connector": "MooncakeConnector"}
     deploy = DeployConfig(
         async_chunk=async_chunk,
         stages=[
-            StageDeployConfig(stage_id=0, engine_extras={"kv_transfer_config": {"kv_connector": "MooncakeConnector"}})
+            StageDeployConfig(stage_id=0, engine_extras={"kv_transfer_config": kv_transfer_config}),
+            StageDeployConfig(stage_id=1, engine_extras={"kv_transfer_config": kv_transfer_config}),
         ],
     )
-    if async_chunk:
-        with pytest.raises(ValueError, match="requires async_chunk=False"):
-            omni_config_module._validate_async_chunk_support(pipeline, deploy)
-    else:
-        omni_config_module._validate_async_chunk_support(pipeline, deploy)
+    update_deploy_config_async_chunk_enabled(pipeline, deploy)
+    assert not deploy.async_chunk
 
 
 @pytest.fixture(autouse=True)
