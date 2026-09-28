@@ -3,12 +3,16 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 import soundfile
 import torch
 from vllm.utils.import_utils import PlaceholderModule
 
+from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.outputs.output_modality import OutputModalityNames
 from vllm_omni.watermarking import AudioSealWatermarker, AudioTensor, AudioWatermarkerBase, audio_seal
+from vllm_omni.watermarking.utils import watermark_outputs, watermark_payload
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 TEST_SAMPLE_RATE = 16_000
@@ -80,6 +84,37 @@ def test_audio_output_requires_integer_sample_rate(bad_sampling_rate: object) ->
 
     with pytest.raises(TypeError, match="integer 'sr'"):
         watermarker.watermark_output("request", torch.zeros(100), {"sr": bad_sampling_rate})
+
+
+def test_watermark_payload_preserves_numpy_audio_output() -> None:
+    watermarker = _RecordingAudioWatermarker()
+    samples = np.zeros(100, dtype=np.float32)
+    payload: dict[str, object] = {"audio": samples, "audio_sample_rate": TEST_SAMPLE_RATE}
+
+    try:
+        watermark_payload("request", OutputModalityNames.AUDIO, watermarker, payload)
+    finally:
+        watermarker.close()
+
+    output = payload["audio"]
+    assert isinstance(output, np.ndarray)
+    assert output.shape == samples.shape
+
+
+def test_watermark_outputs_handles_diffusion_audio() -> None:
+    watermarker = _RecordingAudioWatermarker()
+    samples = np.zeros(100, dtype=np.float32)
+    output = OmniRequestOutput.from_diffusion(
+        request_id="request",
+        images=[],
+        multimodal_output={"audio": samples, "audio_sample_rate": TEST_SAMPLE_RATE},
+        final_output_type="audio",
+    )
+
+    watermark_outputs([output], {"audio": watermarker})
+
+    assert isinstance(output.multimodal_output["audio"], np.ndarray)
+    assert watermarker.to_wm_shapes == [torch.Size((1, 1, 100))]
 
 
 def test_missing_audioseal_names_install_extra(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -12,6 +12,7 @@ from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine, StageRuntimeInfo
 from vllm_omni.engine.serialization import deserialize_additional_information
 from vllm_omni.engine.stage_pool import StagePool
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.model_executor.stage_input_processors.bagel import ExpandedPrompt
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -126,6 +127,35 @@ def _make_engine_core_request(request_id: str = "req-1") -> EngineCoreRequest:
         lora_request=None,
         cache_salt=None,
         data_parallel_rank=None,
+    )
+
+
+def test_build_add_request_message_normalizes_watermark_opt_out(mocker: MockerFixture):
+    """Ensure disabling watermark is handled consistently across multistage pipelines."""
+    engine = object.__new__(AsyncOmniEngine)
+    engine.stage_metadata = [
+        StageRuntimeInfo(final_output=False, final_output_type=None, stage_type="llm"),
+        StageRuntimeInfo(final_output=True, final_output_type="audio", stage_type="diffusion"),
+    ]
+    params = [SamplingParams(watermarking=False), OmniDiffusionSamplingParams(watermarking=True)]
+    warning = mocker.patch("vllm_omni.engine.async_omni_engine.logger.warning")
+
+    msg = engine._build_add_request_message(
+        request_id="req-1",
+        prompt=_make_engine_core_request(),
+        sampling_params_list=params,
+        final_stage_id=1,
+    )
+
+    # Since we disabled watermarking on one stage, all stages should disabled watermark, but the
+    # original request params should not be mutated, since doing so could mutate model default
+    # sampling params and leak into future requests.
+    assert all(not stage_params.watermarking for stage_params in msg.sampling_params_list)
+    assert [stage_params.watermarking for stage_params in params] == [False, True]
+    # We should also get a warning for using mixed watermarking values.
+    warning.assert_called_once_with(
+        "Request %s has mixed watermarking values across stages; disabling watermarking for all stages.",
+        "req-1",
     )
 
 
