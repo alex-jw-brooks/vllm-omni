@@ -58,11 +58,8 @@ from vllm_omni.config.stage_config import (
     reconcile_diffusion_attention_overrides,
     resolve_stage_async_chunk,
     resolve_stage_model_runner,
-    validate_native_mrv2_session,
-    validate_stage_async_chunk_edges,
-    validate_async_chunk,
-    resolve_async_chunk_enabled,
     update_deploy_config_async_chunk_enabled,
+    validate_native_mrv2_session,
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 
