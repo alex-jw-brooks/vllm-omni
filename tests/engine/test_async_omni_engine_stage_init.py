@@ -157,7 +157,7 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
         config_path="dummy-config",
         stage_init_timeout=1,
         async_chunk=False,
-        watermark_config=WatermarkConfig({"audio": {"algorithm": "audioseal"}}),
+        watermark_config=WatermarkConfig({"audio": {"algorithm": "audioseal"}}, strict=True),
     )
     if stage_type == "llm":
         config = types.SimpleNamespace(model_config=types.SimpleNamespace(skip_tokenizer_init=True))
@@ -179,6 +179,7 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
     assert len(runtime.stage_pools) == 1
     constructor.assert_called_once_with()
     assert runtime.stage_pools[0]._watermarkers == {"audio": watermarker}
+    assert runtime.stage_pools[0]._strict_watermarking
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):

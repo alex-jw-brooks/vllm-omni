@@ -119,7 +119,7 @@ class StagePool:
             return watermarkers
 
         for modality, watermarker_types in cls._watermarker_registry.items():
-            config = watermark_config.modality_configs.get(modality)
+            config = watermark_config.modalities.get(modality)
             if config is not None and modality == final_output_type:
                 # Algorithm already validated by WatermarkConfig, no need to do it again here
                 watermarkers[modality] = watermarker_types[cast(str, config[ALGORITHM_KEY])]()
@@ -154,6 +154,7 @@ class StagePool:
         output_processor: Any = None,
         stage_vllm_config: Any = None,
         watermarkers: Mapping[str, Watermarker] | None = None,
+        strict_watermarking: bool = False,
     ) -> None:
         if isinstance(clients, list):
             normalized_clients: list[StagePoolClient] = list(clients)
@@ -172,6 +173,7 @@ class StagePool:
             getattr(getattr(stage_vllm_config, "model_config", None), "async_chunk", False)
         )
         self._watermarkers = watermarkers if watermarkers is not None else {}
+        self._strict_watermarking = strict_watermarking
         self._watermark_lock = asyncio.Lock()
         self._next_replica_id = 0
         self._request_bindings: dict[str, int] = {}
@@ -1232,7 +1234,7 @@ class StagePool:
             return []
         client = cast(StagePoolLLMClient, raw_client)
         processor = self.output_processor
-        await self._process_watermark_outputs(raw_outputs.outputs)
+        watermark_failed_request_ids = await self._process_watermark_outputs(raw_outputs.outputs)
         processed = processor.process_outputs(
             raw_outputs.outputs,
             raw_outputs.timestamp,
@@ -1254,6 +1256,14 @@ class StagePool:
         if raw_outputs.scheduler_stats is not None:
             processor.update_scheduler_stats(raw_outputs.scheduler_stats)
 
+        if watermark_failed_request_ids:
+            # Replace outputs that could not be watermarked with terminal errors
+            request_outputs = [
+                output for output in processed.request_outputs if output.request_id not in watermark_failed_request_ids
+            ]
+            return request_outputs + [
+                self._watermark_error_output(request_id) for request_id in watermark_failed_request_ids
+            ]
         return processed.request_outputs
 
     async def poll_llm_raw_output(
@@ -1316,22 +1326,35 @@ class StagePool:
             raise RuntimeError(f"Missing watermarking state for active request {request_id}")
         return False
 
-    async def _process_watermark_outputs(self, outputs: list[Any]) -> None:
-        """Watermark outputs off-loop while serializing state access."""
+    async def _process_watermark_outputs(self, outputs: list[Any]) -> set[str]:
+        """Watermark outputs off-loop while serializing state access.
+
+        Returns the request ids that must fail because their outputs could not be
+        watermarked in strict mode. If we aren't running in strict mode, return the
+        empty set, since we'll just keep the unwatermarked outputs.
+        """
+        watermark_failed_request_ids: set[str] = set()
         if self._watermarkers and (
             outputs := [output for output in outputs if self._should_watermark(output.request_id)]
         ):
             async with self._watermark_lock:
                 worker = asyncio.create_task(asyncio.to_thread(watermark_outputs, outputs, self._watermarkers))
                 try:
-                    await asyncio.shield(worker)
+                    watermark_failed_request_ids = await asyncio.shield(worker)
                 except asyncio.CancelledError:
                     await worker
                     raise
+        return watermark_failed_request_ids if self._strict_watermarking else set()
+
+    @staticmethod
+    def _watermark_error_output(request_id: str) -> OmniRequestOutput:
+        """Build the terminal error output for a request that failed strict watermarking."""
+        return OmniRequestOutput.from_error(request_id, "Failed to watermark output")
 
     async def process_diffusion_output(self, output: OmniRequestOutput) -> OmniRequestOutput:
         """Watermark one diffusion output without blocking the event loop."""
-        await self._process_watermark_outputs([output])
+        if await self._process_watermark_outputs([output]):
+            return self._watermark_error_output(output.request_id)
         return output
 
     def _discard_watermark_state(self, request_ids: list[str]) -> None:

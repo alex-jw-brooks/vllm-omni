@@ -66,14 +66,14 @@ def _resolved(*stages: SimpleNamespace) -> OmniConfigResolution:
     return OmniConfigResolution(config_path="/fake/stages.yaml", stage_configs=tuple(stages))
 
 
-def test_serve_parser_accepts_modality_keyed_watermark_config() -> None:
-    """Ensure the CLI parses Omni's modality-keyed watermark config."""
+def test_serve_parser_accepts_nested_watermark_config() -> None:
+    """Ensure the CLI parses Omni's nested watermark config."""
     parser = TrackingArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand")
     OmniServeCommand().subparser_init(subparsers)
 
     args = parser.parse_args(
-        ["serve", "fake-model", "--omni", "--watermark-config", '{"audio":{"algorithm":"audioseal"}}']
+        ["serve", "fake-model", "--omni", "--watermark-config", '{"modalities":{"audio":{"algorithm":"audioseal"}}}']
     )
 
     assert args.watermark_config == WatermarkConfig({"audio": {"algorithm": "audioseal"}})
@@ -92,27 +92,53 @@ def test_watermark_config_collision_uses_omni_validation(capsys: pytest.CaptureF
         help="test",
     )
 
-    args = parser.parse_args(["--watermark-config", '{"audio":{"algorithm":"audioseal"}}'])
+    args = parser.parse_args(["--watermark-config", '{"modalities":{"audio":{"algorithm":"audioseal"}}}'])
     assert args.watermark_config == WatermarkConfig({"audio": {"algorithm": "audioseal"}})
     assert args.get_explicit_kwargs_dict()["watermark_config"] == args.watermark_config
 
     with pytest.raises(SystemExit):
         parser.parse_args(["--watermark-config", '{"algorithm":"gumbel","key":123}'])
     error = capsys.readouterr().err
-    assert '{"<modality>": {"algorithm": "<algorithm>"}}' in error
+    assert "configured per modality" in error
 
 
-@pytest.mark.parametrize("value", ['{"audio": null}', '{"audio": "audioseal"}'])
+@pytest.mark.parametrize(
+    "value",
+    ['{"modalities": {"audio": null}}', '{"modalities": {"audio": "audioseal"}}', '{"modalities": []}'],
+)
 def test_watermark_config_requires_modality_config_object(value: str) -> None:
     """Ensure a modality value uses the nested config shape."""
     with pytest.raises(argparse.ArgumentTypeError):
         _parse_watermark_config(value)
 
 
+def test_serve_parser_accepts_strict_watermark_config() -> None:
+    """Ensure strict mode is a global watermark setting."""
+    config = _parse_watermark_config('{"strict": true, "modalities": {"audio": {"algorithm": "audioseal"}}}')
+
+    assert config == WatermarkConfig({"audio": {"algorithm": "audioseal"}}, strict=True)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        # Modality settings placed at the top level point at the nested shape
+        ('{"algorithm": "audioseal"}', "configured per modality"),
+        ('{"audio": {"algorithm": "audioseal"}}', "configured per modality"),
+        ('{"stirct": true, "modalities": {}}', "Unexpected keyword argument"),
+        ('{"strict": "maybe", "modalities": {}}', "Input should be a valid boolean"),
+    ],
+)
+def test_watermark_config_rejects_invalid_top_level(value: str, message: str) -> None:
+    """Ensure invalid top-level watermark configs explain the expected shape."""
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        _parse_watermark_config(value)
+
+
 def test_watermark_config_lists_registry_algorithms() -> None:
     """Ensure invalid algorithms report the modality's registered choices."""
     with pytest.raises(argparse.ArgumentTypeError, match="unsupported watermark algorithm"):
-        _parse_watermark_config('{"audio": {"algorithm": "unknown"}}')
+        _parse_watermark_config('{"modalities": {"audio": {"algorithm": "unknown"}}}')
 
 
 def test_omni_rejects_untyped_watermark_config() -> None:
