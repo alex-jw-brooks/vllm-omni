@@ -179,6 +179,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         # vLLM run with no talker stage downstream, so no one consumes captured
         # thinker layers and the forward must return what stock vLLM expects.
         self.is_staged_run = getattr(vllm_config.model_config, "model_stage", None) is not None
+        self._returns_tuple = self.model_stage == "thinker" and self.is_staged_run
 
         if self.model_stage == "thinker":
             self.use_async_omni_output = True
@@ -1024,7 +1025,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         target_len = thinker_result_ids.shape[-1]
         im_start_indexes = torch.cat(
             (
-                torch.nonzero(input_ids[0] == self.config.im_start_token_id).squeeze(),
+                torch.nonzero(input_ids[0] == self.config.im_start_token_id).squeeze(-1),
                 torch.tensor([target_len], device=input_ids.device, dtype=input_ids.dtype),
             ),
             dim=-1,
