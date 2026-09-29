@@ -131,36 +131,27 @@ def _watermark_output(
         raise TypeError(f"[watermark] unsupported output type: {type(output).__name__}")
 
 
-def _handle_watermark_failure(
-    output: object,
-    watermarkers: Mapping[str, Watermarker],
-    error: WatermarkFailureError,
-    is_strict: bool,
-) -> None:
-    """Handle watermark failures by discarding any active state for this request,
-    e.g., streaming buffers. If we're operating in strict mode, reraise the error.
-    Otherwise log at error level.
+def _handle_watermark_failure(request_id: str, watermarkers: Mapping[str, Watermarker]) -> None:
+    """Log a watermark failure and discard any active state for this request.
+
+    NOTE: Whether it's strict / not strict doesn't matter here, since we don't handle it in utils.
     """
-    request_id = getattr(output, "request_id", "unknown")
     for watermarker in watermarkers.values():
         watermarker.discard_request_state(request_id)
-    modalities = ", ".join(watermarkers)
-    message = f"Failed to watermark {modalities} output for request {request_id}"
-    if is_strict:
-        raise WatermarkFailureError(message) from error
-    logger.exception(message)
+    logger.exception("Failed to watermark %s output for request %s", ", ".join(watermarkers), request_id)
 
 
 def watermark_outputs(
-    outputs: Sequence[object],
+    outputs: Sequence[OmniEngineCoreOutput | RequestOutput],
     watermarkers: Mapping[str, Watermarker],
-    is_strict: bool = False,
-) -> Sequence[object]:
-    """Watermark outputs in place, preserving backend failures unless strict."""
+) -> set[str]:
+    """Watermark outputs in place; returns the request ids whose outputs failed watermarking."""
+    watermark_failed_request_ids: set[str] = set()
     for output in outputs:
         try:
             # TODO: Ensure failure behavior is correct for when we are handling multiple modalities
             _watermark_output(output, watermarkers)
-        except WatermarkFailureError as error:
-            _handle_watermark_failure(output, watermarkers, error, is_strict)
-    return outputs
+        except WatermarkFailureError:
+            _handle_watermark_failure(output.request_id, watermarkers)
+            watermark_failed_request_ids.add(output.request_id)
+    return watermark_failed_request_ids
