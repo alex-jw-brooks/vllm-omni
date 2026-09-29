@@ -2,28 +2,43 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import field
+
+from pydantic import TypeAdapter
+from vllm.config.utils import config
 
 from vllm_omni.watermarking import WATERMARKER_REGISTRY
 
 ALGORITHM_KEY = "algorithm"
+WATERMARK_CONFIG_EXAMPLE = '{"strict": false, "modalities": {"<modality>": {"algorithm": "<algorithm>"}}}'
 
 
-@dataclass
+@config
 class WatermarkConfig:
-    modality_configs: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    modalities: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    # If true, fails requests whose outputs can't be watermarked in post. Note that
+    # this is only for multimodal outputs, since text watermarking happens at sampling
+    # time.
+    strict: bool = False
+
+    @classmethod
+    def from_dict(cls, raw_config: Mapping[str, object]) -> "WatermarkConfig":
+        """Build a config from its JSON form, rejecting misplaced modality keys."""
+        # Check for common errors, e.g., not nesting by modality, since this is what vLLM does
+        has_misplaced_modality_config = ALGORITHM_KEY in raw_config or any(
+            modality in raw_config for modality in WATERMARKER_REGISTRY
+        )
+        if has_misplaced_modality_config:
+            raise ValueError(f"watermark algorithms are configured per modality; expected {WATERMARK_CONFIG_EXAMPLE}")
+        return TypeAdapter(cls).validate_python(raw_config)
 
     def __post_init__(self) -> None:
-        for modality, config in self.modality_configs.items():
-            if not isinstance(modality, str):
-                raise ValueError(f"watermark modality must be a string, got {type(modality).__name__}")
+        for modality, modality_config in self.modalities.items():
             registered_algorithms = WATERMARKER_REGISTRY.get(modality)
             if registered_algorithms is None:
                 supported_modalities = ", ".join(sorted(WATERMARKER_REGISTRY))
                 raise ValueError(f"unsupported watermark modality {modality}; supported: {supported_modalities}")
-            if not isinstance(config, Mapping):
-                raise ValueError(f"watermark config for {modality} must be an object")
-            algorithm = config.get(ALGORITHM_KEY)
+            algorithm = modality_config.get(ALGORITHM_KEY)
             if not isinstance(algorithm, str) or algorithm not in registered_algorithms:
                 valid_algorithms = ", ".join(sorted(registered_algorithms))
                 raise ValueError(

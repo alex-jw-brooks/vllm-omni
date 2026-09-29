@@ -117,6 +117,24 @@ def test_watermark_outputs_handles_diffusion_audio() -> None:
     assert watermarker.to_wm_shapes == [torch.Size((1, 1, 100))]
 
 
+def test_watermark_outputs_reports_failed_requests() -> None:
+    """Ensure failed watermarking on requests are returned by ID."""
+    watermarker = _RecordingAudioWatermarker()
+    # Create two requests, where one is valid, but the other isn't since it has no sampling rate
+    outputs = [
+        OmniRequestOutput.from_diffusion(
+            request_id=request_id,
+            images=[],
+            multimodal_output={"audio": np.zeros(100, dtype=np.float32), "audio_sample_rate": sample_rate},
+            final_output_type="audio",
+        )
+        for request_id, sample_rate in (("bad", None), ("good", TEST_SAMPLE_RATE))
+    ]
+
+    assert watermark_outputs(outputs, {"audio": watermarker}) == {"bad"}
+    assert watermarker.to_wm_shapes == [torch.Size((1, 1, 100))]
+
+
 def test_missing_audioseal_names_install_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure missing AudioSeal reports the required install extra."""
     monkeypatch.setattr(audio_seal, "loader", PlaceholderModule("audioseal"))

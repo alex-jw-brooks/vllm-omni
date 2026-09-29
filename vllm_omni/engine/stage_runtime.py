@@ -1341,6 +1341,7 @@ class StageRuntime:
                     output_processor=output_processor,
                     stage_vllm_config=stage_vllm_config,
                     watermarkers=watermarkers,
+                    strict_watermarking=self._watermark_config is not None and self._watermark_config.strict,
                 )
             )
 

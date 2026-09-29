@@ -27,7 +27,7 @@ from vllm.entrypoints.serve.utils.api_utils import VLLM_SUBCMD_PARSER_EPILOG
 from vllm.logger import init_logger
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
-from vllm_omni.config.watermarking import ALGORITHM_KEY, WatermarkConfig
+from vllm_omni.config.watermarking import WATERMARK_CONFIG_EXAMPLE, WatermarkConfig
 from vllm_omni.diffusion.registry import resolve_native_single_file
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import (
@@ -36,7 +36,6 @@ from vllm_omni.entrypoints.openai.api_server import (
 )
 from vllm_omni.entrypoints.utils import parse_stage_overrides, prepare_stage_config_inputs
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser, TrackingNamespace
-from vllm_omni.watermarking import WATERMARKER_REGISTRY
 
 if TYPE_CHECKING:
     from vllm.v1.utils import APIServerProcessManager
@@ -64,9 +63,7 @@ Search by using: `--help=<ConfigGroup>` to explore options by section (e.g.,
   Use `--help=all` to show all available flags at once.
 """
 
-_WATERMARK_CONFIG_HELP = (
-    'Modality-keyed JSON watermark configuration. Example: {"<modality>": {"algorithm": "<algorithm>"}}.'
-)
+_WATERMARK_CONFIG_HELP = f"JSON watermark configuration. Example: {WATERMARK_CONFIG_EXAMPLE}."
 
 
 def _parse_stage_overrides(value: str) -> dict[str, dict[str, Any]]:
@@ -102,17 +99,15 @@ def _json_object(value: str) -> dict[str, object]:
 
 
 def _parse_watermark_config(value: str) -> WatermarkConfig:
-    """Parse a modality-keyed watermark config from the CLI."""
+    """Parse a watermark config from the CLI."""
     try:
         config = json.loads(value)
     except json.JSONDecodeError as exc:
         raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP) from exc
     if not isinstance(config, Mapping):
         raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP)
-    if ALGORITHM_KEY in config and not WATERMARKER_REGISTRY.keys() & config.keys():
-        raise argparse.ArgumentTypeError(_WATERMARK_CONFIG_HELP)
     try:
-        return WatermarkConfig(config)
+        return WatermarkConfig.from_dict(config)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
