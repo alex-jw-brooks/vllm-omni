@@ -38,7 +38,7 @@ def watermark_media(
     """
     try:
         # NOTE: This is to avoid double watermarking on cumulative semantics.
-        if modality is OutputModalityNames.AUDIO and isinstance(data, list):
+        if modality == OutputModalityNames.AUDIO and isinstance(data, list):
             raise TypeError("audio chunk lists must be watermarked per chunk before accumulation")
         converter = MEDIA_CONVERTERS[modality]
         tensor = media_to_tensor(data, converter.to_tensor)
@@ -60,7 +60,7 @@ def watermark_payload(
     if data is None or isinstance(data, list) and not data:
         return
     metadata: Mapping[str, object] = payload
-    if modality is OutputModalityNames.AUDIO and payload.get("sr") is None:
+    if modality == OutputModalityNames.AUDIO and payload.get("sr") is None:
         metadata = {"sr": payload.get("audio_sample_rate")}
     result = watermark_media(request_id, modality, watermarker, data, metadata)
     if not isinstance(payload, MultimodalPayload):

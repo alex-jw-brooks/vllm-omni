@@ -929,6 +929,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                     arrival_time=request_timestamp,
                     lora_request=lora_request,
                     entry_stage_id=entry_stage_id,
+                    watermarking=request.watermarking,
                 )
 
                 generators.append(generator)

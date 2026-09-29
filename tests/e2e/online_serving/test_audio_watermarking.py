@@ -46,13 +46,15 @@ def audio_watermarker() -> Generator[AudioSealWatermarker, None, None]:
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_server", SERVER_PARAMS, indirect=True)
 @pytest.mark.parametrize("stream", [False, True], ids=["without stream", "with stream"])
-def test_tts_audio_is_watermarked(
+@pytest.mark.parametrize("watermarking", [True, False], ids=["watermarked", "opted out"])
+def test_tts_audio_watermarking(
     omni_server,
     online_client,
     audio_watermarker: AudioSealWatermarker,
     stream: bool,
+    watermarking: bool,
 ) -> None:
-    """Ensure generated non-streaming and streaming TTS audio is watermarked."""
+    """Ensure TTS audio is watermarked unless the request opts out, with and without streaming."""
     payload = {
         "model": omni_server.model,
         "input": "Hello, this is a short watermark test.",
@@ -61,6 +63,7 @@ def test_tts_audio_is_watermarked(
         "voice": "vivian",
         "max_new_tokens": 64,
         "stream": stream,
+        "watermarking": watermarking,
     }
     if stream:
         payload["stream_format"] = "audio"
@@ -77,4 +80,4 @@ def test_tts_audio_is_watermarked(
     audio, sample_rate = soundfile.read(BytesIO(content), dtype="float32", always_2d=True)
     samples = torch.from_numpy(audio.T.copy()).unsqueeze(0)
 
-    assert audio_watermarker.is_watermarked(AudioTensor(samples, sample_rate))
+    assert audio_watermarker.is_watermarked(AudioTensor(samples, sample_rate)) is watermarking
