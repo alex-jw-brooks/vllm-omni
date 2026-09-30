@@ -63,7 +63,6 @@ from vllm_omni.config.stage_config import (
 )
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.quantization.factory import (
-    build_quantization_config,
     get_stage_quantization_config,
 )
 
@@ -921,7 +920,7 @@ class _DiffusionConfigProjection:
         # needed by dataclass/config serialization across process boundaries.
         # Reject unknown fields before dropping None values, so a stray key still
         # surfaces when its value is None instead of being silently discarded.
-        valid_fields = {config_field.name for config_field in fields(cls)}
+        valid_fields = {config_field.name for config_field in fields(cast(Any, cls))}
         validate_omni_diffusion_kwargs(normalized, valid_fields)
         parse_diffusion_offload_config(normalized.get("diffusion_offload_config"))
         return cls(**{name: value for name, value in normalized.items() if name in valid_fields and value is not None})
@@ -981,8 +980,6 @@ class _DiffusionConfigProjection:
             self.video_output_transport = VideoOutputTransportConfig(**dict(self.video_output_transport))
         elif not isinstance(self.video_output_transport, VideoOutputTransportConfig):
             raise TypeError("video_output_transport must be a VideoOutputTransportConfig or mapping")
-
-        self.quantization_config = build_quantization_config(self.quantization_config, is_diffusion=True)
 
         if self.diffusion_attention_config is None or isinstance(
             self.diffusion_attention_config,
