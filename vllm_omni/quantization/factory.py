@@ -18,7 +18,8 @@ from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_text_config
 from vllm.transformers_utils.repo_utils import file_or_path_exists, get_hf_file_to_dict
 
-from vllm_omni.config.model import OmniModelArchConfigConvertor
+from vllm_omni.quantization.mxfp4_config import DiffusionMXFP4Config
+from vllm_omni.quantization.mxfp8_config import DiffusionMXFP8Config
 from vllm_omni.utils.model_source import materialize_object_storage_configs
 
 
@@ -117,6 +118,24 @@ def set_quantization_method(spec: dict[str, Any], method: str) -> None:
     spec.setdefault(QUANT_METHOD_KEY, method)
 
 
+# NOTE: this is needed for now because diffusion "mxfp4" / "mxfp8" are not the same as vLLM's,
+# so we need to consider the stage type to get the correct config. In the future, these names
+# should be deprecated and removed. Do not add anything new to this; instead register the configs
+# as OOT configs in vLLM.
+_DIFFUSION_QUANTIZATION_CONFIGS: dict[str, type[QuantizationConfig]] = {
+    "mxfp4": DiffusionMXFP4Config,
+    "mxfp8": DiffusionMXFP8Config,
+}
+
+
+def _get_quantization_config_cls(method: str, is_diffusion: bool) -> type[QuantizationConfig]:
+    """Resolve a method name to the corresponding config class."""
+    if is_diffusion and method in _DIFFUSION_QUANTIZATION_CONFIGS:
+        return _DIFFUSION_QUANTIZATION_CONFIGS[method]
+
+    return get_quantization_config(method)
+
+
 def register_omni_quantization_configs() -> None:
     """Import omni quant config modules so their @register_quantization_config
     decorators fire. This ensures that Omni's quantization definitions are registered
@@ -157,6 +176,11 @@ _QUANT_METHOD_ALIASES = {"auto-round": "inc", "auto_round": "inc"}
 
 _GENERIC_FP8_NAMES = frozenset({"fp8"})
 _GENERIC_NVFP4_NAMES = frozenset({"fp4", "nvfp4", "modelopt_fp4"})
+# Generic method names that adopt a serialized ModelOpt checkpoint of the matching family.
+_MODELOPT_GENERIC_METHOD_NAMES: dict[str | None, frozenset[str]] = {
+    "modelopt": _GENERIC_FP8_NAMES,
+    "modelopt_fp4": _GENERIC_NVFP4_NAMES,
+}
 _MXFP4_SERIALIZED_FLAGS = {
     "mxfp4": "is_checkpoint_mxfp4_serialized",
     "mxfp4_dualscale": "is_checkpoint_serialized",
@@ -296,6 +320,9 @@ def _validate_method_consistency(
     valid_checkpoint_methods = {
         _normalize_quant_method_alias(declared_method),
         _normalize_quant_method_alias(detected_method),
+        # Only add the applicable ModelOpt generic method names. This is to prevent
+        # mismatches between things like ModelOpt NVFP4 + fp8 passed by user.
+        *_MODELOPT_GENERIC_METHOD_NAMES.get(detected_method, ()),
     }
 
     # Then explode if the method requested is actually different / not compatible
@@ -313,6 +340,7 @@ def _validate_method_consistency(
 def _maybe_build_component_quant_config(
     spec: dict[str, Any],
     quant_config: dict[str, Any] | None,
+    is_diffusion: bool,
 ) -> ComponentQuantizationConfig | None:
     if not _is_per_component_dict(spec):
         return None
@@ -324,7 +352,7 @@ def _maybe_build_component_quant_config(
                 f"Per-component value for {prefix!r} must be str, dict, "
                 f"QuantizationConfig, or None, got {type(value).__name__}"
             )
-        resolved = None if value is None else build_quantization_config(value, quant_config)
+        resolved = None if value is None else build_quantization_config(value, quant_config, is_diffusion=is_diffusion)
         if prefix == "default":
             default_config = resolved
         else:
@@ -335,6 +363,8 @@ def _maybe_build_component_quant_config(
 def build_quantization_config(
     quantization: str | Mapping[str, Any] | QuantizationConfig | None,
     quant_config: dict[str, Any] | None = None,
+    *,
+    is_diffusion: bool = True,
 ) -> QuantizationConfig | None:
     """Build a resolved QuantizationConfig.
 
@@ -379,7 +409,7 @@ def build_quantization_config(
 
     if isinstance(quantization, Mapping):
         spec = dict(quantization)
-        component_cfg = _maybe_build_component_quant_config(spec, quant_config)
+        component_cfg = _maybe_build_component_quant_config(spec, quant_config, is_diffusion)
         if component_cfg is not None:
             return component_cfg
 
@@ -402,9 +432,8 @@ def build_quantization_config(
     else:
         spec = dict(quant_config) if isinstance(quant_config, dict) else {}
         from_checkpoint = QUANT_METHOD_KEY in spec
-        # Only a checkpoint carries an algo to disambiguate; a bare method string
-        # (no quant_config) is a user request and constructs directly below.
-        detect_modelopt = from_checkpoint
+        # Check for ModelOpt whenever checkpoint metadata is given
+        detect_modelopt = bool(spec)
 
     # ModelOpt records its algo (FP8/NVFP4/mixed) separately from
     # quant_method="modelopt"; disambiguate on the effective checkpoint dict so
@@ -418,13 +447,13 @@ def build_quantization_config(
     if method == "none":
         return None
 
-    if method not in QUANTIZATION_METHODS:
+    if method is None or method not in QUANTIZATION_METHODS:
         raise ValueError(f"Unknown quantization method: {method!r}. Supported: {SUPPORTED_QUANTIZATION_METHODS}")
 
     # Checkpoint dicts go through from_config (plucks only wanted keys); inline
     # specs construct directly. Restore quant_method popped above, since some
     # from_config impls read it (e.g. int8 derives is_checkpoint_*_serialized).
-    quant_cls = get_quantization_config(method)
+    quant_cls = _get_quantization_config_cls(method, is_diffusion)
     if from_checkpoint:
         set_quantization_method(spec, quantization)
         return quant_cls.from_config(spec)
@@ -458,9 +487,12 @@ def get_stage_quantization_config(
     hf_config_name: str | None,
 ) -> QuantizationConfig | None:
     """Build the effective quantization config for one stage."""
+    # vllm_omni.config imports this module, so keep these imports local to avoid an import cycle.
     from vllm_omni.config.config_factory import StageConfigFactory
+    from vllm_omni.config.model import OmniModelArchConfigConvertor
 
     chkpt_quant_cfg = read_checkpoint_quantization_config(model=model, revision=revision) if model is not None else None
+    hf_config = None
     # If it's LLM type, we need to potentially handle the nested text config, otherwise
     # behavior may be misaligned with the way vLLM builds the final quantization config
     # with the ModelConfig.
@@ -477,7 +509,12 @@ def get_stage_quantization_config(
                 stage_config_name=hf_config_name,
             ).get_quantization_config()
 
-    return build_quantization_config(quantization, chkpt_quant_cfg)
+    quant_config = build_quantization_config(quantization, chkpt_quant_cfg, is_diffusion=stage_type == "diffusion")
+    if quant_config is not None and model is not None and stage_type == "llm":
+        # Match vLLM's behaviors for llm stage; this is needed for handling things like
+        # detect unquantized modules from the checkpoint for AWQ/GPTQ.
+        quant_config.maybe_update_config(model, hf_config=hf_config, revision=revision)
+    return quant_config
 
 
 def _disk_marks_serialized(qc_kwargs: dict[str, Any], quant_config: QuantizationConfig) -> bool:
@@ -517,6 +554,8 @@ def _normalize_serialized_mxfp4_layer_policy(qc_method: str, qc_kwargs: dict[str
 def resolve_quantization_config_from_disk(
     quant_config: QuantizationConfig | None,
     disk_qc: dict[str, Any] | str | None,
+    *,
+    is_diffusion: bool = True,
 ) -> QuantizationConfig | None:
     """Reconcile an active quant_config against quantization_config from a transformer's config.json.
 
@@ -553,7 +592,7 @@ def resolve_quantization_config_from_disk(
             qc_method,
             qc_kwargs,
         )
-        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs}, is_diffusion=is_diffusion)
 
     active_method = _normalize_quant_method_alias(quant_config.get_name())
     disk_method = _normalize_quant_method_alias(qc_method)
@@ -589,7 +628,7 @@ def resolve_quantization_config_from_disk(
             "config.json marks checkpoint as serialized; switching to offline %s mode.",
             qc_method,
         )
-        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs}, is_diffusion=is_diffusion)
 
     if (
         "require_smooth_scale" in qc_kwargs
@@ -597,7 +636,7 @@ def resolve_quantization_config_from_disk(
         and qc_kwargs["require_smooth_scale"] != quant_config.require_smooth_scale
     ):
         logger.info("config.json Smooth requirement differs from active config; rebuilding quant_config.")
-        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs}, is_diffusion=is_diffusion)
 
     # AutoRound MXFP checkpoints use data_type="mx_fp" instead of
     # is_checkpoint_*_serialized; rebuild so the offline MXFP4/MXFP8 path is
@@ -607,7 +646,7 @@ def resolve_quantization_config_from_disk(
             "config.json declares data_type='mx_fp'; rebuilding as offline AutoRound MXFP%d.",
             qc_kwargs.get("bits", getattr(quant_config, "weight_bits", 0)),
         )
-        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs}, is_diffusion=is_diffusion)
 
     if (
         "ignored_layers" in qc_kwargs
@@ -615,6 +654,6 @@ def resolve_quantization_config_from_disk(
         and set(qc_kwargs.get("ignored_layers") or []) != set(quant_config.ignored_layers or [])
     ):
         logger.info("config.json ignored_layers differs from active config; rebuilding quant_config.")
-        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs})
+        return build_quantization_config({METHOD_KEY: qc_method, **qc_kwargs}, is_diffusion=is_diffusion)
 
     return quant_config

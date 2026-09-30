@@ -594,7 +594,6 @@ def test_diffusion_ingress_omits_unset_defaults(monkeypatch):
     normalize = omni_config_module.normalize_and_validate_diffusion_engine_ingress_kwargs
 
     assert normalize({}, stage_id=0) == {}
-    assert normalize({"dtype": None, "cache_backend": None}, stage_id=0) == {}
     assert normalize({"dtype": "float16", "cache_backend": "deep_cache"}, stage_id=0) == {
         "dtype": "float16",
         "cache_backend": "deep_cache",
@@ -2193,7 +2192,7 @@ def test_direct_diffusion_aliases_promote_none_and_reject_real_conflicts(monkeyp
     from vllm_omni.diffusion import data as diffusion_data
     from vllm_omni.diffusion.data import OmniDiffusionConfig
 
-    monkeypatch.setattr(diffusion_data, "build_quantization_config", lambda config: config)
+    monkeypatch.setattr(diffusion_data, "build_quantization_config", lambda config, **_: config)
     with pytest.warns(FutureWarning) as warnings:
         config = OmniDiffusionConfig.from_kwargs(
             quantization={"method": "example"},

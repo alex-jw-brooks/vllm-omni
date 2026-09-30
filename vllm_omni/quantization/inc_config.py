@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 from os.path import commonprefix
 from typing import TYPE_CHECKING, Any
 
@@ -81,7 +82,11 @@ class OmniINCConfig(INCConfig):
             bits = kwargs.pop("bits")
             if kwargs.setdefault("weight_bits", bits) != bits:
                 raise ValueError(f"Conflicting bit widths: bits={bits}, weight_bits={kwargs['weight_bits']}.")
-        super().__init__(*args, **kwargs)
+
+        # Filter to only valid INCConfig params from vLLM
+        valid = frozenset(inspect.signature(INCConfig.__init__).parameters) - {"self"}
+        filtered = {k: v for k, v in kwargs.items() if k in valid}
+        super().__init__(*args, **filtered)
 
     @classmethod
     def override_quantization_method(cls, hf_quant_cfg, user_quant, hf_config=None):

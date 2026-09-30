@@ -46,7 +46,6 @@ from vllm.model_executor.layers.linear import (
 )
 from vllm.model_executor.layers.quantization import (
     QuantizationMethods,
-    register_quantization_config,
 )
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
@@ -75,7 +74,8 @@ logger = init_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@register_quantization_config("mxfp8")
+# TODO: Not registered as "mxfp8" since vLLM's "mxfp8" is ModelOpt MXFP8 with its own platform support;
+# rename this to remove the per-stage lookup in quantization.factory.
 class DiffusionMXFP8Config(QuantizationConfig):
     """W8A8 MXFP8 quantization config for diffusion transformers.
 

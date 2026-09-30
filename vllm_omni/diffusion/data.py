@@ -70,9 +70,14 @@ def _move_diffusion_alias(
     normalized[canonical_name] = legacy_value
 
 
-def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict[str, Any]:
-    """Normalize legacy diffusion kwargs before config construction and return a handle to the
-    normalized kwargs.
+def normalize_omni_kwargs(
+    kwargs: Mapping[str, Any],
+    is_diffusion: bool,
+    *,
+    apply_defaults: bool = True,
+) -> dict[str, Any]:
+    """Normalize legacy kwargs before config construction and return a handle to the normalized
+    kwargs. Set apply_defaults=False when the result is merged over other config sources.
 
     NOTE: This should be the only place we handle kwarg fallbacks/aliases so that we can
     easily deprecate them for removal in future releases if needed.
@@ -82,7 +87,8 @@ def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict
     # dtype normalization should apply regardless of engine type
     dtype = normalized.get("dtype")
     if dtype is None:
-        normalized["dtype"] = "auto"
+        if apply_defaults:
+            normalized["dtype"] = "auto"
     elif isinstance(dtype, torch.dtype):
         normalized["dtype"] = str(dtype).removeprefix("torch.")
     elif not isinstance(dtype, str):
@@ -142,10 +148,10 @@ def normalize_omni_kwargs(kwargs: Mapping[str, Any], is_diffusion: bool) -> dict
 
     # Check environment variable as fallback for cache_backend.
     # Support both old DIFFUSION_CACHE_ADAPTER and new DIFFUSION_CACHE_BACKEND.
-    if "cache_backend" not in normalized:
+    if "cache_backend" not in normalized and apply_defaults:
         cache_backend = os.environ.get("DIFFUSION_CACHE_BACKEND") or os.environ.get("DIFFUSION_CACHE_ADAPTER")
         normalized["cache_backend"] = cache_backend.lower() if cache_backend else "none"
-    elif normalized["cache_backend"] is None:
+    elif "cache_backend" in normalized and normalized["cache_backend"] is None and apply_defaults:
         # Callers (e.g. example CLIs with `default=None`) pass an explicit
         # None for "no cache"; canonicalize it so every consumer sees the
         # declared `str` value instead of relying on per-model None handling.
@@ -560,7 +566,7 @@ class TransformerConfig:
         disk_qc = params.get("quantization_config")
         if isinstance(disk_qc, dict):
             raw_quant_method = get_quantization_method(disk_qc)
-            quant_config = build_quantization_config(disk_qc)
+            quant_config = build_quantization_config(disk_qc, is_diffusion=True)
             if quant_config is not None:
                 quant_method = raw_quant_method if raw_quant_method is not None else quant_config.get_name()
 
@@ -1384,7 +1390,7 @@ class OmniDiffusionConfig:
                 "is deprecated and will be removed in vLLM-Omni>0.30. Pass a "
                 "preconstructed QuantizationConfig object instead."
             )
-        self.quantization_config = build_quantization_config(self.quantization_config)
+        self.quantization_config = build_quantization_config(self.quantization_config, is_diffusion=True)
 
         # Auto-detect quantization from TransformerConfig if not explicitly set.
         # This covers the case where tf_model_config is passed at construction

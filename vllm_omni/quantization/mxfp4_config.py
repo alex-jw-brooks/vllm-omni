@@ -139,7 +139,8 @@ def _validate_smooth_scale(scale: torch.Tensor) -> None:
 # ---------------------------------------------------------------------------
 
 
-@register_quantization_config("mxfp4")
+# TODO: Not registered as "mxfp4" since vLLM's "mxfp4" is a different scheme (MoE W4A16);
+# rename this to remove the per-stage lookup in quantization.factory.
 class DiffusionMXFP4Config(QuantizationConfig):
     """W4A4 MXFP4 quantization config for diffusion transformers.
 

@@ -982,7 +982,7 @@ class _DiffusionConfigProjection:
         elif not isinstance(self.video_output_transport, VideoOutputTransportConfig):
             raise TypeError("video_output_transport must be a VideoOutputTransportConfig or mapping")
 
-        self.quantization_config = build_quantization_config(self.quantization_config)
+        self.quantization_config = build_quantization_config(self.quantization_config, is_diffusion=True)
 
         if self.diffusion_attention_config is None or isinstance(
             self.diffusion_attention_config,
@@ -1333,7 +1333,7 @@ def normalize_and_validate_diffusion_engine_ingress_kwargs(
         for name in _DIFFUSION_SHARED_ONLY_ENGINE_FIELDS | {"quantization"}
         if name in mixed_kwargs
     }
-    normalized = normalize_omni_kwargs(mixed_kwargs, is_diffusion=True)
+    normalized = normalize_omni_kwargs(mixed_kwargs, is_diffusion=True, apply_defaults=False)
     if engine_owned.get("quantization") is not None and normalized.get("quantization_config") is not None:
         raise ValueError("Diffusion config fields 'quantization' and 'quantization_config' cannot both be provided.")
     normalized.update(engine_owned)
@@ -1507,9 +1507,11 @@ def _stage_engine_values(
         scheduler_engine_fields = _SCHEDULER_ENGINE_FIELDS
         runtime_engine_fields = _RUNTIME_ENGINE_FIELDS - {"additional_config"}
     return _StageEngineValues(
+        # By this point, we've normalized kwargs, so pass the diffusion kwargs too to ensure normalized cases like
+        # diffusion_quantization_config are propagated correctly
         quantization=cast(
             _QuantizationEngineOverrides,
-            _select_engine_overrides(engine, _QUANTIZATION_ENGINE_FIELDS),
+            _select_engine_overrides({**engine, **diffusion_kwargs}, _QUANTIZATION_ENGINE_FIELDS),
         ),
         model=cast(_ModelEngineOverrides, _select_engine_overrides(engine, _MODEL_ENGINE_FIELDS)),
         load=cast(_LoadEngineOverrides, _select_engine_overrides(engine, load_engine_fields)),
@@ -2166,8 +2168,8 @@ def _build_diffusion_config_projection(
         diffusion_kwargs["distributed_executor_backend"] = _copy_value(deploy.distributed_executor_backend)
     if "model" not in diffusion_kwargs and model is not None:
         diffusion_kwargs["model"] = model
-    if quantization_config is not None:
-        diffusion_kwargs["quantization_config"] = quantization_config
+    # The stage's built config replaces any raw value (e.g., from the diffusion_quantization_config alias).
+    diffusion_kwargs["quantization_config"] = quantization_config
 
     return _DiffusionConfigProjection.from_kwargs(**{k: v for k, v in diffusion_kwargs.items() if v is not None})
 

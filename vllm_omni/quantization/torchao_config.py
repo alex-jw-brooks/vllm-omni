@@ -15,7 +15,7 @@ from vllm.model_executor.layers.quantization.torchao import TorchAOConfig
 class OmniTorchAOConfig(TorchAOConfig):
     """TorchAO config registered for Omni's shared quantization lookup."""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         if "quant_type" in kwargs:
             config = TorchAOConfig.from_config({**kwargs, "quant_method": "torchao"})
 
@@ -25,11 +25,7 @@ class OmniTorchAOConfig(TorchAOConfig):
                 config.is_checkpoint_torchao_serialized,
             )
         else:
-            super().__init__(**kwargs)
-
-    @classmethod
-    def from_config(cls, config: dict[str, Any]) -> Self:
-        return cls(**config)
+            super().__init__(*args, **kwargs)
 
 
 @register_quantization_config("torchao_float8_weight_only")
@@ -43,3 +39,7 @@ class OmniTorchAOFloat8WeightOnlyConfig(OmniTorchAOConfig):
             torchao_config=Float8WeightOnlyConfig(set_inductor_config=False),
             is_checkpoint_torchao_serialized=True,
         )
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> Self:
+        return cls()

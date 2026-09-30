@@ -22,6 +22,8 @@ from vllm.model_executor.layers.linear import LinearBase
 from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS, get_quantization_config
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.layers.quantization.fp8 import Fp8Config
+from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config
+from vllm.model_executor.layers.quantization.mxfp4 import Mxfp4Config
 
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization.bitsandbytes_config import DiffusionBitsAndBytesConfig
@@ -66,8 +68,10 @@ class ConfigCase(NamedTuple):
 _CONFIG_CASES = {
     "int8": ConfigCase(DiffusionInt8Config, DiffusionInt8Config),
     "bitsandbytes": ConfigCase(DiffusionBitsAndBytesConfig, DiffusionBitsAndBytesConfig),
-    "mxfp8": ConfigCase(DiffusionMXFP8Config, DiffusionMXFP8Config),
-    "mxfp4": ConfigCase(DiffusionMXFP4Config, DiffusionMXFP4Config),
+    # NOTE: vLLM keeps its own mxfp4 (MoE W4A16) / mxfp8 (ModelOpt) and diffusion resolves
+    # DiffusionMXFP4Config / DiffusionMXFP8Config per stage for now
+    "mxfp8": ConfigCase(ModelOptMxFp8Config, DiffusionMXFP8Config),
+    "mxfp4": ConfigCase(Mxfp4Config, DiffusionMXFP4Config),
     "mxfp4_dualscale": ConfigCase(DiffusionMXFP4DualScaleMixedConfig, DiffusionMXFP4DualScaleMixedConfig),
     "svdquant": ConfigCase(DiffusionSVDQuantConfig, DiffusionSVDQuantConfig),
     "inc": ConfigCase(OmniINCConfig, partial(OmniINCConfig, weight_bits=4, group_size=128)),
@@ -87,6 +91,23 @@ _AUTO_ROUND_ALIASES = ["auto-round", "auto_round"]
 def test_vllm_registry_resolves_config_class(method: str, case: ConfigCase) -> None:
     resolved = get_quantization_config(method)
     assert resolved is case.config_cls
+
+
+def test_mxfp4_resolves_per_stage_type():
+    """Ensure diffusion mxfp4 builds Omni's W4A4 config while other stages keep vLLM's MXFP4.
+
+    We need this because omni's mxfp4 for diffusion and vLLM's mxfp4 for AR are different."""
+    assert type(build_quantization_config("mxfp4")) is DiffusionMXFP4Config
+    assert type(build_quantization_config("mxfp4", is_diffusion=False)) is Mxfp4Config
+
+
+def test_mxfp8_resolves_per_stage_type():
+    """Ensure diffusion mxfp8 builds Omni's config while other stages keep vLLM's ModelOpt MXFP8.
+
+    We need this because vLLM's mxfp8 supports platforms that omni's diffusion mxfp8 does not."""
+    checkpoint = {QUANT_METHOD_KEY: "mxfp8"}
+    assert type(build_quantization_config("mxfp8", checkpoint)) is DiffusionMXFP8Config
+    assert type(build_quantization_config("mxfp8", checkpoint, is_diffusion=False)) is ModelOptMxFp8Config
 
 
 @pytest.mark.parametrize("alias", _AUTO_ROUND_ALIASES)
