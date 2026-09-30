@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import inspect
 from os.path import commonprefix
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
 from torch.nn import Module
@@ -18,11 +18,6 @@ from vllm.model_executor.parameter import ModelWeightParameter
 from vllm.model_executor.utils import replace_parameter
 
 from vllm_omni.quantization.factory import get_quantization_method
-
-if TYPE_CHECKING:
-    from vllm.model_executor.layers.quantization.base_config import (
-        QuantizationConfig,
-    )
 
 _REGEX_SPECIAL_CHARS = frozenset(r"*+?^$()[]{}|\\")
 
@@ -176,36 +171,6 @@ class OmniINCConfig(INCConfig):
             self.extra_config = new_extra
         elif self.extra_config is not None:
             self.extra_config = hf_to_vllm_mapper.apply_dict(self.extra_config)
-
-    # ------------------------------------------------------------------
-    # Upgrading a vanilla INCConfig created by vLLM
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def from_inc_config(cls, inc: INCConfig) -> OmniINCConfig:
-        """Promote a vanilla :class:`INCConfig` to :class:`OmniINCConfig`.
-
-        Copies all attributes so that the new instance is a drop-in
-        replacement.
-        """
-        omni = object.__new__(cls)
-        omni.__dict__.update(inc.__dict__)
-        return omni
-
-    @classmethod
-    def maybe_upgrade(cls, quant_config: QuantizationConfig | None) -> QuantizationConfig | None:
-        """Upgrade *quant_config* to :class:`OmniINCConfig` if applicable.
-
-        Returns the original config unchanged when it is not an INC
-        config or is already an :class:`OmniINCConfig`.
-        """
-        if quant_config is None:
-            return None
-        if isinstance(quant_config, cls):
-            return quant_config
-        if isinstance(quant_config, INCConfig):
-            return cls.from_inc_config(quant_config)
-        return quant_config
 
 
 # ---------------------------------------------------------------------------

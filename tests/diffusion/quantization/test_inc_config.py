@@ -29,8 +29,7 @@ _AUTOROUND_CKPT = {
 
 @pytest.mark.parametrize("quant_method", ["auto-round", "auto_round", "inc"])
 def test_checkpoint_resolves_to_omni_inc_config(quant_method):
-    """Guards the removed OmniINCConfig.maybe_upgrade(): the early build path
-    must yield OmniINCConfig, not a bare INCConfig."""
+    """Ensure Omni models build OmniINCConfig, not vLLM's INCConfig."""
     config = build_quantization_config({**_AUTOROUND_CKPT, "quant_method": quant_method})
     assert type(config) is OmniINCConfig
     assert isinstance(config, INCConfig)

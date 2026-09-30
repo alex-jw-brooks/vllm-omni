@@ -1180,13 +1180,6 @@ class StageRuntime:
         stage_init_timeout: int,
     ) -> StagePoolClient:
         """Initialize one local LLM replica using vLLM's launch/attach pattern."""
-        # This should not happen because build_vllm_config .replace()s the plan's
-        # quantization_config onto the vLLM config, so they must be identical.
-        if plan.stage_vllm_config is not None and plan.stage_vllm_config.quant_config is not plan.quantization_config:
-            logger.warning(
-                "LLM replica vLLM config's quantization config does not match the plan's quantization config"
-            )
-
         external_addresses = self._get_external_client_addresses(
             plan.metadata.stage_id,
             plan.replica_id,

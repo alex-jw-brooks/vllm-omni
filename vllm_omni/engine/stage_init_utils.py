@@ -1221,12 +1221,8 @@ def _project_omni_stage_engine_args(
             )
         )
 
-    quantization_config = stage_config.quantization_config
-    if quantization_config is not None:
-        quantization_key = (
-            "quantization" if isinstance(quantization_config, str) and not is_diffusion else "quantization_config"
-        )
-        engine_args[quantization_key] = copy.deepcopy(quantization_config)
+    if stage_config.quantization_config is not None:
+        engine_args["quantization_config"] = stage_config.quantization_config
 
     return engine_args
 
