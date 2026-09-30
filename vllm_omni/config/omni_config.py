@@ -1883,6 +1883,8 @@ def _build_stage_quantization_config(
     model: str | None,
 ) -> QuantizationConfig | None:
     """Get the quantization config for a single stage."""
+    # NOTE: Checkpoint quantization is resolved against the pipeline model, not a stage's model_subdir /
+    # model_path_resolver target; upstream vLLM detects quantized sub-models at stage init instead.
     quantization = _first_defined(
         engine.quantization.get("quantization_config"),
         engine.quantization.get("quantization"),

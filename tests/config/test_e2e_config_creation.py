@@ -6,6 +6,7 @@
 import json
 import os
 from contextlib import contextmanager
+from dataclasses import replace
 from unittest import mock
 
 import pytest
@@ -118,7 +119,7 @@ class _FakeStageClient:
 
 
 @contextmanager
-def built_stage_configs(model: str, **kwargs):
+def built_stage_configs(model: str, llm_pipeline: PipelineConfig = _LLM_PIPELINE, **kwargs):
     """Run the real resolver & stub only worker spawn. This records each stage's
     built config & the Omni instance, but uses as much as the real build path as
     possible (i.e., Vllmconfig for LLM & OmniDiffusionConfig for diffusion).
@@ -151,7 +152,7 @@ def built_stage_configs(model: str, **kwargs):
         # Avoid leaking the production spawn start method into later tests in this pytest process.
         # This is currently needed to avoid polluting the comfyui test environment.
         mock.patch.object(stage_runtime, "prepare_engine_environment"),
-        mock.patch.dict(OMNI_PIPELINES, {"llama": _LLM_PIPELINE, "llava": _LLM_PIPELINE}),
+        mock.patch.dict(OMNI_PIPELINES, {"llama": llm_pipeline, "llava": llm_pipeline}),
         mock.patch.object(stage_runtime, "build_vllm_config", side_effect=_record_vllm),
         mock.patch.object(stage_init_utils, "build_diffusion_config", side_effect=_record_diffusion),
         mock.patch.object(stage_runtime.StageRuntime, "_initialize_local_llm_replica", _skip_llm_spawn),
@@ -198,6 +199,17 @@ class TestQuantization:
             assert vllm_config.quant_config.get_name() == "fp8"
             assert vllm_config.quant_config.is_checkpoint_fp8_serialized is True
             assert vllm_config.model_config.quantization == "fp8"
+
+    def test_llm_serialized_subdir_checkpoint_is_serialized_fp8(self, tmp_path):
+        """Serialized fp8 model_subdir checkpoint under an unquantized root: must build a serialized fp8 config."""
+        model = _write_llm_model_dir(tmp_path)
+        _write_llm_model_dir(tmp_path / "llm", quantization_config=_SERIALIZED_FP8)
+        stage = replace(_LLM_PIPELINE.stages[0], model_subdir="llm")
+        with built_stage_configs(model, replace(_LLM_PIPELINE, stages=(stage,)), **_LLM_ENGINE_ARGS) as (_, built):
+            vllm_config = built[0]
+            assert vllm_config.quant_config is not None
+            assert vllm_config.quant_config.get_name() == "fp8"
+            assert vllm_config.quant_config.is_checkpoint_fp8_serialized is True
 
     def test_diffusion_serialized_checkpoint_is_serialized_fp8(self, tmp_path):
         """Serialized fp8 checkpoint, no CLI flag: must carry quant to the built config."""

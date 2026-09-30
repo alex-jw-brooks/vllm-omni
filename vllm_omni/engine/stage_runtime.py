@@ -838,6 +838,7 @@ class StageRuntime:
                     api_process_rank=self._api_process_rank,
                     quantization_config=quantization_config,
                 )
+                quantization_config = stage_vllm_config.quant_config
 
             for replica_id in range(num_replicas):
                 replica_cfg, native_kv = self._prepare_replica_stage_config(

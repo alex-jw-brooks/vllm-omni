@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 from pydantic.fields import FieldInfo
-from transformers import LlamaConfig, Qwen3OmniMoeConfig
+from transformers import Qwen3OmniMoeConfig
 from vllm.config import CacheConfig as VllmCacheConfig
 from vllm.config import CompilationConfig as VllmCompilationConfig
 from vllm.config import LoadConfig as VllmLoadConfig
@@ -690,9 +690,8 @@ def test_typed_engine_args_preserve_inherited_model_and_load_cli_fields(tmp_path
 def test_typed_engine_args_preserve_deploy_subdirectory_precedence(tmp_path):
     pipeline, deploy, model = _engine_arg_inputs(tmp_path)
     stage_model = tmp_path / "stage-model"
+    (stage_model / "override-model").mkdir()
     (stage_model / "override-tokenizer").mkdir()
-    fp8 = {"quant_method": "fp8", "activation_scheme": "dynamic"}
-    LlamaConfig(quantization_config=fp8).save_pretrained(stage_model / "override-model")
     deploy.stages[0].engine_extras.update(
         {
             "model_subdir": "override-model",
@@ -709,9 +708,6 @@ def test_typed_engine_args_preserve_deploy_subdirectory_precedence(tmp_path):
     assert typed_stage.model_config.tokenizer_subdir == "override-tokenizer"
     assert typed_args["model"] == legacy_args["model"] == str(stage_model / "override-model")
     assert typed_args["tokenizer"] == legacy_args["tokenizer"] == str(stage_model / "override-tokenizer")
-    # Quantization must come from the stage's resolved model, not the pipeline root.
-    assert typed_stage.quantization_config is not None
-    assert typed_stage.quantization_config.get_name() == "fp8"
 
 
 @pytest.mark.parametrize(
