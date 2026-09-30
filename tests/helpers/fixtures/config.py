@@ -60,9 +60,11 @@ def default_vllm_config():
 
 
 @pytest.fixture
-def no_checkpoint_quantization(monkeypatch):
-    """Eagerly resolve stage quantization - we use this for tests with fake model paths
-    to avoid HF downloads where possible."""
+def local_model_configs_only(monkeypatch):
+    """Only read HF and checkpoint quantization configs from local model directories.
+    If the model references a fake path, e.g., `test-model`, it resolves with no config
+    or checkpoint quantization without touching HF Hub.
+    """
     read = factory.read_checkpoint_quantization_config
     monkeypatch.setattr(
         factory,

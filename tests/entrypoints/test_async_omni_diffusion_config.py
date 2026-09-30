@@ -110,7 +110,7 @@ def test_default_stage_config_preserves_and_overrides_promoted_extras():
     ],
 )
 def test_stage_override_preserves_model_extras_for_default_diffusion_stage(
-    mocker, stage_overrides, no_checkpoint_quantization
+    mocker, stage_overrides, local_model_configs_only
 ):
     """Local/unregistered Diffusers checkpoints still honor stage-0 extras."""
     mocker.patch(
@@ -314,7 +314,7 @@ def test_default_stage_config_includes_default_sampling_params():
 
 @pytest.mark.parametrize("typed", [False, True], ids=["legacy", "typed"])
 @pytest.mark.parametrize("sampling_defaults", [{"0": {"guidance_scale": 7.5}}, '{"0":{"guidance_scale":7.5}}'])
-def test_generic_diffusion_sampling_defaults_remain_overridable(typed, sampling_defaults, no_checkpoint_quantization):
+def test_generic_diffusion_sampling_defaults_remain_overridable(typed, sampling_defaults, local_model_configs_only):
     from vllm_omni.config.yaml_util import create_config
     from vllm_omni.entrypoints.omni_base import OmniBase
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams
@@ -834,7 +834,7 @@ def test_default_stage_config_includes_quantization_config():
 
 
 @pytest.mark.parametrize("typed", [False, True], ids=["legacy", "typed"])
-def test_default_diffusion_factory_preserves_engine_quantization(typed, monkeypatch, no_checkpoint_quantization):
+def test_default_diffusion_factory_preserves_engine_quantization(typed, monkeypatch, local_model_configs_only):
     monkeypatch.setattr(OmniDiffusionConfig, "_resolve_master_port", lambda _self: 29500)
     monkeypatch.setattr(OmniDiffusionConfig, "enrich_config", lambda _self: None)
     kwargs = {"quantization": "fp8"}
@@ -852,7 +852,7 @@ def test_default_diffusion_factory_preserves_engine_quantization(typed, monkeypa
 
 
 @pytest.mark.parametrize("model_class_name", ["HeliosPipeline", "HunyuanVideo15Pipeline"])
-def test_generic_diffusion_uses_canonical_video_output_type(model_class_name, no_checkpoint_quantization):
+def test_generic_diffusion_uses_canonical_video_output_type(model_class_name, local_model_configs_only):
     config = StageConfigFactory.create_typed_default_diffusion(
         "generic-video",
         {"model_class_name": model_class_name},
@@ -861,7 +861,7 @@ def test_generic_diffusion_uses_canonical_video_output_type(model_class_name, no
     assert config.stage_configs[0].final_output_type == "video"
 
 
-def test_generic_diffusion_resolves_structured_stage_without_legacy_conversion(mocker, no_checkpoint_quantization):
+def test_generic_diffusion_resolves_structured_stage_without_legacy_conversion(mocker, local_model_configs_only):
     """Generic diffusion reaches runtime as the structured stage itself."""
     mocker.patch("vllm_omni.config.resolver.StageConfigFactory.create_from_model", return_value=None)
     mocker.patch(
@@ -895,7 +895,7 @@ def test_generic_diffusion_resolves_structured_stage_without_legacy_conversion(m
     assert stage.runtime_config.devices == "0,1,2,3"
 
 
-def test_generic_diffusion_structured_stage_reaches_standard_startup(mocker, no_checkpoint_quantization):
+def test_generic_diffusion_structured_stage_reaches_standard_startup(mocker, local_model_configs_only):
     """Standard runtime resolves and starts the typed stage through the real launcher."""
     from vllm_omni.engine import stage_engine_startup as startup_module
     from vllm_omni.engine import stage_runtime as runtime_module

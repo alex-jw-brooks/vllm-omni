@@ -1096,7 +1096,7 @@ class TestPipelineRegistration:
 
         assert pipeline_cfg is None
 
-    def test_create_from_model_returns_structured_omni_config(self, no_checkpoint_quantization):
+    def test_create_from_model_returns_structured_omni_config(self, local_model_configs_only):
         class FakeConfig(PretrainedConfig):
             model_type = "qwen3_tts"
 
@@ -1112,7 +1112,7 @@ class TestPipelineRegistration:
         assert omni_config.pipeline_config is OMNI_PIPELINES["qwen3_tts"]
         assert len(omni_config.stage_configs) == 2
 
-    def test_create_from_model_preserves_model_on_structured_diffusion_stage(self, no_checkpoint_quantization):
+    def test_create_from_model_preserves_model_on_structured_diffusion_stage(self, local_model_configs_only):
         class FakeConfig(PretrainedConfig):
             model_type = "dreamzero"
 
@@ -1270,7 +1270,7 @@ class TestPipelineRegistration:
         assert len(resolved_config.stage_configs) > 0
 
     def test_legacy_and_structured_paths_share_deploy_pipeline_override(
-        self, clean_pipeline_registry, tmp_path, no_checkpoint_quantization
+        self, clean_pipeline_registry, tmp_path, local_model_configs_only
     ):
         pipeline_key = "deploy_only_pipeline"
         pipe_cfg = PipelineConfig(
@@ -1308,7 +1308,7 @@ class TestPipelineRegistration:
         assert legacy_configs[0].yaml_engine_args["model_arch"] == "DeployOnlyArch"
 
     def test_structured_path_loads_explicit_deploy_config_once(
-        self, clean_pipeline_registry, tmp_path, no_checkpoint_quantization
+        self, clean_pipeline_registry, tmp_path, local_model_configs_only
     ):
         pipeline_key = "single_load_pipeline"
         pipeline_cfg = PipelineConfig(

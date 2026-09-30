@@ -938,7 +938,7 @@ def test_run_headless_llm_registers_with_auto_assigned_replica_id(mocker: Mocker
 
 
 def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(
-    mocker: MockerFixture, no_checkpoint_quantization
+    mocker: MockerFixture, local_model_configs_only
 ) -> None:
     """``--omni-dp-size-local=N`` must spawn N managers, each with its own
     master-assigned replica_id, and join all of them before returning."""
@@ -1003,7 +1003,7 @@ def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(
     manager_b.shutdown.assert_called_once_with()
 
 
-def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture, no_checkpoint_quantization) -> None:
+def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture, local_model_configs_only) -> None:
     """Diffusion headless: registers as auto-assign, spawns a single
     ``StageDiffusionProc`` per local replica, and waits for it via
     ``multiprocessing.connection.wait``."""
@@ -1089,7 +1089,7 @@ def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture,
 
 
 def test_run_headless_generic_diffusion_launches_structured_stage(
-    mocker: MockerFixture, no_checkpoint_quantization
+    mocker: MockerFixture, local_model_configs_only
 ) -> None:
     """Headless resolution starts the typed stage through the real group launcher."""
     from vllm_omni.engine import stage_engine_startup as startup_module
@@ -1166,7 +1166,7 @@ def test_run_headless_generic_diffusion_launches_structured_stage(
     assert stage.runtime_config.devices == "0"
 
 
-def test_run_headless_diffusion_raises_on_nonzero_proc_exit(mocker: MockerFixture, no_checkpoint_quantization) -> None:
+def test_run_headless_diffusion_raises_on_nonzero_proc_exit(mocker: MockerFixture, local_model_configs_only) -> None:
     """A diffusion replica that exits with a non-zero code must surface as a
     RuntimeError from ``run_headless`` (the head needs the signal to roll
     back its own stage init)."""

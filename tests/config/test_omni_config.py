@@ -124,7 +124,7 @@ def _from_pipeline_key(
     )
 
 
-def test_mammothmoda2_diffusion_stage_projects_native_backend_config(no_checkpoint_quantization) -> None:
+def test_mammothmoda2_diffusion_stage_projects_native_backend_config(local_model_configs_only) -> None:
     config = _from_pipeline_key(
         "mammoth_moda2",
         cli_overrides={"model": "/models/MammothModa2-Preview"},

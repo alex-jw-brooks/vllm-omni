@@ -346,7 +346,7 @@ class TestResolveOmniConfig:
         model_class_name,
         checkpoint_exists,
         deploy_config_path,
-        no_checkpoint_quantization,
+        local_model_configs_only,
     ):
         checkpoint = tmp_path / "model.safetensors"
         if checkpoint_exists:
@@ -374,7 +374,7 @@ class TestResolveOmniConfig:
         assert resolved.config_path == deploy_config_path
 
     def test_bare_deploy_name_returns_packaged_resolved_path(
-        self, tmp_path, mocker: MockerFixture, no_checkpoint_quantization
+        self, tmp_path, mocker: MockerFixture, local_model_configs_only
     ):
         deploy_name = "qwen3_omni_moe.yaml"
         deploy_path = tmp_path / deploy_name
@@ -409,7 +409,7 @@ class TestResolveOmniConfig:
         with pytest.raises(KeyError, match=r"no stage 2; resolved stages: \[1, 3\]"):
             resolved.stage_by_id(2)
 
-    def test_load_and_resolve_with_kwargs(self, mocker: MockerFixture, no_checkpoint_quantization):
+    def test_load_and_resolve_with_kwargs(self, mocker: MockerFixture, local_model_configs_only):
         """Ensure that generic diffusion overrides survive resolution."""
         engine_backend = "vllm_omni.experimental.ar_diffusion.engine.ARDiffusionEngine"
         mocker.patch(
@@ -439,7 +439,7 @@ class TestResolveOmniConfig:
         assert resolved.stage_configs[0].diffusion_config.engine_backend == engine_backend
         assert resolved.stage_configs[0].diffusion_config.revision == "pinned-revision"
 
-    def test_generic_diffusion_uses_registered_model_metadata(self, mocker: MockerFixture, no_checkpoint_quantization):
+    def test_generic_diffusion_uses_registered_model_metadata(self, mocker: MockerFixture, local_model_configs_only):
         mocker.patch("vllm_omni.config.resolver.StageConfigFactory.create_from_model", return_value=None)
         resolve_model_class = mocker.patch(
             "vllm_omni.config.resolver.resolve_model_class_name",
@@ -468,7 +468,7 @@ class TestResolveOmniConfig:
         assert stage.final_output_type == "video"
 
     def test_generic_diffusion_stage_overrides_reach_typed_backend(
-        self, mocker: MockerFixture, no_checkpoint_quantization
+        self, mocker: MockerFixture, local_model_configs_only
     ):
         from vllm_omni.engine.stage_init_utils import build_engine_args_dict_from_omni_stage_config
 
