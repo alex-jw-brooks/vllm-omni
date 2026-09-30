@@ -15,6 +15,7 @@ from vllm.model_executor.layers.quantization.base_config import QuantizationConf
 
 import vllm_omni.diffusion.stage_diffusion_client as stage_diffusion_client
 import vllm_omni.engine.async_omni_engine as async_omni_engine
+import vllm_omni.engine.omni_engine_base as omni_engine_base
 import vllm_omni.engine.stage_init_utils as stage_init_utils
 import vllm_omni.engine.stage_runtime as stage_runtime
 from vllm_omni.config.config_factory import StageConfigFactory
@@ -155,7 +156,7 @@ def built_stage_configs(model: str, **kwargs):
         mock.patch.object(stage_init_utils, "build_diffusion_config", side_effect=_record_diffusion),
         mock.patch.object(stage_runtime.StageRuntime, "_initialize_local_llm_replica", _skip_llm_spawn),
         mock.patch.object(stage_diffusion_client, "create_diffusion_client", side_effect=_skip_diffusion_client),
-        mock.patch.object(async_omni_engine, "build_stage0_input_processor"),
+        mock.patch.object(omni_engine_base, "build_stage0_input_processor"),
         mock.patch.object(async_omni_engine.Orchestrator, "run", _noop_run),
         mock.patch.object(stage_init_utils.current_omni_platform, "get_device_count", return_value=1),
     ):
@@ -260,12 +261,13 @@ def built_omni_config(model: str, **kwargs):
     captured: dict = {}
     create_from_model = StageConfigFactory.create_from_model
 
-    def _build_omni_config(m, *, trust_remote_code, cli_overrides, deploy_config_path):
+    def _build_omni_config(m, *, trust_remote_code, cli_overrides, deploy_config_path, strategy_specs):
         captured["config"] = create_from_model(
             m,
             trust_remote_code=trust_remote_code,
             cli_overrides=cli_overrides,
             deploy_config_path=deploy_config_path,
+            strategy_specs=strategy_specs,
         )
         raise _StopAfterOmniConfigError
 

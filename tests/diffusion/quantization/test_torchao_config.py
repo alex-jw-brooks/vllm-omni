@@ -3,9 +3,11 @@
 
 import pytest
 import torch
+from vllm.model_executor.layers.quantization.torchao import TorchAOConfig
 
 from vllm_omni.quantization import build_quantization_config
 from vllm_omni.quantization.component_config import ComponentQuantizationConfig
+from vllm_omni.quantization.torchao_config import OmniTorchAOConfig
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -56,3 +58,12 @@ def test_build_quant_config_torchao_runtime():
     assert isinstance(result, TorchAOConfig)
     assert result.torchao_config is torchao_config
     assert result.is_checkpoint_torchao_serialized is False
+
+
+@pytest.mark.parametrize("config_cls", [TorchAOConfig, OmniTorchAOConfig])
+def test_torchao_from_config_without_quant_method_is_not_checkpoint_serialized(config_cls):
+    """Ensure from_config without quant_method is not marked checkpoint-serialized."""
+    pytest.importorskip("torchao.quantization")
+    config = {"quant_type": {"default": {"_type": "Float8WeightOnlyConfig", "_version": 2, "_data": {}}}}
+
+    assert config_cls.from_config(config).is_checkpoint_torchao_serialized is False

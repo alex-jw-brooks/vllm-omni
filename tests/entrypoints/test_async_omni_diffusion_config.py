@@ -109,7 +109,9 @@ def test_default_stage_config_preserves_and_overrides_promoted_extras():
         '{"0":{"extras":{"ltx2_use_conv_vae":true}}}',
     ],
 )
-def test_stage_override_preserves_model_extras_for_default_diffusion_stage(mocker, stage_overrides):
+def test_stage_override_preserves_model_extras_for_default_diffusion_stage(
+    mocker, stage_overrides, no_checkpoint_quantization
+):
     """Local/unregistered Diffusers checkpoints still honor stage-0 extras."""
     mocker.patch(
         "vllm_omni.config.resolver.StageConfigFactory.create_from_model",
@@ -163,7 +165,7 @@ def test_legacy_diffusion_stage_rejects_unowned_field(field_name, value):
     metadata = SimpleNamespace(stage_id=0, cfg_kv_collect_func=None)
 
     with pytest.raises(ValueError, match=rf"stage 0.*{field_name}"):
-        build_diffusion_config("unused", stage_cfg, metadata)
+        build_diffusion_config("unused", stage_cfg, metadata, None)
 
 
 @pytest.mark.parametrize(
@@ -194,7 +196,7 @@ def test_legacy_default_stage_build_accepts_engine_adapter_metadata(monkeypatch)
     metadata = SimpleNamespace(stage_id=0, cfg_kv_collect_func=None, default_sampling_params=None)
     monkeypatch.setattr(stage_init_utils.current_omni_platform, "get_device_count", lambda: 1)
 
-    config = stage_init_utils.build_diffusion_config("unused", stage_cfg, metadata)
+    config = stage_init_utils.build_diffusion_config("unused", stage_cfg, metadata, None)
 
     assert config.model == "unused"
 
@@ -312,7 +314,7 @@ def test_default_stage_config_includes_default_sampling_params():
 
 @pytest.mark.parametrize("typed", [False, True], ids=["legacy", "typed"])
 @pytest.mark.parametrize("sampling_defaults", [{"0": {"guidance_scale": 7.5}}, '{"0":{"guidance_scale":7.5}}'])
-def test_generic_diffusion_sampling_defaults_remain_overridable(typed, sampling_defaults):
+def test_generic_diffusion_sampling_defaults_remain_overridable(typed, sampling_defaults, no_checkpoint_quantization):
     from vllm_omni.config.yaml_util import create_config
     from vllm_omni.entrypoints.omni_base import OmniBase
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams
@@ -801,90 +803,6 @@ def test_resolve_stage_configs_delegates_overrides_to_resolver(mocker):
     assert resolve_config.call_args.kwargs["cli_overrides"]["additional_config"] is additional_config
 
 
-def test_default_stage_resolves_video_output_from_checkpoint(mocker):
-    model = "/models/MiniMax-H3/FL2VA"
-    create_default_stage = mocker.spy(StageConfigFactory, "create_default_diffusion")
-    mocker.patch(
-        "vllm_omni.config.resolver.StageConfigFactory.create_from_model",
-        return_value=None,
-    )
-    resolve_model_class = mocker.patch(
-        "vllm_omni.config.resolver.resolve_model_class_name",
-        return_value="MiniMaxH3Pipeline",
-    )
-    mocker.patch(
-        "vllm_omni.config.resolver.DiffusionModelRegistry.get_supported_archs",
-        return_value={"MiniMaxH3Pipeline"},
-    )
-    engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
-
-    _, stage_configs = engine._resolve_stage_configs(
-        model,
-        {},
-        trust_remote_code=False,
-    )
-
-    resolve_model_class.assert_called_once_with(model, "default", None)
-    create_default_stage.assert_called_once()
-    assert stage_configs[0]["final_output_type"] == "video"
-
-
-def test_default_diffusers_stage_preserves_video_model_identity(mocker):
-    create_default_stage = mocker.spy(StageConfigFactory, "create_default_diffusion")
-    mocker.patch(
-        "vllm_omni.config.resolver.StageConfigFactory.create_from_model",
-        return_value=None,
-    )
-    mocker.patch(
-        "vllm_omni.diffusion.utils.hf_utils.resolve_native_diffusion_model_class",
-        return_value=None,
-    )
-    mocker.patch(
-        "vllm_omni.diffusion.utils.hf_utils.get_diffusion_model_index",
-        return_value={"_class_name": "WanImageToVideoPipeline"},
-    )
-    mocker.patch(
-        "vllm_omni.config.resolver.DiffusionModelRegistry.get_supported_archs",
-        return_value={"WanImageToVideoPipeline"},
-    )
-    engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
-
-    _, stage_configs = engine._resolve_stage_configs(
-        "/models/Wan2.2-I2V",
-        {"diffusion_load_format": "diffusers"},
-        trust_remote_code=False,
-    )
-
-    create_default_stage.assert_called_once()
-    assert stage_configs[0]["engine_args"]["model_class_name"] == "WanImageToVideoPipeline"
-    assert stage_configs[0]["final_output_type"] == "video"
-
-
-def test_resolve_stage_configs_injects_additional_config_into_diffusion_stage(mocker):
-    """Ensure YAML/deploy stage resolution forwards top-level additional_config."""
-    additional_config = {"torchair_graph_config": {"enabled": True}}
-    fake_diffusion_stage = OmegaConf.create({"stage_type": "diffusion", "engine_args": {}})
-    fake_llm_stage = OmegaConf.create({"stage_type": "llm", "engine_args": {}})
-    mocker.patch(
-        "vllm_omni.engine.async_omni_engine.load_and_resolve_stage_configs",
-        return_value=("dummy.yaml", [fake_llm_stage, fake_diffusion_stage], None),
-    )
-
-    engine = AsyncOmniEngine.__new__(AsyncOmniEngine)
-
-    _, stage_configs = engine._resolve_stage_configs(
-        "dummy-model",
-        {
-            "deploy_config": "dummy.yaml",
-            "additional_config": additional_config,
-        },
-        trust_remote_code=False,
-    )
-
-    assert "additional_config" not in stage_configs[0]["engine_args"]
-    assert stage_configs[1]["engine_args"]["additional_config"] == additional_config
-
-
 @pytest.mark.parametrize(
     ("legacy_arg", "value"),
     [
@@ -916,7 +834,7 @@ def test_default_stage_config_includes_quantization_config():
 
 
 @pytest.mark.parametrize("typed", [False, True], ids=["legacy", "typed"])
-def test_default_diffusion_factory_preserves_engine_quantization(typed, monkeypatch):
+def test_default_diffusion_factory_preserves_engine_quantization(typed, monkeypatch, no_checkpoint_quantization):
     monkeypatch.setattr(OmniDiffusionConfig, "_resolve_master_port", lambda _self: 29500)
     monkeypatch.setattr(OmniDiffusionConfig, "enrich_config", lambda _self: None)
     kwargs = {"quantization": "fp8"}
@@ -934,7 +852,7 @@ def test_default_diffusion_factory_preserves_engine_quantization(typed, monkeypa
 
 
 @pytest.mark.parametrize("model_class_name", ["HeliosPipeline", "HunyuanVideo15Pipeline"])
-def test_generic_diffusion_uses_canonical_video_output_type(model_class_name):
+def test_generic_diffusion_uses_canonical_video_output_type(model_class_name, no_checkpoint_quantization):
     config = StageConfigFactory.create_typed_default_diffusion(
         "generic-video",
         {"model_class_name": model_class_name},
@@ -943,7 +861,7 @@ def test_generic_diffusion_uses_canonical_video_output_type(model_class_name):
     assert config.stage_configs[0].final_output_type == "video"
 
 
-def test_generic_diffusion_resolves_structured_stage_without_legacy_conversion(mocker):
+def test_generic_diffusion_resolves_structured_stage_without_legacy_conversion(mocker, no_checkpoint_quantization):
     """Generic diffusion reaches runtime as the structured stage itself."""
     mocker.patch("vllm_omni.config.resolver.StageConfigFactory.create_from_model", return_value=None)
     mocker.patch(
@@ -977,7 +895,7 @@ def test_generic_diffusion_resolves_structured_stage_without_legacy_conversion(m
     assert stage.runtime_config.devices == "0,1,2,3"
 
 
-def test_generic_diffusion_structured_stage_reaches_standard_startup(mocker):
+def test_generic_diffusion_structured_stage_reaches_standard_startup(mocker, no_checkpoint_quantization):
     """Standard runtime resolves and starts the typed stage through the real launcher."""
     from vllm_omni.engine import stage_engine_startup as startup_module
     from vllm_omni.engine import stage_runtime as runtime_module

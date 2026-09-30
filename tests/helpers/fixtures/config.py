@@ -11,6 +11,9 @@ import pytest
 import torch
 from vllm.config import DeviceConfig, VllmConfig, set_current_vllm_config
 
+from vllm_omni.config import config_factory
+from vllm_omni.quantization import factory
+
 
 @pytest.fixture(scope="session", autouse=True)
 def default_env():
@@ -54,3 +57,23 @@ def default_vllm_config():
 
     with set_current_vllm_config(VllmConfig(device_config=device_config)):
         yield
+
+
+@pytest.fixture
+def no_checkpoint_quantization(monkeypatch):
+    """Eagerly resolve stage quantization - we use this for tests with fake model paths
+    to avoid HF downloads where possible."""
+    read = factory.read_checkpoint_quantization_config
+    monkeypatch.setattr(
+        factory,
+        "read_checkpoint_quantization_config",
+        lambda model, revision: read(model, revision) if os.path.isdir(model) else None,
+    )
+    get_config = config_factory.get_config
+
+    def _get_config(model, *args, **kwargs):
+        if not os.path.isdir(model):
+            raise OSError(f"{model!r} is not a local model directory")
+        return get_config(model, *args, **kwargs)
+
+    monkeypatch.setattr(config_factory, "get_config", _get_config)

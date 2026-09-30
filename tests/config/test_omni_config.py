@@ -117,10 +117,7 @@ def _from_pipeline_key(
     )
 
 
-def test_mammothmoda2_diffusion_stage_projects_native_backend_config(monkeypatch) -> None:
-    # The AR stage's eager quant build reads its checkpoint config; stub it so
-    # the offline test path is not validated as an HF repo id.
-    monkeypatch.setattr(omni_config_module, "get_stage_quantization_config", lambda *a, **k: None)
+def test_mammothmoda2_diffusion_stage_projects_native_backend_config(no_checkpoint_quantization) -> None:
     config = _from_pipeline_key(
         "mammoth_moda2",
         cli_overrides={"model": "/models/MammothModa2-Preview"},
@@ -2115,6 +2112,20 @@ def test_async_chunk_rejects_quoted_false_before_selecting_processors(tmp_path, 
             builder(pipeline, deploy)
         else:
             builder(pipeline, user_deploy_config=deploy)
+
+
+def test_stage_cli_override_diffusion_quantization_config_sets_stage_quantization():
+    """Ensure CLI override sets the diffusion stage's quantization correctly."""
+    config = _build_single_diffusion_config(cli_overrides={"stage_0_diffusion_quantization_config": "fp8"})
+
+    assert config.stage_by_id(0).diffusion_config.quantization_config.get_name() == "fp8"
+
+
+def test_deploy_engine_extras_diffusion_quantization_config_sets_stage_quantization():
+    """Ensure that we can use engine_extras to set the diffusion stage's quantization correctly."""
+    config = _build_single_diffusion_config(engine_extras={"diffusion_quantization_config": "fp8"})
+
+    assert config.stage_by_id(0).diffusion_config.quantization_config.get_name() == "fp8"
 
 
 @pytest.mark.parametrize("explicit", [False, True])

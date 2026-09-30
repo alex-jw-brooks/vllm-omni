@@ -954,7 +954,9 @@ def test_run_headless_llm_registers_with_auto_assigned_replica_id(mocker: Mocker
     engine_manager.shutdown.assert_called_once_with()
 
 
-def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(mocker: MockerFixture) -> None:
+def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(
+    mocker: MockerFixture, no_checkpoint_quantization
+) -> None:
     """``--omni-dp-size-local=N`` must spawn N managers, each with its own
     master-assigned replica_id, and join all of them before returning."""
     from vllm_omni.engine.stage_engine_startup import StageRegistrationResponse
@@ -974,7 +976,6 @@ def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(mocker: Mo
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
-    mocker.patch("vllm_omni.entrypoints.cli.serve.get_stage_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -1019,7 +1020,7 @@ def test_run_headless_llm_launches_one_manager_per_omni_dp_size_local(mocker: Mo
     manager_b.shutdown.assert_called_once_with()
 
 
-def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture) -> None:
+def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture, no_checkpoint_quantization) -> None:
     """Diffusion headless: registers as auto-assign, spawns a single
     ``StageDiffusionProc`` per local replica, and waits for it via
     ``multiprocessing.connection.wait``."""
@@ -1034,7 +1035,6 @@ def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture)
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
-    mocker.patch("vllm_omni.entrypoints.cli.serve.get_stage_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(
@@ -1105,7 +1105,9 @@ def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture)
     assert manager_kwargs["omni_replica_id"] == 0
 
 
-def test_run_headless_generic_diffusion_launches_structured_stage(mocker: MockerFixture) -> None:
+def test_run_headless_generic_diffusion_launches_structured_stage(
+    mocker: MockerFixture, no_checkpoint_quantization
+) -> None:
     """Headless resolution starts the typed stage through the real group launcher."""
     from vllm_omni.engine import stage_engine_startup as startup_module
 
@@ -1124,8 +1126,10 @@ def test_run_headless_generic_diffusion_launches_structured_stage(mocker: Mocker
     captured: dict[str, Any] = {}
     od_config = SimpleNamespace()
 
-    def _build_diffusion_config(model, stage_config, metadata):
-        captured.update(model=model, stage_config=stage_config, metadata=metadata)
+    def _build_diffusion_config(model, stage_config, metadata, quantization_config):
+        captured.update(
+            model=model, stage_config=stage_config, metadata=metadata, quantization_config=quantization_config
+        )
         return od_config
 
     def _launch_replica_group(**kwargs):
@@ -1149,6 +1153,7 @@ def test_run_headless_generic_diffusion_launches_structured_stage(mocker: Mocker
             "worker_backend",
             "model_class_name",
             "num_gpus",
+            "quantization",
         }
     )
     args = _make_headless_args(
@@ -1156,6 +1161,7 @@ def test_run_headless_generic_diffusion_launches_structured_stage(mocker: Mocker
         model="generic-diffusion",
         model_class_name="FakeDiffusionPipeline",
         num_gpus=1,
+        quantization="fp8",
     )
 
     run_headless(args)
@@ -1165,6 +1171,7 @@ def test_run_headless_generic_diffusion_launches_structured_stage(mocker: Mocker
     assert captured["metadata"].stage_type == "diffusion"
     assert captured["metadata"].model_stage == "diffusion"
     assert captured["model"] == "generic-diffusion"
+    assert captured["quantization_config"].get_name() == "fp8"
     assert captured["group_kwargs"]["stage_id"] == 0
     assert captured["group_kwargs"]["omni_dp_size_local"] == 1
     assert captured["group_kwargs"]["per_replica_devices"] == ["0"]
@@ -1176,7 +1183,7 @@ def test_run_headless_generic_diffusion_launches_structured_stage(mocker: Mocker
     assert stage.runtime_config.devices == "0"
 
 
-def test_run_headless_diffusion_raises_on_nonzero_proc_exit(mocker: MockerFixture) -> None:
+def test_run_headless_diffusion_raises_on_nonzero_proc_exit(mocker: MockerFixture, no_checkpoint_quantization) -> None:
     """A diffusion replica that exits with a non-zero code must surface as a
     RuntimeError from ``run_headless`` (the head needs the signal to roll
     back its own stage init)."""
@@ -1190,7 +1197,6 @@ def test_run_headless_diffusion_raises_on_nonzero_proc_exit(mocker: MockerFixtur
         "vllm_omni.config.resolver.resolve_omni_config",
         return_value=_resolved(stage_cfg),
     )
-    mocker.patch("vllm_omni.entrypoints.cli.serve.get_stage_quantization_config", return_value=None)
     mocker.patch("vllm_omni.engine.stage_init_utils.prepare_engine_environment")
     mocker.patch("vllm_omni.engine.stage_init_utils.load_omni_transfer_config_for_model", return_value=None)
     mocker.patch(

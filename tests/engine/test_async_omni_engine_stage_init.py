@@ -36,15 +36,6 @@ from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-@pytest.fixture(autouse=True)
-def _no_checkpoint_quantization(monkeypatch):
-    for target in (
-        "vllm_omni.engine.stage_runtime.get_stage_quantization_config",
-        "vllm_omni.config.omni_config.get_stage_quantization_config",
-    ):
-        monkeypatch.setattr(target, lambda _model, _quantization, **_kwargs: None)
-
-
 def _stage_config(stage_type: str, **engine_args: object) -> DictConfig:
     return OmegaConf.create(
         {"stage_type": stage_type, "engine_args": engine_args},
@@ -426,7 +417,7 @@ def test_compute_replica_layout_covers_every_replica_when_devices_unset():
     assert replica_devices_map == {0: [None, None, None]}
 
 
-def test_build_logical_stage_init_plans_handles_stage_without_devices(monkeypatch):
+def test_build_logical_stage_init_plans_handles_stage_without_devices(monkeypatch, no_checkpoint_quantization):
     """Regression: a multi-replica stage with no ``devices`` must still plan.
 
     ``_build_logical_stage_init_plans`` indexes ``replica_devices_map`` by
@@ -1337,7 +1328,7 @@ def test_stage_runtime_passes_log_stats_to_output_processor(monkeypatch):
     }
 
 
-def test_build_logical_stage_init_plans_applies_replica_device_splits(monkeypatch):
+def test_build_logical_stage_init_plans_applies_replica_device_splits(monkeypatch, no_checkpoint_quantization):
     import vllm_omni.engine.stage_runtime as runtime_mod
 
     runtime = _make_stage_runtime(
@@ -2561,7 +2552,9 @@ def test_dist_stage_runtime_applies_local_dp_to_stage_config(typed):
 
 @pytest.mark.parametrize("num_replicas", [1, 2, 3])
 @pytest.mark.parametrize("kv_owner", [None, "connector_config", "diffusion_config"])
-def test_typed_diffusion_replicas_share_one_config_between_planning_and_launch(mocker, num_replicas, kv_owner):
+def test_typed_diffusion_replicas_share_one_config_between_planning_and_launch(
+    mocker, num_replicas, kv_owner, no_checkpoint_quantization
+):
     from vllm_omni.config.config_factory import StageConfigFactory
     from vllm_omni.engine import stage_runtime as runtime_module
 
@@ -2621,7 +2614,9 @@ def test_typed_diffusion_replicas_share_one_config_between_planning_and_launch(m
 
 @pytest.mark.parametrize("typed", [False, True], ids=["legacy", "typed"])
 @pytest.mark.parametrize("num_replicas", [1, 2])
-def test_native_kv_producer_replica_identity_and_bootstrap_are_isolated(mocker, typed, num_replicas):
+def test_native_kv_producer_replica_identity_and_bootstrap_are_isolated(
+    mocker, typed, num_replicas, no_checkpoint_quantization
+):
     from vllm.config import KVTransferConfig
 
     from vllm_omni.config.omni_config import VllmOmniARStageConfig

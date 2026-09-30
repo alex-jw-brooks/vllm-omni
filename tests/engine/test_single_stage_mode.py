@@ -41,14 +41,6 @@ from vllm_omni.engine.stage_runtime import DistStageRuntime, StageRuntime
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-@pytest.fixture(autouse=True)
-def _no_checkpoint_quantization(monkeypatch):
-    monkeypatch.setattr(
-        "vllm_omni.engine.stage_runtime.get_stage_quantization_config",
-        lambda _model, _quantization, **_kwargs: None,
-    )
-
-
 def _make_stage_cfg(stage_id: int, stage_type: str = "llm"):
     """Return a lightweight stage config mock."""
     return SimpleNamespace(
@@ -678,7 +670,9 @@ class TestSingleStageInitialization:
             omni_master_port=26000,
         )
 
-    def test_build_logical_stage_init_plans_marks_non_matching_stage_remote(self, mocker: MockerFixture):
+    def test_build_logical_stage_init_plans_marks_non_matching_stage_remote(
+        self, mocker: MockerFixture, no_checkpoint_quantization
+    ):
         import vllm_omni.engine.stage_runtime as runtime_mod
 
         stage_cfgs = [_make_stage_cfg(0), _make_stage_cfg(1)]
@@ -782,7 +776,7 @@ class TestSingleStageInitialization:
             runtime._start_omni_master_server([_make_llm_plan(0, stage_id=0, launch_mode="local")])
 
     def test_build_logical_stage_init_plans_preserves_runtime_cfg_for_local_llm_in_single_stage_mode(
-        self, mocker: MockerFixture
+        self, mocker: MockerFixture, no_checkpoint_quantization
     ):
         import vllm_omni.engine.stage_runtime as runtime_mod
 
@@ -842,7 +836,7 @@ class TestSingleStageInitialization:
             runtime._validate_single_stage_mode_replica_constraints()
 
     def test_build_logical_stage_init_plans_preserves_diffusion_runtime_cfg_in_single_stage_mode(
-        self, mocker: MockerFixture
+        self, mocker: MockerFixture, no_checkpoint_quantization
     ):
         import vllm_omni.engine.stage_runtime as runtime_mod
 

@@ -13,6 +13,7 @@ from vllm_omni.diffusion.models.wan2_2.wan2_2_transformer import (
     WanTransformer3DModel,
 )
 from vllm_omni.quantization import build_quantization_config
+from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
 from vllm_omni.quantization.inc_config import OmniINCConfig
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
@@ -47,6 +48,19 @@ def test_build_wan_autoround_mxfp4_config():
     assert config.group_size == 32
     assert config.packing_format == "auto_round:llm_compressor"
     assert config.block_name_to_quantize == ["blocks"]
+
+
+@pytest.mark.parametrize("has_active_config", [False, True], ids=["auto_detect", "reconcile"])
+def test_resolve_wan_autoround_mxfp4_from_disk(has_active_config):
+    """Ensure Wan2.2 experts (transformer / transformer_2) rebuild quantization from their config.jsons"""
+    disk_config = _autoround_mxfp4_config()
+    active_config = build_quantization_config(disk_config) if has_active_config else None
+
+    config = resolve_quantization_config_from_disk(active_config, disk_config)
+
+    assert isinstance(config, OmniINCConfig)
+    assert config.weight_bits == 4
+    assert config.data_type == "mx_fp"
 
 
 def test_wan_autoround_config_uses_runtime_layer_names():
