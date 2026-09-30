@@ -5,17 +5,25 @@
 - Quantization name resolution
 """
 
+import subprocess
+import sys
 from collections.abc import Callable
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
+from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import torch
 from pytest_mock import MockerFixture
+from safetensors.torch import save_file
+from transformers import LlamaConfig
+from vllm.model_executor.layers.linear import LinearBase
 from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS, get_quantization_config
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.layers.quantization.fp8 import Fp8Config
 
+from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization.bitsandbytes_config import DiffusionBitsAndBytesConfig
 from vllm_omni.quantization.component_config import ComponentQuantizationConfig
 from vllm_omni.quantization.factory import (
@@ -168,12 +176,28 @@ def test_explicit_method_cannot_override_checkpoint_method():
         build_quantization_config("fp8", {QUANT_METHOD_KEY: "modelopt", "quant_algo": "NVFP4"})
 
 
-def test_legacy_modelopt_metadata_without_method_key_is_detected():
-    """Ensure producer/quant_algo ModelOpt checkpoint metadata resolves without a method key."""
+@pytest.mark.parametrize("method", [None, "modelopt"])
+def test_legacy_modelopt_metadata_without_method_key_is_detected(method):
+    """Ensure producer/quant_algo ModelOpt checkpoint metadata resolves without a method key,
+    whether or not --quantization modelopt is passed explicitly (as vLLM accepts)."""
     legacy = {"producer": {"name": "modelopt"}, "quantization": {"quant_algo": "FP8"}}
-    config = build_quantization_config(None, legacy)
+    config = build_quantization_config(method, legacy)
     assert config is not None
     assert config.get_name() == "modelopt"
+
+
+@pytest.mark.parametrize(
+    "method, quant_algo, expected",
+    [
+        ("fp8", "FP8", "modelopt"),
+        ("fp4", "NVFP4", "modelopt_fp4"),
+        ("nvfp4", "NVFP4", "modelopt_fp4"),
+    ],
+)
+def test_generic_request_adopts_modelopt_checkpoint(method, quant_algo, expected):
+    """Ensure generic methods (fp8, fp4, nvfp4) resolve to the matching ModelOpt checkpoint config."""
+    checkpoint = {QUANT_METHOD_KEY: "modelopt", "quant_algo": quant_algo}
+    assert build_quantization_config(method, checkpoint).get_name() == expected
 
 
 def test_non_modelopt_metadata_without_method_key_stays_unquantized():
@@ -206,3 +230,39 @@ def test_stage_quantization_config_uses_model_revision(mocker: MockerFixture) ->
     assert result is None
     read_checkpoint_config.assert_called_once_with(model="model", revision="revision")
     get_hf_config.assert_called_once_with(model="model", trust_remote_code=True, revision="revision")
+
+
+@pytest.mark.parametrize("method", ["mxfp4", "mxfp8"])
+def test_registered_config_handles_linear_on_cuda(mocker: MockerFixture, monkeypatch, method: str) -> None:
+    """Ensure the registered config handles linear layers on CUDA, like vLLM's own class."""
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    for platform_check in ("is_npu", "is_rocm", "is_xpu"):
+        monkeypatch.setattr(current_omni_platform, platform_check, lambda: False)
+    config = get_quantization_config(method).from_config({QUANT_METHOD_KEY: method})
+
+    assert config.get_quant_method(mocker.Mock(spec=LinearBase), "layer") is not None
+
+
+def test_import_vllm_omni_loads_quack_fp8_patch() -> None:
+    """Ensure importing vllm_omni loads the quack FP8 patch (no quantization.factory <-> omni_config cycle)."""
+    code = "import sys, vllm_omni; assert 'vllm_omni.quantization.quack_fp8' in sys.modules"
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_stage_quantization_config_detects_unquantized_modules(tmp_path: Path) -> None:
+    """Ensure an AWQ LLM stage config skips modules whose checkpoint weights are unquantized."""
+    awq = {"quant_method": "awq", "bits": 4, "group_size": 128, "zero_point": True}
+    LlamaConfig(quantization_config=awq).save_pretrained(tmp_path)
+    weights = {"quantized.qweight": torch.zeros(1, dtype=torch.int32), "unquantized.weight": torch.zeros(1)}
+    save_file(weights, str(tmp_path / "model.safetensors"))
+
+    config = get_stage_quantization_config(
+        str(tmp_path),
+        None,
+        revision=None,
+        stage_type="llm",
+        trust_remote_code=False,
+        hf_config_name=None,
+    )
+
+    assert config.modules_to_not_convert == ["unquantized"]

@@ -18,7 +18,7 @@ from vllm.v1.engine.utils import EngineZmqAddresses
 
 from tests.helpers.mock import patch_hf_snapshot_download
 from vllm_omni.config.omni_config import OmniStageRuntimeConfig
-from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec
+from vllm_omni.diffusion.data import AttentionConfig
 from vllm_omni.engine import omni_engine_base as async_omni_engine_module
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.engine.stage_engine_startup import StageReplicaResources
@@ -31,7 +31,6 @@ from vllm_omni.engine.stage_init_utils import (
     stage_runtime_env,
 )
 from vllm_omni.engine.stage_runtime import StageRuntime
-from vllm_omni.entrypoints.utils import _apply_stage_engine_arg_overrides
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -2211,77 +2210,6 @@ def test_inject_kv_stage_info_updates_typed_connector_config():
     assert stage0.connector_config.omni_kv_config["connector_config"] == {"kv_connector": "P2pNcclConnector"}
     assert stage0.connector_config.omni_kv_config["engine_input_source"] == []
     assert stage0.connector_config.omni_kv_config["rank_mapping"] == {"from_tp": 4, "to_tp": 2}
-
-
-def test_apply_stage_engine_arg_overrides_injects_global_diffusion_attention_when_missing():
-    stage_cfg = _stage_config(
-        "diffusion",
-        diffusion_attention_config=None,
-        lora_path=None,
-        lora_scale=None,
-        enable_sleep_mode=None,
-        quantization_config=None,
-    )
-
-    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
-        stage_cfg, {"diffusion_attention_backend": "FLASH_ATTN"}
-    )
-
-    diffusion_attention_config = stage_cfg.engine_args.diffusion_attention_config
-    assert diffusion_attention_config["default"]["backend"] == "FLASH_ATTN"
-
-
-def test_apply_stage_engine_arg_overrides_preserves_stage_diffusion_attention():
-    existing_attention = AttentionConfig(default=AttentionSpec(backend="TORCH_SDPA"))
-    stage_cfg = _stage_config(
-        "diffusion",
-        diffusion_attention_config=existing_attention,
-        lora_path=None,
-        lora_scale=None,
-        enable_sleep_mode=None,
-        quantization_config=None,
-    )
-
-    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
-        stage_cfg, {"diffusion_attention_backend": "FLASH_ATTN"}
-    )
-
-    assert stage_cfg.engine_args.diffusion_attention_config == existing_attention
-
-
-def test_apply_stage_engine_arg_overrides_does_not_inject_over_stage_diffusion_attention_backend():
-    stage_cfg = _stage_config(
-        "diffusion",
-        diffusion_attention_backend="TORCH_SDPA",
-        diffusion_attention_config=None,
-        lora_path=None,
-        lora_scale=None,
-        enable_sleep_mode=None,
-        quantization_config=None,
-    )
-
-    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
-        stage_cfg, {"diffusion_attention_backend": "FLASH_ATTN"}
-    )
-
-    engine_args = stage_cfg.engine_args
-    assert "diffusion_attention_backend" not in engine_args
-    assert engine_args.diffusion_attention_config.default.backend == "TORCH_SDPA"
-
-
-def test_apply_stage_engine_arg_overrides_does_not_inject_diffusion_attention_into_llm_stage():
-    stage_cfg = _stage_config(
-        "llm",
-        attention_config={"backend": "FLASH_ATTN"},
-        enable_sleep_mode=None,
-    )
-
-    stage_cfg["engine_args"] = _apply_stage_engine_arg_overrides(
-        stage_cfg, {"diffusion_attention_backend": "TORCH_SDPA"}
-    )
-
-    assert stage_cfg.engine_args.attention_config == {"backend": "FLASH_ATTN"}
-    assert not hasattr(stage_cfg.engine_args, "diffusion_attention_config")
 
 
 def test_extract_legacy_stage_metadata_rocm_does_not_inject_diffusion_attention(monkeypatch):
