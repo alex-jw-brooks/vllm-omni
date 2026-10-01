@@ -53,6 +53,7 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 _CALL1_REQUEST_ID = "req-run-call1"
 _CALL2_REQUEST_ID = "req-run-call2"
 _CALL3_REQUEST_ID = "req-run-call3"
+_COMPANION_REQUEST_ID = "req-run-call1-neg"
 # Tokens each stage produces, and the input the orchestrator builds for the next stage from them.
 _STAGE0_OUTPUT_TOKEN_IDS = (3, 4)
 _STAGE1_INPUT_TOKEN_IDS = (7, 8, 9)
@@ -641,6 +642,30 @@ async def test_run_two_stage_llm(orchestrator_factory) -> None:
         await _shutdown_orchestrator(orchestrator_fixture)
 
 
+def _finished_outputs(*request_ids: str, token_ids: tuple[int, ...] = (1, 2)) -> list[RequestOutput]:
+    """One finished output per request id, for a fake output processor to return."""
+    return [_build_request_output(request_id, token_ids=list(token_ids), finished=True) for request_id in request_ids]
+
+
+async def _enqueue_run_request(
+    orchestrator_fixture: OrchestratorFixture, *, original_prompt: dict[str, str] | None = None
+) -> None:
+    """Enqueue the first call of a run chain: it yields at stage 0 and ends at the last stage."""
+    sampling_params_list = [
+        OmniDiffusionSamplingParams() if pool.stage_type == "diffusion" else _sampling_params()
+        for pool in orchestrator_fixture.orchestrator.stage_pools
+    ]
+    await _enqueue_add_request(
+        orchestrator_fixture,
+        request_id=_CALL1_REQUEST_ID,
+        prompt=SimpleNamespace(request_id=_CALL1_REQUEST_ID, prompt_token_ids=[1, 2, 3]),
+        original_prompt=original_prompt or {"prompt": "hello"},
+        sampling_params_list=sampling_params_list,
+        final_stage_id=len(sampling_params_list) - 1,
+        yield_stage_id=0,
+    )
+
+
 async def _start_three_stage_run(
     orchestrator_factory, *, stage0_final_output: bool
 ) -> tuple[OrchestratorFixture, FakeStageClient, FakeStageClient]:
@@ -657,32 +682,12 @@ async def _start_three_stage_run(
         next_inputs=[{"prompt_token_ids": list(_STAGE2_INPUT_TOKEN_IDS)}],
     )
     processors = [
-        FakeOutputProcessor(
-            request_outputs=[
-                _build_request_output(_CALL1_REQUEST_ID, token_ids=list(_STAGE0_OUTPUT_TOKEN_IDS), finished=True)
-            ]
-        ),
-        FakeOutputProcessor(
-            request_outputs=[
-                _build_request_output(_CALL2_REQUEST_ID, token_ids=list(_STAGE1_OUTPUT_TOKEN_IDS), finished=True)
-            ]
-        ),
-        FakeOutputProcessor(
-            request_outputs=[
-                _build_request_output(_CALL3_REQUEST_ID, token_ids=list(_STAGE2_OUTPUT_TOKEN_IDS), finished=True)
-            ]
-        ),
+        FakeOutputProcessor(request_outputs=_finished_outputs(_CALL1_REQUEST_ID, token_ids=_STAGE0_OUTPUT_TOKEN_IDS)),
+        FakeOutputProcessor(request_outputs=_finished_outputs(_CALL2_REQUEST_ID, token_ids=_STAGE1_OUTPUT_TOKEN_IDS)),
+        FakeOutputProcessor(request_outputs=_finished_outputs(_CALL3_REQUEST_ID, token_ids=_STAGE2_OUTPUT_TOKEN_IDS)),
     ]
     orchestrator_fixture = orchestrator_factory([stage0, stage1, stage2], output_processors=processors)
-    await _enqueue_add_request(
-        orchestrator_fixture,
-        request_id=_CALL1_REQUEST_ID,
-        prompt=SimpleNamespace(request_id=_CALL1_REQUEST_ID, prompt_token_ids=[1, 2, 3]),
-        original_prompt={"prompt": "hello"},
-        sampling_params_list=[_sampling_params(), _sampling_params(), _sampling_params()],
-        final_stage_id=2,
-        yield_stage_id=0,
-    )
+    await _enqueue_run_request(orchestrator_fixture)
     await _wait_for(lambda: len(stage0.add_request_calls) == 1)
     stage0.push_engine_core_outputs(_engine_core_outputs("stage0-raw", 1.0))
     return orchestrator_fixture, stage1, stage2
@@ -739,6 +744,87 @@ async def test_run_chain_yields_at_each_stage_until_final_output(orchestrator_fa
 
 
 @pytest.mark.asyncio
+async def test_run_yield_waits_for_cfg_companions(orchestrator_factory) -> None:
+    """Ensure a yielded stage waits for its CFG companions, forwards their ids, and leaves no state behind."""
+    stage0 = FakeStageClient(stage_type="llm", final_output=False)
+    stage1 = FakeStageClient(stage_type="diffusion", final_output=True, final_output_type="image")
+    stage0_processor = FakeOutputProcessor(request_outputs=_finished_outputs(_CALL1_REQUEST_ID, _COMPANION_REQUEST_ID))
+    orchestrator_fixture = orchestrator_factory(
+        [stage0, stage1], output_processors=[stage0_processor, FakeOutputProcessor()]
+    )
+    orchestrator = orchestrator_fixture.orchestrator
+    original_prompt = {"prompt": "draw a fox"}
+    try:
+        await _enqueue_run_request(orchestrator_fixture, original_prompt=original_prompt)
+        orchestrator_fixture.request_sync_q.put_nowait(
+            AddCompanionRequestMessage(
+                companion_id=_COMPANION_REQUEST_ID,
+                parent_id=_CALL1_REQUEST_ID,
+                role="negative",
+                prompt=SimpleNamespace(request_id=_COMPANION_REQUEST_ID, prompt_token_ids=[9]),
+                companion_prompt_text={"prompt": "negative"},
+                sampling_params_list=[_sampling_params()],
+            )
+        )
+        await _wait_for(lambda: len(stage0.add_request_calls) == 2)
+        stage0.push_engine_core_outputs(_engine_core_outputs("stage0-raw", 1.0))
+
+        msg = _get_messages_until_response(orchestrator_fixture)[-1]
+
+        assert isinstance(msg, NextStageInputMessage)
+        assert msg.requests == [original_prompt]
+        assert msg.params_override.cfg_kv_request_ids == {"negative": _COMPANION_REQUEST_ID}
+        assert stage1.add_request_calls == []
+        assert _CALL1_REQUEST_ID not in orchestrator.request_states
+        assert _COMPANION_REQUEST_ID not in orchestrator.request_states
+        assert not orchestrator._cfg_tracker.has_companions(_CALL1_REQUEST_ID)
+
+        orchestrator_fixture.request_sync_q.put_nowait(msgspec.structs.replace(msg, request_id=_CALL2_REQUEST_ID))
+        await _wait_for(lambda: len(stage1.add_request_calls) == 1)
+        request_id, prompt, params = stage1.add_request_calls[0]
+        assert (request_id, prompt) == (_CALL2_REQUEST_ID, original_prompt)
+        assert params.cfg_kv_request_ids == {"negative": _COMPANION_REQUEST_ID}
+    finally:
+        await _shutdown_orchestrator(orchestrator_fixture)
+
+
+@pytest.mark.asyncio
+async def test_run_yield_waits_for_stage_finish_not_kv_ready(orchestrator_factory) -> None:
+    """Ensure a yielded stage ignores an early kv_ready signal and yields with its finished output."""
+    stage0 = FakeStageClient(stage_type="llm", final_output=True)
+    stage1 = FakeStageClient(
+        stage_type="llm",
+        final_output=True,
+        next_inputs=[{"prompt_token_ids": list(_STAGE1_INPUT_TOKEN_IDS)}],
+    )
+    stage0_processor = FakeOutputProcessor()
+    orchestrator_fixture = orchestrator_factory(
+        [stage0, stage1], output_processors=[stage0_processor, FakeOutputProcessor()]
+    )
+    try:
+        await _enqueue_run_request(orchestrator_fixture)
+        await _wait_for(lambda: len(stage0.add_request_calls) == 1)
+        stage0.push_engine_core_outputs(
+            EngineCoreOutputs(
+                outputs=[
+                    OmniEngineCoreOutput(
+                        request_id=_CALL1_REQUEST_ID, new_token_ids=[], kv_transfer_params={"kv_ready": True}
+                    )
+                ]
+            )
+        )
+        stage0_processor.request_outputs = _finished_outputs(_CALL1_REQUEST_ID, token_ids=_STAGE0_OUTPUT_TOKEN_IDS)
+        stage0.push_engine_core_outputs(_engine_core_outputs("stage0-raw", 1.0))
+
+        msg = _get_messages_until_response(orchestrator_fixture)[-1]
+
+        assert isinstance(msg, NextStageInputMessage)
+        assert msg.stage_output.outputs[0].token_ids == list(_STAGE0_OUTPUT_TOKEN_IDS)
+    finally:
+        await _shutdown_orchestrator(orchestrator_fixture)
+
+
+@pytest.mark.asyncio
 async def test_run_requests_rejected_with_async_chunk(orchestrator_factory) -> None:
     """Ensure both run entry points fail with a client error when async chunk is enabled."""
     stage0 = FakeStageClient(stage_type="llm", final_output=False)
@@ -746,15 +832,7 @@ async def test_run_requests_rejected_with_async_chunk(orchestrator_factory) -> N
     orchestrator_fixture = orchestrator_factory([stage0, stage1], async_chunk=True)
     sampling_params_list = [_sampling_params(), _sampling_params()]
     try:
-        await _enqueue_add_request(
-            orchestrator_fixture,
-            request_id=_CALL1_REQUEST_ID,
-            prompt=SimpleNamespace(request_id=_CALL1_REQUEST_ID, prompt_token_ids=[1, 2, 3]),
-            original_prompt={"prompt": "hello"},
-            sampling_params_list=sampling_params_list,
-            final_stage_id=1,
-            yield_stage_id=0,
-        )
+        await _enqueue_run_request(orchestrator_fixture)
         orchestrator_fixture.request_sync_q.put_nowait(
             NextStageInputMessage(
                 request_id=_CALL2_REQUEST_ID,

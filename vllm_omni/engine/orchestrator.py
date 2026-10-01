@@ -2169,6 +2169,9 @@ class OrchestratorBase:
             req_state = self.request_states.get(req_id)
             if req_state is None:
                 continue
+            if req_state.yield_stage_id == stage_id:
+                # A yielding request returns the next stage input once its stage finishes.
+                continue
             if self._cfg_tracker.is_companion(req_id):
                 # kv_ready only says the companion's KV hit the connector; its
                 # processed output has not been stashed yet. Counting it as
