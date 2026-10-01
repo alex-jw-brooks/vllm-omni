@@ -125,6 +125,9 @@ class NextStageInputMessage(EngineQueueMessage, kw_only=True):
     submit_kwargs: dict[str, object] | None
     params_override: OmniSamplingParams | None
     stage_output: OmniRequestOutput | None
+    sampling_params_list: list[OmniSamplingParams]
+    final_stage_id: int
+    final_output_stage_ids: list[int]
 
 
 class AbortResultMessage(EngineQueueMessage, kw_only=True):

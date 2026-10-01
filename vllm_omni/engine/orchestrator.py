@@ -89,6 +89,8 @@ def cleanup_request_artifact_dirs(artifact_dirs: set[str] | list[str]) -> None:
 # Default is off except for pipelines with an explicit validated default.
 _EVENT_DRIVEN_ORCH_ENV = "VLLM_OMNI_EVENT_DRIVEN_ORCH"
 
+_RUN_STAGE_ASYNC_CHUNK_ERROR = "Running one stage per request is not supported with async_chunk"
+
 # How often the event-driven loop reconciles its reader-task set against
 # `available_replica_ids()` (elastic membership, replica eviction) while idle.
 _ORCH_READER_RECONCILE_INTERVAL_S = 0.5
@@ -195,6 +197,15 @@ def build_engine_core_request_from_tokens(
         additional_information=additional_info_payload,
         model_intermediate_buffer=model_intermediate_buffer if isinstance(model_intermediate_buffer, dict) else None,
     )
+
+
+def _update_stale_request_metadata(requests: list[EngineCoreRequest], request_id: str) -> None:
+    """Give requests built by an earlier request the new request's id and a fresh arrival time."""
+    arrival_time = _time.time()
+    for request in requests:
+        request.request_id = request_id
+        request.external_req_id = request_id
+        request.arrival_time = arrival_time
 
 
 @dataclass
@@ -2652,6 +2663,9 @@ class OrchestratorBase:
                 submit_kwargs=submit_kwargs,
                 params_override=params_override,
                 stage_output=req_state.yield_stage_output,
+                sampling_params_list=req_state.sampling_params_list,
+                final_stage_id=req_state.final_stage_id,
+                final_output_stage_ids=list(req_state.final_output_stage_ids),
             )
         )
 
@@ -2957,9 +2971,62 @@ class Orchestrator(OrchestratorBase):
             await self._handle_add_companion(msg)
         elif msg_type == "interaction":
             await self._handle_interaction(msg)
+        elif msg_type == "next_stage_input":
+            await self._handle_next_stage_input(msg)
         else:
             return False
         return True
+
+    async def _fail_if_cannot_submit(self, req_id: str, stage_id: int, *, is_run_request: bool) -> bool:
+        """Fail the request if it can't be submitted to ``stage_id``; return whether it failed."""
+        if not self.stage_pools[stage_id].live_replica_ids():
+            # The stage lost all replicas between the HTTP-layer errored check and
+            # dispatch. Runs before request state / running counter registration,
+            # so the helper's cleanup is a no-op here.
+            await self._fail_request_dead_stage(req_id, stage_id)
+            return True
+        if is_run_request and self.async_chunk:
+            await self._fail_request_client_error(req_id, stage_id, _RUN_STAGE_ASYNC_CHUNK_ERROR)
+            return True
+        return False
+
+    async def _handle_next_stage_input(self, msg: NextStageInputMessage) -> None:
+        """Submit a next stage input returned by an earlier request as a new request at its receiver stage."""
+        req_id = msg.request_id
+        receiver_stage_id = msg.receiver_stage_id
+        if await self._fail_if_cannot_submit(req_id, receiver_stage_id, is_run_request=True):
+            return
+
+        req_state = OrchestratorRequestState(
+            request_id=req_id,
+            sampling_params_list=msg.sampling_params_list,
+            final_stage_id=msg.final_stage_id,
+            final_output_stage_ids=set(msg.final_output_stage_ids),
+            yield_stage_id=receiver_stage_id if receiver_stage_id < msg.final_stage_id else None,
+            request_timestamp=_time.time(),
+        )
+        self.request_states[req_id] = req_state
+        self._register_running_request(req_state)
+        # Ensure LLM stages update core engine request metadata that's now stale
+        if self.stage_pools[receiver_stage_id].stage_type == "llm":
+            _update_stale_request_metadata(msg.requests, req_id)
+        await self._dispatch_or_fail_request(
+            lambda: self._submit_to_stage(
+                req_id,
+                req_state,
+                msg.requests,
+                source_stage_id=msg.source_stage_id,
+                source_replica_id=None,
+                receiver_stage_id=receiver_stage_id,
+                already_submitted=False,
+                t_submit_start=_time.perf_counter(),
+                submit_kwargs=msg.submit_kwargs,
+                params_override=msg.params_override,
+            ),
+            req_id=req_id,
+            stage_id=receiver_stage_id,
+            operation="next_stage_input",
+        )
 
     def _native_mrv2_receiver_stage(self, final_stage_id: int) -> int | None:
         """First downstream stage up to ``final_stage_id`` that receives on MRv2's native data plane."""
@@ -2985,11 +3052,7 @@ class Orchestrator(OrchestratorBase):
         final_stage_id = msg.final_stage_id
         final_output_stage_ids = set(msg.final_output_stage_ids or [final_stage_id])
 
-        if not self.stage_pools[stage_id].live_replica_ids():
-            # Stage 0 lost all replicas between the HTTP-layer errored check and
-            # dispatch. Runs before request state / running counter registration,
-            # so the helper's cleanup is a no-op here.
-            await self._fail_request_dead_stage(request_id, stage_id)
+        if await self._fail_if_cannot_submit(request_id, stage_id, is_run_request=msg.yield_stage_id is not None):
             return
 
         if getattr(prompt, "resumable", False):

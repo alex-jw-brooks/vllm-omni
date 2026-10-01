@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import janus
+import msgspec
 import pytest
 from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.sampling_params import SamplingParams
@@ -49,9 +50,12 @@ from vllm_omni.outputs import OmniRequestOutput
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 _YIELD_REQUEST_ID = "req-run"
+# Fresh request id the caller uses when it sends the next stage input back.
+_RESUBMIT_REQUEST_ID = "req-run-resubmit"
 # Tokens stage 0 produces, and the input the orchestrator builds for stage 1 from them.
 _STAGE0_OUTPUT_TOKEN_IDS = (3, 4)
 _STAGE1_INPUT_TOKEN_IDS = (7, 8, 9)
+_STAGE1_OUTPUT_TOKEN_IDS = (10, 11)
 
 
 class FakeRunningCounter:
@@ -650,7 +654,11 @@ async def _start_two_stage_yield_at_stage0(
                 _build_request_output(_YIELD_REQUEST_ID, token_ids=list(_STAGE0_OUTPUT_TOKEN_IDS), finished=True)
             ]
         ),
-        FakeOutputProcessor(),
+        FakeOutputProcessor(
+            request_outputs=[
+                _build_request_output(_RESUBMIT_REQUEST_ID, token_ids=list(_STAGE1_OUTPUT_TOKEN_IDS), finished=True)
+            ]
+        ),
     ]
     orchestrator_fixture = orchestrator_factory([stage0, stage1], output_processors=processors)
     await _enqueue_add_request(
@@ -668,28 +676,8 @@ async def _start_two_stage_yield_at_stage0(
 
 
 @pytest.mark.asyncio
-async def test_run_yield_stage_returns_next_stage_input(orchestrator_factory) -> None:
-    """Ensure a request yielding at stage 0 returns stage 1's built input instead of submitting it."""
-    orchestrator_fixture, stage1 = await _start_two_stage_yield_at_stage0(
-        orchestrator_factory, stage0_final_output=False
-    )
-    try:
-        messages = _get_messages_until_next_stage_input(orchestrator_fixture)
-        msg = messages[-1]
-
-        assert isinstance(msg, NextStageInputMessage)
-        assert msg.receiver_stage_id == 1
-        assert [request.prompt_token_ids for request in msg.requests] == [list(_STAGE1_INPUT_TOKEN_IDS)]
-        assert msg.stage_output is None
-        assert stage1.add_request_calls == []
-        assert _YIELD_REQUEST_ID not in orchestrator_fixture.orchestrator.request_states
-    finally:
-        await _shutdown_orchestrator(orchestrator_fixture)
-
-
-@pytest.mark.asyncio
 async def test_run_yield_stage_forwards_final_output_in_next_stage_input(orchestrator_factory) -> None:
-    """Ensure a yielded stage with final_output sends its output inside the next stage input, not as a response."""
+    """Ensure a yielded stage with final_output sends its output inside the next stage input."""
     orchestrator_fixture, _ = await _start_two_stage_yield_at_stage0(orchestrator_factory, stage0_final_output=True)
     try:
         messages = _get_messages_until_next_stage_input(orchestrator_fixture)
@@ -698,6 +686,77 @@ async def test_run_yield_stage_forwards_final_output_in_next_stage_input(orchest
         assert isinstance(msg, NextStageInputMessage)
         assert msg.stage_output.outputs[0].token_ids == list(_STAGE0_OUTPUT_TOKEN_IDS)
         assert not any(isinstance(message, OutputMessage) for message in messages)
+    finally:
+        await _shutdown_orchestrator(orchestrator_fixture)
+
+
+@pytest.mark.asyncio
+async def test_run_next_stage_input_resubmits_to_receiver_stage(orchestrator_factory) -> None:
+    """Ensure a next stage input sent back under a new request id runs the receiver stage to the final output."""
+    orchestrator_fixture, stage1 = await _start_two_stage_yield_at_stage0(
+        orchestrator_factory, stage0_final_output=False
+    )
+    try:
+        msg = _get_messages_until_next_stage_input(orchestrator_fixture)[-1]
+        assert isinstance(msg, NextStageInputMessage)
+        assert msg.stage_output is None
+        assert _YIELD_REQUEST_ID not in orchestrator_fixture.orchestrator.request_states
+        orchestrator_fixture.request_sync_q.put_nowait(msgspec.structs.replace(msg, request_id=_RESUBMIT_REQUEST_ID))
+
+        await _wait_for(lambda: len(stage1.add_request_calls) == 1)
+        stage1_request = stage1.add_request_calls[0][0]
+        assert stage1_request.request_id == _RESUBMIT_REQUEST_ID
+        assert stage1_request.prompt_token_ids == list(_STAGE1_INPUT_TOKEN_IDS)
+
+        stage1.push_engine_core_outputs(_engine_core_outputs("stage1-raw", 2.0))
+        output_msg = await _get_output_message(orchestrator_fixture)
+
+        assert output_msg.request_id == _RESUBMIT_REQUEST_ID
+        assert output_msg.engine_outputs.outputs[0].token_ids == list(_STAGE1_OUTPUT_TOKEN_IDS)
+        assert output_msg.finished is True
+        assert _RESUBMIT_REQUEST_ID not in orchestrator_fixture.orchestrator.request_states
+    finally:
+        await _shutdown_orchestrator(orchestrator_fixture)
+
+
+@pytest.mark.asyncio
+async def test_run_requests_rejected_with_async_chunk(orchestrator_factory) -> None:
+    """Ensure both run entry points fail with a client error when async chunk is enabled."""
+    stage0 = FakeStageClient(stage_type="llm", final_output=False)
+    stage1 = FakeStageClient(stage_type="llm", final_output=True)
+    orchestrator_fixture = orchestrator_factory([stage0, stage1], async_chunk=True)
+    sampling_params_list = [_sampling_params(), _sampling_params()]
+    try:
+        await _enqueue_add_request(
+            orchestrator_fixture,
+            request_id=_YIELD_REQUEST_ID,
+            prompt=SimpleNamespace(request_id=_YIELD_REQUEST_ID, prompt_token_ids=[1, 2, 3]),
+            original_prompt={"prompt": "hello"},
+            sampling_params_list=sampling_params_list,
+            final_stage_id=1,
+            yield_stage_id=0,
+        )
+        orchestrator_fixture.request_sync_q.put_nowait(
+            NextStageInputMessage(
+                request_id=_RESUBMIT_REQUEST_ID,
+                source_stage_id=0,
+                receiver_stage_id=1,
+                requests=[],
+                submit_kwargs=None,
+                params_override=None,
+                stage_output=None,
+                sampling_params_list=sampling_params_list,
+                final_stage_id=1,
+                final_output_stage_ids=[1],
+            )
+        )
+
+        errors = [orchestrator_fixture.output_sync_q.get(timeout=2.0) for _ in range(2)]
+
+        assert all(isinstance(error, ErrorMessage) for error in errors)
+        assert [error.request_id for error in errors] == [_YIELD_REQUEST_ID, _RESUBMIT_REQUEST_ID]
+        assert stage0.add_request_calls == []
+        assert stage1.add_request_calls == []
     finally:
         await _shutdown_orchestrator(orchestrator_fixture)
 
