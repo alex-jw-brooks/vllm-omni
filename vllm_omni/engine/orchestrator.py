@@ -2428,33 +2428,17 @@ class OrchestratorBase:
             payload_sender_info = self._build_payload_sender_info(src_stage_id, request_id=req_id)
             if payload_sender_info is not None:
                 submit_kwargs["payload_sender_info"] = payload_sender_info
-            if already_submitted:
-                replica_id = await next_pool.submit_update(
-                    req_id, req_state, diffusion_prompt, submit_kwargs=submit_kwargs
-                )
-            else:
-                replica_id = await next_pool.submit_initial(
-                    req_id,
-                    req_state,
-                    diffusion_prompt,
-                    submit_kwargs=submit_kwargs,
-                    params_override=self._maybe_clone_diffusion_params_for_cfg(req_id, params),
-                )
-            self._on_stage_submitted(
-                next_logical,
+            await self._submit_to_stage(
                 req_id,
-                replica_id,
                 req_state,
-            )
-            req_state.stage_submit_ts[next_logical] = _time.time()
-            _tx_ms = (_time.perf_counter() - _t_submit_start) * 1000.0
-            self._emit_tx_edge(
-                from_stage=src_stage_id,
-                from_replica=src_replica_id if src_replica_id is not None else 0,
-                to_stage=next_logical,
-                to_pool=next_pool,
-                request_id=req_id,
-                tx_ms=_tx_ms,
+                [diffusion_prompt],
+                source_stage_id=src_stage_id,
+                source_replica_id=src_replica_id,
+                receiver_stage_id=next_logical,
+                already_submitted=already_submitted,
+                t_submit_start=_t_submit_start,
+                submit_kwargs=submit_kwargs,
+                params_override=self._maybe_clone_diffusion_params_for_cfg(req_id, params),
             )
             return
 
@@ -2479,6 +2463,7 @@ class OrchestratorBase:
                     )
                 decode_inputs.append({"prompt_token_ids": list(prompt_token_ids)})
 
+            decode_requests = []
             for decode_input in decode_inputs:
                 request = build_engine_core_request_from_tokens(
                     request_id=req_id,
@@ -2489,26 +2474,17 @@ class OrchestratorBase:
                     resumable=next_stage_resumable,
                 )
                 request.external_req_id = request.request_id
-                if already_submitted:
-                    replica_id = await next_pool.submit_update(req_id, req_state, request)
-                else:
-                    replica_id = await next_pool.submit_initial(req_id, req_state, request, prompt_text=None)
-                self._on_stage_submitted(
-                    next_logical,
-                    req_id,
-                    replica_id,
-                    req_state,
-                )
+                decode_requests.append(request)
 
-            req_state.stage_submit_ts[next_logical] = _time.time()
-            _tx_ms = (_time.perf_counter() - _t_submit_start) * 1000.0
-            self._emit_tx_edge(
-                from_stage=src_stage_id,
-                from_replica=src_replica_id if src_replica_id is not None else 0,
-                to_stage=next_logical,
-                to_pool=next_pool,
-                request_id=req_id,
-                tx_ms=_tx_ms,
+            await self._submit_to_stage(
+                req_id,
+                req_state,
+                decode_requests,
+                source_stage_id=src_stage_id,
+                source_replica_id=src_replica_id,
+                receiver_stage_id=next_logical,
+                already_submitted=already_submitted,
+                t_submit_start=_t_submit_start,
             )
             return
 
@@ -2599,6 +2575,7 @@ class OrchestratorBase:
             return
 
         # Build and submit requests for each input
+        next_requests = []
         for next_input in next_inputs:
             # Only AR thinker stages consume encoder mm_features; downstream
             # (talker/code2wav/…) must not see them (avoids encoder-cache misses).
@@ -2613,27 +2590,54 @@ class OrchestratorBase:
                 resumable=next_stage_resumable,
                 payload_sender_info=self._build_payload_sender_info(src_stage_id, request_id=req_id),
             )
+            next_requests.append(request)
 
+        await self._submit_to_stage(
+            req_id,
+            req_state,
+            next_requests,
+            source_stage_id=src_stage_id,
+            source_replica_id=src_replica_id,
+            receiver_stage_id=next_logical,
+            already_submitted=already_submitted,
+            t_submit_start=_t_submit_start,
+        )
+
+    async def _submit_to_stage(
+        self,
+        req_id: str,
+        req_state: OrchestratorRequestState,
+        requests: list[Any],
+        *,
+        source_stage_id: int,
+        source_replica_id: int | None,
+        receiver_stage_id: int,
+        already_submitted: bool,
+        t_submit_start: float,
+        submit_kwargs: dict[str, Any] | None = None,
+        params_override: Any = None,
+    ) -> None:
+        """Submit requests built from the source stage's output to the receiver stage."""
+        to_pool = self.stage_pools[receiver_stage_id]
+        update_kwargs: dict[str, Any] = {} if submit_kwargs is None else {"submit_kwargs": submit_kwargs}
+        initial_kwargs = dict(update_kwargs)
+        if params_override is not None:
+            initial_kwargs["params_override"] = params_override
+        for request in requests:
             if already_submitted:
-                replica_id = await next_pool.submit_update(req_id, req_state, request)
+                replica_id = await to_pool.submit_update(req_id, req_state, request, **update_kwargs)
             else:
-                replica_id = await next_pool.submit_initial(req_id, req_state, request, prompt_text=None)
-            self._on_stage_submitted(
-                next_logical,
-                req_id,
-                replica_id,
-                req_state,
-            )
+                replica_id = await to_pool.submit_initial(req_id, req_state, request, **initial_kwargs)
+            self._on_stage_submitted(receiver_stage_id, req_id, replica_id, req_state)
 
-        req_state.stage_submit_ts[next_logical] = _time.time()
-        _tx_ms = (_time.perf_counter() - _t_submit_start) * 1000.0
+        req_state.stage_submit_ts[receiver_stage_id] = _time.time()
         self._emit_tx_edge(
-            from_stage=src_stage_id,
-            from_replica=src_replica_id if src_replica_id is not None else 0,
-            to_stage=next_logical,
-            to_pool=next_pool,
+            from_stage=source_stage_id,
+            from_replica=source_replica_id if source_replica_id is not None else 0,
+            to_stage=receiver_stage_id,
+            to_pool=to_pool,
             request_id=req_id,
-            tx_ms=_tx_ms,
+            tx_ms=(_time.perf_counter() - t_submit_start) * 1000.0,
         )
 
     async def _prewarm_async_chunk_stages(
