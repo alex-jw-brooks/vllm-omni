@@ -29,7 +29,9 @@ from vllm_omni.engine.messages import (
     AddCompanionRequestMessage,
     CollectiveRPCRequestMessage,
     CollectiveRPCResultMessage,
+    EngineQueueMessage,
     ErrorMessage,
+    NextStageInputMessage,
     OutputMessage,
     ShutdownRequestMessage,
     StageSubmissionMessage,
@@ -45,6 +47,11 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
+_YIELD_REQUEST_ID = "req-run"
+# Tokens stage 0 produces, and the input the orchestrator builds for stage 1 from them.
+_STAGE0_OUTPUT_TOKEN_IDS = (3, 4)
+_STAGE1_INPUT_TOKEN_IDS = (7, 8, 9)
 
 
 class FakeRunningCounter:
@@ -496,6 +503,18 @@ async def _get_output_message(orchestrator_fixture: OrchestratorFixture, *, time
             return msg
 
 
+def _get_messages_until_next_stage_input(
+    orchestrator_fixture: OrchestratorFixture, *, timeout: float = 2.0
+) -> list[EngineQueueMessage]:
+    """Return the emitted messages up to and including a required next stage input."""
+    messages: list[EngineQueueMessage] = []
+    while True:
+        message = orchestrator_fixture.output_sync_q.get(timeout=timeout)
+        messages.append(message)
+        if isinstance(message, NextStageInputMessage):
+            return messages
+
+
 async def _get_rpc_message(
     orchestrator_fixture: OrchestratorFixture,
     *,
@@ -521,6 +540,7 @@ async def _enqueue_add_request(
     sampling_params_list,
     final_stage_id: int,
     final_output_stage_ids: list[int] | None = None,
+    yield_stage_id: int | None = None,
 ) -> None:
     orchestrator_fixture.request_sync_q.put_nowait(
         StageSubmissionMessage(
@@ -532,6 +552,7 @@ async def _enqueue_add_request(
             sampling_params_list=sampling_params_list,
             final_stage_id=final_stage_id,
             final_output_stage_ids=final_output_stage_ids,
+            yield_stage_id=yield_stage_id,
             preprocess_ms=0.0,
             request_timestamp=time.time(),
             enqueue_ts=time.perf_counter(),
@@ -609,6 +630,74 @@ async def test_run_two_stage_llm(orchestrator_factory) -> None:
         assert output_msg.finished is True
         assert output_msg.engine_outputs.request_id == "req-llm"
         assert "req-llm" not in orchestrator_fixture.orchestrator.request_states
+    finally:
+        await _shutdown_orchestrator(orchestrator_fixture)
+
+
+async def _start_two_stage_yield_at_stage0(
+    orchestrator_factory, *, stage0_final_output: bool
+) -> tuple[OrchestratorFixture, FakeStageClient]:
+    """Start a two-stage LLM request that yields at stage 0 and finish stage 0."""
+    stage0 = FakeStageClient(stage_type="llm", final_output=stage0_final_output)
+    stage1 = FakeStageClient(
+        stage_type="llm",
+        final_output=True,
+        next_inputs=[{"prompt_token_ids": list(_STAGE1_INPUT_TOKEN_IDS)}],
+    )
+    processors = [
+        FakeOutputProcessor(
+            request_outputs=[
+                _build_request_output(_YIELD_REQUEST_ID, token_ids=list(_STAGE0_OUTPUT_TOKEN_IDS), finished=True)
+            ]
+        ),
+        FakeOutputProcessor(),
+    ]
+    orchestrator_fixture = orchestrator_factory([stage0, stage1], output_processors=processors)
+    await _enqueue_add_request(
+        orchestrator_fixture,
+        request_id=_YIELD_REQUEST_ID,
+        prompt=SimpleNamespace(request_id=_YIELD_REQUEST_ID, prompt_token_ids=[1, 2, 3]),
+        original_prompt={"prompt": "hello"},
+        sampling_params_list=[_sampling_params(), _sampling_params()],
+        final_stage_id=1,
+        yield_stage_id=0,
+    )
+    await _wait_for(lambda: len(stage0.add_request_calls) == 1)
+    stage0.push_engine_core_outputs(_engine_core_outputs("stage0-raw", 1.0))
+    return orchestrator_fixture, stage1
+
+
+@pytest.mark.asyncio
+async def test_run_yield_stage_returns_next_stage_input(orchestrator_factory) -> None:
+    """Ensure a request yielding at stage 0 returns stage 1's built input instead of submitting it."""
+    orchestrator_fixture, stage1 = await _start_two_stage_yield_at_stage0(
+        orchestrator_factory, stage0_final_output=False
+    )
+    try:
+        messages = _get_messages_until_next_stage_input(orchestrator_fixture)
+        msg = messages[-1]
+
+        assert isinstance(msg, NextStageInputMessage)
+        assert msg.receiver_stage_id == 1
+        assert [request.prompt_token_ids for request in msg.requests] == [list(_STAGE1_INPUT_TOKEN_IDS)]
+        assert msg.stage_output is None
+        assert stage1.add_request_calls == []
+        assert _YIELD_REQUEST_ID not in orchestrator_fixture.orchestrator.request_states
+    finally:
+        await _shutdown_orchestrator(orchestrator_fixture)
+
+
+@pytest.mark.asyncio
+async def test_run_yield_stage_forwards_final_output_in_next_stage_input(orchestrator_factory) -> None:
+    """Ensure a yielded stage with final_output sends its output inside the next stage input, not as a response."""
+    orchestrator_fixture, _ = await _start_two_stage_yield_at_stage0(orchestrator_factory, stage0_final_output=True)
+    try:
+        messages = _get_messages_until_next_stage_input(orchestrator_fixture)
+        msg = messages[-1]
+
+        assert isinstance(msg, NextStageInputMessage)
+        assert msg.stage_output.outputs[0].token_ids == list(_STAGE0_OUTPUT_TOKEN_IDS)
+        assert not any(isinstance(message, OutputMessage) for message in messages)
     finally:
         await _shutdown_orchestrator(orchestrator_fixture)
 

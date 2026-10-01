@@ -51,6 +51,7 @@ from vllm_omni.engine.messages import (
     EngineQueueMessage,
     ErrorMessage,
     InteractionMessage,
+    NextStageInputMessage,
     OutputMessage,
     RegisterRemoteReplicaMessage,
     ShutdownRequestMessage,
@@ -205,6 +206,8 @@ class OrchestratorRequestState:
     sampling_params_list: list[Any] = field(default_factory=list)
     final_stage_id: int = -1
     final_output_stage_ids: set[int] = field(default_factory=set)
+    yield_stage_id: int | None = None
+    yield_stage_output: OmniRequestOutput | None = None
     finished_final_output_stage_ids: set[int] = field(default_factory=set)
     finished_stage_ids: set[int] = field(default_factory=set)
     pending_final_output: OutputMessage | None = None
@@ -1836,6 +1839,13 @@ class OrchestratorBase:
         if req_state.session_owned:
             # Session-owned outputs are delivered through the session interceptor.
             pass
+        elif self.stage_pools[stage_id].final_output and stage_id == req_state.yield_stage_id:
+            # If we have a yield stage ID, stages are independent and are using the run entrypoint.
+            #
+            # NOTE: yielded stages are not the last stage, but they may emit outputs in cases like
+            # qwen3omni, where the thinker produces the text in the first stage. In such cases, we
+            # forward so that the last stage call can emit the full response.
+            req_state.yield_stage_output = output
         elif self.stage_pools[stage_id].final_output:
             message = OutputMessage(
                 request_id=req_id,
@@ -2587,6 +2597,17 @@ class OrchestratorBase:
         params_override: OmniSamplingParams | None = None,
     ) -> None:
         """Submit requests built from the source stage's output to the receiver stage."""
+        if req_state.yield_stage_id == source_stage_id:
+            await self._return_next_stage_input_to_caller(
+                req_id,
+                req_state,
+                requests,
+                source_stage_id=source_stage_id,
+                receiver_stage_id=receiver_stage_id,
+                submit_kwargs=submit_kwargs,
+                params_override=params_override,
+            )
+            return
         to_pool = self.stage_pools[receiver_stage_id]
         update_kwargs: dict[str, Any] = {} if submit_kwargs is None else {"submit_kwargs": submit_kwargs}
         initial_kwargs = dict(update_kwargs)
@@ -2607,6 +2628,31 @@ class OrchestratorBase:
             to_pool=to_pool,
             request_id=req_id,
             tx_ms=(_time.perf_counter() - t_submit_start) * 1000.0,
+        )
+
+    async def _return_next_stage_input_to_caller(
+        self,
+        req_id: str,
+        req_state: OrchestratorRequestState,
+        requests: list[EngineCoreRequest] | list[OmniPromptType],
+        *,
+        source_stage_id: int,
+        receiver_stage_id: int,
+        submit_kwargs: dict[str, Any] | None,
+        params_override: OmniSamplingParams | None,
+    ) -> None:
+        """End a request at its yielded stage and return the next stage's input to the caller."""
+        await self._cleanup_request_ids([req_id])
+        await self.output_async_queue.put(
+            NextStageInputMessage(
+                request_id=req_id,
+                source_stage_id=source_stage_id,
+                receiver_stage_id=receiver_stage_id,
+                requests=requests,
+                submit_kwargs=submit_kwargs,
+                params_override=params_override,
+                stage_output=req_state.yield_stage_output,
+            )
         )
 
     async def _prewarm_async_chunk_stages(
@@ -2978,6 +3024,7 @@ class Orchestrator(OrchestratorBase):
             sampling_params_list=sampling_params_list,
             final_stage_id=final_stage_id,
             final_output_stage_ids=final_output_stage_ids,
+            yield_stage_id=msg.yield_stage_id,
             request_timestamp=float(msg.request_timestamp or _time.time()),
             mm_features=getattr(prompt, "mm_features", None),
             request_artifact_dirs=set(msg.request_artifact_dirs or ()),
