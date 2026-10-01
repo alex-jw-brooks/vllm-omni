@@ -30,7 +30,7 @@ from vllm.logger import init_logger
 from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import RequestOutputKind, SamplingParams
-from vllm.v1.engine import EngineCoreOutputs, FinishReason
+from vllm.v1.engine import EngineCoreOutputs, EngineCoreRequest, FinishReason
 from vllm.v1.engine.exceptions import EngineDeadError
 from vllm.v1.metrics.stats import IterationStats
 
@@ -62,6 +62,7 @@ from vllm_omni.engine.orchestrator_monitor import create_orch_monitor, replica_k
 from vllm_omni.engine.serialization import serialize_additional_information
 from vllm_omni.engine.stage_pool import StagePool, StageUnavailableError
 from vllm_omni.errors import DEFAULT_CLIENT_ERROR_TYPE, OmniClientError
+from vllm_omni.inputs.data import OmniPromptType, OmniSamplingParams
 from vllm_omni.metrics import definitions as metric_defs
 from vllm_omni.metrics.prometheus import OmniRequestCounter
 from vllm_omni.metrics.stat_logger import OmniPrometheusStatLogger
@@ -1954,7 +1955,9 @@ class OrchestratorBase:
             self._stage_input_processors[stage_id] = processor
         return processor
 
-    def _upgrade_processed_stage_request(self, request: Any, raw_prompt: Any) -> Any:
+    def _upgrade_processed_stage_request(
+        self, request: EngineCoreRequest, raw_prompt: dict[str, Any]
+    ) -> EngineCoreRequest:
         prompt_embeds = getattr(request, "prompt_embeds", None)
         additional_information = None
 
@@ -1984,13 +1987,13 @@ class OrchestratorBase:
         self,
         req_id: str,
         next_stage_id: int,
-        next_input: Any,
+        next_input: dict[str, Any],
         params: SamplingParams | PoolingParams,
         *,
         mm_features: list | None = None,
         resumable: bool = False,
         payload_sender_info: dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> EngineCoreRequest:
         next_pool = self.stage_pools[next_stage_id]
         if self._next_stage_input_is_tokens(next_input):
             request = build_engine_core_request_from_tokens(
@@ -2573,7 +2576,7 @@ class OrchestratorBase:
         self,
         req_id: str,
         req_state: OrchestratorRequestState,
-        requests: list[Any],
+        requests: list[EngineCoreRequest] | list[OmniPromptType],
         *,
         source_stage_id: int,
         source_replica_id: int | None,
@@ -2581,7 +2584,7 @@ class OrchestratorBase:
         already_submitted: bool,
         t_submit_start: float,
         submit_kwargs: dict[str, Any] | None = None,
-        params_override: Any = None,
+        params_override: OmniSamplingParams | None = None,
     ) -> None:
         """Submit requests built from the source stage's output to the receiver stage."""
         to_pool = self.stage_pools[receiver_stage_id]
