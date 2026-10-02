@@ -894,8 +894,8 @@ def test_run_entry_stage_yields_at_entry_stage():
 
 
 @pytest.mark.cpu
-def test_run_downstream_stage_resubmits_under_fresh_request_id():
-    """Ensure a downstream stage call resubmits the next stage input under a fresh id and returns its response."""
+def test_run_downstream_stage_resubmits_and_returns_finished_output():
+    """Ensure a downstream stage call resubmits under a fresh id and returns the finished output, not a partial one."""
 
     async def run():
         omni = get_async_omni_instance()
@@ -905,17 +905,23 @@ def test_run_downstream_stage_resubmits_under_fresh_request_id():
 
         async def fake_add_next_stage_input_async(msg):
             submitted.append(msg)
-            output = OutputMessage(
-                request_id=msg.request_id, stage_id=next_stage_id, engine_outputs=SimpleNamespace(), finished=True
-            )
-            omni.request_states[msg.request_id].queue.put_nowait(output)
+            # A decoding final stage emits an output per step; only the last is finished.
+            for finished in (False, True):
+                output = OutputMessage(
+                    request_id=msg.request_id,
+                    stage_id=next_stage_id,
+                    engine_outputs=SimpleNamespace(),
+                    finished=finished,
+                )
+                omni.request_states[msg.request_id].queue.put_nowait(output)
 
         omni.engine.add_next_stage_input_async = fake_add_next_stage_input_async
 
         response = await omni.run_downstream_stage(stage_input, request_id="downstream-call")
 
         assert isinstance(response, OutputMessage)
-        assert re.fullmatch(rf"downstream-call-[0-9a-f]{8}-{next_stage_id}", submitted[0].request_id)
+        assert response.finished is True
+        assert re.fullmatch(rf"downstream-call-[0-9a-f]{{8}}-{next_stage_id}", submitted[0].request_id)
         assert response.request_id == submitted[0].request_id
         assert omni.request_states == {}
 

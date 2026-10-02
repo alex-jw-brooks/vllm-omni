@@ -537,8 +537,7 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                 final_output_stage_ids=[final_stage_id],
                 yield_stage_id=0 if final_stage_id > 0 else None,
             )
-            response = await req_state.queue.get()
-        return self._check_stage_response(response)
+            return await self._stage_response(req_state)
 
     async def run_downstream_stage(
         self, stage_input: NextStageInputMessage, *, request_id: str
@@ -548,8 +547,7 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
             await self.engine.add_next_stage_input_async(
                 msgspec.structs.replace(stage_input, request_id=req_state.request_id)
             )
-            response = await req_state.queue.get()
-        return self._check_stage_response(response)
+            return await self._stage_response(req_state)
 
     @asynccontextmanager
     async def _stage_request(
@@ -569,13 +567,20 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
         finally:
             self.request_states.pop(request_id, None)
 
-    def _check_stage_response(self, response: Any) -> NextStageInputMessage | OutputMessage:
-        """Raise if a stage call's response is an error; otherwise return it."""
-        if isinstance(response, ErrorMessage):
-            if response.fatal:
-                raise OmniEngineDeadError(response.error, error_stage_id=response.stage_id)
-            self._raise_nonfatal_error_message(response)
-        return response
+    async def _stage_response(self, req_state: ClientRequestState) -> NextStageInputMessage | OutputMessage:
+        """Wait for a stage call's response: the next stage input, or the finished output.
+
+        A final stage that decodes emits an unfinished output per step; those are skipped.
+        """
+        # This is analogous to _process_orchestrator_results.
+        while True:
+            response = await req_state.queue.get()
+            if isinstance(response, ErrorMessage):
+                if response.fatal:
+                    raise OmniEngineDeadError(response.error, error_stage_id=response.stage_id)
+                self._raise_nonfatal_error_message(response)
+            if not isinstance(response, OutputMessage) or response.finished:
+                return response
 
     def _route_engine_message(self, msg: Any) -> bool:
         if not isinstance(msg, NextStageInputMessage):
