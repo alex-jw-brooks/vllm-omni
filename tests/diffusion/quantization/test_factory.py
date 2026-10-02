@@ -191,10 +191,17 @@ def test_quantization_configs_survive_multiprocessing_serialization(
     assert restored.get_name() == config.get_name()
 
 
-def test_explicit_method_cannot_override_checkpoint_method():
+@pytest.mark.parametrize(
+    "checkpoint_config",
+    [
+        {QUANT_METHOD_KEY: "modelopt", "quant_algo": "NVFP4"},
+        {"producer": {"name": "modelopt"}, "quantization": {"quant_algo": "NVFP4"}},
+    ],
+)
+def test_explicit_method_cannot_override_checkpoint_method(checkpoint_config):
     """Ensure that we raise if a checkpoint format & provided method are in conflict."""
     with pytest.raises(ValueError, match="conflicts with checkpoint"):
-        build_quantization_config("fp8", {QUANT_METHOD_KEY: "modelopt", "quant_algo": "NVFP4"})
+        build_quantization_config("fp8", checkpoint_config)
 
 
 @pytest.mark.parametrize("method", [None, "modelopt"])

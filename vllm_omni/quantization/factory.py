@@ -328,7 +328,7 @@ def _validate_method_consistency(
     # Then explode if the method requested is actually different / not compatible
     if (
         requested_method is not None
-        and declared_method is not None
+        and (declared_method or detected_method) is not None
         and _normalize_quant_method_alias(requested_method) not in valid_checkpoint_methods
     ):
         raise ValueError(
