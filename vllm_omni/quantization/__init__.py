@@ -14,6 +14,7 @@ Adds per-component quantization for multi-stage models.
 from .component_config import ComponentQuantizationConfig, resolve_component_quant_config
 from .factory import (
     SUPPORTED_QUANTIZATION_METHODS,
+    build_quant_config,
     build_quantization_config,
     register_omni_quantization_configs,
 )
@@ -25,6 +26,7 @@ from .inc_config import OmniINCConfig
 #   from vllm_omni.quantization.mxfp8_config import DiffusionMXFP8Config
 
 __all__ = [
+    "build_quant_config",
     "build_quantization_config",
     "ComponentQuantizationConfig",
     "resolve_component_quant_config",

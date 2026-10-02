@@ -460,6 +460,21 @@ def build_quantization_config(
     return quant_cls(**spec)
 
 
+def build_quant_config(
+    spec: str | Mapping[str, Any] | QuantizationConfig | None,
+    **kwargs: Any,
+) -> QuantizationConfig | None:
+    """Deprecated legacy wrapper around build_quantization_config."""
+    logger.warning_once(
+        "build_quant_config is deprecated and will be removed in vLLM-Omni 0.34; use build_quantization_config."
+    )
+    if kwargs and isinstance(spec, str):
+        spec = {METHOD_KEY: spec, **kwargs}
+    elif kwargs and isinstance(spec, Mapping):
+        spec = {**spec, **kwargs}
+    return build_quantization_config(spec)
+
+
 @functools.cache
 def read_checkpoint_quantization_config(model: str, revision: str | None) -> dict[str, Any] | None:
     """Read a checkpoint's serialized quantization_config from config.json, or the
