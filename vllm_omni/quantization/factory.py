@@ -118,10 +118,12 @@ def set_quantization_method(spec: dict[str, Any], method: str) -> None:
     spec.setdefault(QUANT_METHOD_KEY, method)
 
 
-# NOTE: this is needed for now because diffusion "mxfp4" / "mxfp8" are not the same as vLLM's,
+# NOTE: this is needed for now because diffusion "mxfp4" / "mxfp8" / are not the same as vLLM's,
 # so we need to consider the stage type to get the correct config. In the future, these names
 # should be deprecated and removed. Do not add anything new to this; instead register the configs
 # as OOT configs in vLLM.
+#
+# We also use this as a workaround for GGUF since the plugin uses a different config for diffusion.
 _DIFFUSION_QUANTIZATION_CONFIGS: dict[str, type[QuantizationConfig]] = {
     "mxfp4": DiffusionMXFP4Config,
     "mxfp8": DiffusionMXFP8Config,
@@ -152,6 +154,25 @@ def register_omni_quantization_configs() -> None:
         svdquant_config,
         torchao_config,
     )
+
+    try_register_diffusion_gguf()
+
+
+def try_register_diffusion_gguf():
+    """Add diffusion GGUF support if the plugin is installed. We need to do this since the config is
+    different from the LLM config."""
+    # Optional dependency, so it's imported lazily like the modules above.
+    try:
+        import vllm_gguf_plugin
+    except ImportError:
+        return
+    if not hasattr(vllm_gguf_plugin, "DiffusionGGUFConfig"):
+        logger.warning(
+            "vllm_gguf_plugin exists but has no DiffusionGGUFConfig; unable to register diffusion GGUF override"
+        )
+    else:
+        _DIFFUSION_QUANTIZATION_CONFIGS["gguf"] = vllm_gguf_plugin.DiffusionGGUFConfig
+        logger.info("vllm_gguf_plugin installed! Registered DiffusionGGUFConfig for diffusion GGUF support")
 
 
 # Omni configs registered into vLLM's registry. Static so membership/count is
