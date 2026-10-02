@@ -64,9 +64,13 @@ The model layer receives either a method implementation or `None`. Returning
 | --- | --- |
 | `None` or `"none"` | Disable quantization. |
 | Method string, such as `"fp8"` | Resolve the registered config through vLLM's quantization registry. |
-| Flat dictionary with `method` or `quant_method` | Normalize the method and construct its `QuantizationConfig`. |
+| Flat dictionary with `method` | Build the method's config with the remaining keys as its options. |
+| Flat dictionary with `quant_method` | Treat it as a checkpoint's `quantization_config` from `config.json`. |
 | Per-component dictionary | Construct a `ComponentQuantizationConfig`. |
 | Existing `QuantizationConfig` | Pass through without rebuilding it. |
+
+Checkpoint metadata can also be passed separately. An explicit method that
+conflicts with it raises `ValueError`.
 
 Canonical method names are preserved. Only `auto-round` and `auto_round` are
 normalized to the Omni INC/AutoRound adapter.
