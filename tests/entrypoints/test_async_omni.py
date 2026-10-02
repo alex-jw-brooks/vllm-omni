@@ -14,9 +14,11 @@ from vllm.sampling_params import RequestOutputKind, SamplingParams
 from tests.helpers.mark import hardware_test
 from tests.helpers.stage_config import get_deploy_config_path
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
+from vllm_omni.engine.messages import ErrorMessage, NextStageInputMessage, OutputMessage
 from vllm_omni.entrypoints import async_omni as async_omni_mod
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.utils import coerce_param_message_types
+from vllm_omni.errors import OmniClientError
 from vllm_omni.model_executor.models.qwen3_omni.pipeline import QWEN3_OMNI_PIPELINE
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -815,6 +817,98 @@ _OMNI_REQ_IDS = ["my-req-1", "img_gen-abc123", "chatcmpl-xyz"]
 
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.omni
+def _next_stage_input(request_id: str) -> NextStageInputMessage:
+    return NextStageInputMessage(
+        request_id=request_id,
+        source_stage_id=0,
+        receiver_stage_id=1,
+        requests=[],
+        submit_kwargs=None,
+        params_override=None,
+        stage_output=None,
+        sampling_params_list=[],
+        final_stage_id=1,
+        final_output_stage_ids=[1],
+    )
+
+
+@pytest.mark.cpu
+def test_run_entry_stage_yields_at_entry_stage():
+    """Ensure the entry stage call yields at stage 0 and returns the next stage input."""
+
+    async def run():
+        omni = get_async_omni_instance()
+        omni.engine.num_stages = 2
+        submitted = {}
+
+        async def fake_add_request_async(*, request_id, **kwargs):
+            submitted.update(kwargs, request_id=request_id)
+            omni.request_states[request_id].queue.put_nowait(_next_stage_input(request_id))
+
+        omni.engine.add_request_async = fake_add_request_async
+
+        response = await omni.run_entry_stage(
+            {"prompt": "hi"}, [SamplingParams(), SamplingParams()], request_id="entry-call"
+        )
+
+        assert isinstance(response, NextStageInputMessage)
+        assert re.fullmatch(r"entry-call-[0-9a-f]{8}-0", submitted["request_id"])
+        assert (submitted["final_stage_id"], submitted["yield_stage_id"]) == (1, 0)
+        assert omni.request_states == {}
+
+    asyncio.run(run())
+
+
+@pytest.mark.cpu
+def test_run_downstream_stage_resubmits_under_fresh_request_id():
+    """Ensure a downstream stage call resubmits the next stage input under a fresh id and returns its response."""
+
+    async def run():
+        omni = get_async_omni_instance()
+        stage_input = _next_stage_input("earlier-call")
+        submitted = []
+        next_stage_id = 1
+
+        async def fake_add_next_stage_input_async(msg):
+            submitted.append(msg)
+            output = OutputMessage(
+                request_id=msg.request_id, stage_id=next_stage_id, engine_outputs=SimpleNamespace(), finished=True
+            )
+            omni.request_states[msg.request_id].queue.put_nowait(output)
+
+        omni.engine.add_next_stage_input_async = fake_add_next_stage_input_async
+
+        response = await omni.run_downstream_stage(stage_input, request_id="downstream-call")
+
+        assert isinstance(response, OutputMessage)
+        assert re.fullmatch(rf"downstream-call-[0-9a-f]{8}-{next_stage_id}", submitted[0].request_id)
+        assert response.request_id == submitted[0].request_id
+        assert omni.request_states == {}
+
+    asyncio.run(run())
+
+
+@pytest.mark.cpu
+def test_run_entry_stage_raises_error_response():
+    """Ensure an error response for the call is raised and the call's state is cleaned up."""
+
+    async def run():
+        omni = get_async_omni_instance()
+        omni.engine.num_stages = 2
+
+        async def fake_add_request_async(*, request_id, **kwargs):
+            error = ErrorMessage(error="bad stage input", status_code=400, request_id=request_id)
+            omni.request_states[request_id].queue.put_nowait(error)
+
+        omni.engine.add_request_async = fake_add_request_async
+
+        with pytest.raises(OmniClientError, match="bad stage input"):
+            await omni.run_entry_stage({"prompt": "hi"}, [SamplingParams(), SamplingParams()], request_id="entry-call")
+        assert omni.request_states == {}
+
+    asyncio.run(run())
+
+
 @pytest.mark.asyncio
 async def test_diffusion_generate_request_id():
     """Diffusion E2E request-id contract (``riverclouds/qwen_image_random``).
