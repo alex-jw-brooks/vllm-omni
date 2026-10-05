@@ -23,6 +23,8 @@ try:
 except ImportError:
     loader = PlaceholderModule("audioseal")  # type: ignore[assignment]
 
+_GENERATOR_CARD = "audioseal_wm_streaming"
+
 
 @dataclass
 class _AudioSealState:
@@ -46,6 +48,11 @@ class AudioSealWatermarker(AudioWatermarkerBase[_AudioSealState]):
             raise ImportError("Audio watermarking requires `pip install 'vllm-omni[watermarking]'`")
         logger.info("Loading AudioSeal watermark generator on CPU")
         self._model = self._load_generator()
+        # Get the message bit length from the model card; this is usually 16
+        card = loader.load_local_model_config(_GENERATOR_CARD)
+        if card is None:
+            raise loader.ModelLoadError(f"AudioSeal model card {_GENERATOR_CARD} not found")
+        self._message_bits = card.nbits
         # Detector isn't needed at inference time, but is convenient for testing etc, so we defer loading
         self._detector: AudioSealDetector | None = None
 
@@ -84,9 +91,9 @@ class AudioSealWatermarker(AudioWatermarkerBase[_AudioSealState]):
         """Create a deterministic random message for an AudioSeal stream."""
         self._validate_audioseal_input(data)
         batch_size = data.samples.shape[0]
-        with torch.random.fork_rng(devices=[]):
-            torch.manual_seed(0)
-            message = self._model.random_message(batch_size)
+        # Use a local generator and generate a random binary payload
+        generator = torch.Generator().manual_seed(0)
+        message = torch.randint(0, 2, (batch_size, self._message_bits), generator=generator)
         return _AudioSealState(batch_size, data.sample_rate, message)
 
     @staticmethod
@@ -96,7 +103,7 @@ class AudioSealWatermarker(AudioWatermarkerBase[_AudioSealState]):
             generator = cast(
                 "AudioSealWM",
                 loader.AudioSeal.load_generator(
-                    "audioseal_wm_streaming",
+                    _GENERATOR_CARD,
                     device=torch.device("cpu"),
                 ),
             )
