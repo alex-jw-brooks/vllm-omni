@@ -99,7 +99,7 @@ def test_build_ray_diffusion_config_preserves_explicit_stage_env(monkeypatch, ty
         types.SimpleNamespace(device_control_env_var=None, get_device_count=lambda: 0),
     )
 
-    result = init_mod.build_diffusion_config("model", {}, metadata)
+    result = init_mod.build_diffusion_config("model", {}, metadata, None)
 
     assert result is config
     assert result.ray_worker_env == {"CUSTOM_PLUGIN_SETTING": "stage", "OMP_NUM_THREADS": "2"}

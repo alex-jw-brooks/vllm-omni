@@ -969,7 +969,7 @@ def test_pre_sharded_hsdp_weight_load_survives_stage_overrides(prefix: str) -> N
 
 
 @pytest.mark.parametrize("strategy", ["full", "pre_sharded"])
-def test_typed_default_stage_preserves_hsdp_weight_load_strategy(strategy: str) -> None:
+def test_typed_default_stage_preserves_hsdp_weight_load_strategy(strategy: str, local_model_configs_only) -> None:
     config = StageConfigFactory.create_typed_default_diffusion(
         "generic-diffusion", {"hsdp_weight_load_strategy": strategy}
     )
