@@ -776,23 +776,16 @@ class StageRuntime:
             # TODO: (Alex) - check if we need the else branch here. A lot of the code
             # in this file is defensive, but it looks like in this case is probably not needed.
             if isinstance(stage_cfg, BaseVllmOmniStageConfig):
-                stage_quantization = stage_cfg.quantization_config
-                stage_revision = stage_cfg.model_config.revision
-                stage_trust_remote_code = stage_cfg.model_config.trust_remote_code
-                stage_hf_config_name = stage_cfg.hf_config_name
+                quantization_config = stage_cfg.quantization_config
             else:
-                stage_quantization = stage_cfg.engine_args.get("quantization_config")
-                stage_revision = stage_cfg.engine_args.get("revision")
-                stage_trust_remote_code = stage_cfg.engine_args.get("trust_remote_code", False)
-                stage_hf_config_name = stage_cfg.engine_args.get("hf_config_name")
-            quantization_config = get_stage_quantization_config(
-                self._model,
-                stage_quantization,
-                revision=stage_revision,
-                stage_type=base_metadata.stage_type,
-                trust_remote_code=stage_trust_remote_code,
-                hf_config_name=stage_hf_config_name,
-            )
+                quantization_config = get_stage_quantization_config(
+                    self._model,
+                    stage_cfg.engine_args.get("quantization_config"),
+                    revision=stage_cfg.engine_args.get("revision"),
+                    stage_type=base_metadata.stage_type,
+                    trust_remote_code=stage_cfg.engine_args.get("trust_remote_code", False),
+                    hf_config_name=stage_cfg.engine_args.get("hf_config_name"),
+                )
             if quantization_config is not None:
                 logger.info("created quantization config of type: %s", type(quantization_config).__name__)
 

@@ -66,6 +66,10 @@ _LLM_PIPELINE = PipelineConfig(
     ),
 )
 
+# The LLM stage loaded from a model_subdir, as GLM-Image / Audex / Ming-Image stages are.
+_LLM_SUBDIR = "llm"
+_LLM_SUBDIR_PIPELINE = replace(_LLM_PIPELINE, stages=(replace(_LLM_PIPELINE.stages[0], model_subdir=_LLM_SUBDIR),))
+
 
 @pytest.fixture(autouse=True)
 def _offline(monkeypatch):
@@ -210,6 +214,28 @@ class TestQuantization:
             assert vllm_config.quant_config is not None
             assert vllm_config.quant_config.get_name() == "fp8"
             assert vllm_config.quant_config.is_checkpoint_fp8_serialized is True
+
+    def test_llm_subdir_stage_ignores_quantized_root(self, tmp_path):
+        """Ensure an unquantized model_subdir stage is not quantized by the pipeline root's metadata."""
+        model = _write_llm_model_dir(tmp_path, quantization_config=_SERIALIZED_FP8)
+        _write_llm_model_dir(tmp_path / _LLM_SUBDIR)
+        with built_stage_configs(model, _LLM_SUBDIR_PIPELINE, **_LLM_ENGINE_ARGS) as (_, built):
+            assert built[0].quant_config is None
+
+    def test_llm_explicit_fp8_on_serialized_subdir_checkpoint_is_serialized(self, tmp_path):
+        """Ensure an explicit fp8 flag loads a serialized model_subdir checkpoint as serialized fp8."""
+        model = _write_llm_model_dir(tmp_path)
+        _write_llm_model_dir(tmp_path / _LLM_SUBDIR, quantization_config=_SERIALIZED_FP8)
+        with built_stage_configs(model, _LLM_SUBDIR_PIPELINE, quantization="fp8", **_LLM_ENGINE_ARGS) as (_, built):
+            assert built[0].quant_config.is_checkpoint_fp8_serialized is True
+
+    def test_llm_online_presets_have_distinct_config_hashes(self, llm_model_dir):
+        """Ensure different online quantization presets never share a compile-cache config hash."""
+        config_hashes = set()
+        for preset in ("fp8_per_tensor", "fp8_per_block"):
+            with built_stage_configs(llm_model_dir, quantization=preset, **_LLM_ENGINE_ARGS) as (_, built):
+                config_hashes.add(built[0].compute_hash())
+        assert len(config_hashes) == 2
 
     def test_diffusion_serialized_checkpoint_is_serialized_fp8(self, tmp_path):
         """Serialized fp8 checkpoint, no CLI flag: must carry quant to the built config."""

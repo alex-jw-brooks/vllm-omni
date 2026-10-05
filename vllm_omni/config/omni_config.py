@@ -1872,8 +1872,14 @@ def _build_stage_quantization_config(
     model: str | None,
 ) -> QuantizationConfig | None:
     """Get the quantization config for a single stage."""
-    # NOTE: Checkpoint quantization is resolved against the pipeline model, not a stage's model_subdir /
-    # model_path_resolver target; upstream vLLM detects quantized sub-models at stage init instead.
+    # The pipeline root's checkpoint metadata does not describe a stage loaded from a model_subdir /
+    # model_path_resolver target, so only the explicit spec is built here; vLLM reads that stage's
+    # own checkpoint at stage init.
+    # TODO(Alex): resolve the stage's own checkpoint here once the early build uses vLLM's builder.
+    has_own_checkpoint = (
+        _first_defined(engine.model.get("model_subdir"), topology.model_subdir) is not None
+        or topology.model_path_resolver is not None
+    )
     quantization = _first_defined(
         engine.quantization.get("quantization_config"),
         engine.quantization.get("quantization"),
@@ -1885,7 +1891,7 @@ def _build_stage_quantization_config(
         False,
     )
     return get_stage_quantization_config(
-        model,
+        None if has_own_checkpoint else model,
         quantization,
         revision=engine.model.get("revision"),
         stage_type=_resolve_execution_mode(topology.execution_type)[0].value,

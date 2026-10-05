@@ -29,6 +29,7 @@ import regex as re
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
+from vllm.model_executor.layers.quantization.online.base import OnlineQuantizationConfig
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import BaseRenderer
 from vllm.sampling_params import SamplingParams
@@ -1559,17 +1560,34 @@ def build_vllm_config(
     )
     executor_class = Executor.get_class(vllm_config)
 
-    # Update with the externally initialized quantization config
-    if quantization_config is not None:
-        # Replace the quantization config & model config quantization str to ensure alignment
-        vllm_config = replace(vllm_config, quant_config=quantization_config)
-        vllm_config.model_config.quantization = quantization_config.get_name()
+    vllm_config = _maybe_patch_quantization_config(vllm_config, quantization_config)
 
     custom_voice_dir = engine_args_dict.get("custom_voice_dir")
     if custom_voice_dir:
         setattr(vllm_config.model_config.hf_config, "custom_voice_dir", custom_voice_dir)
 
     return vllm_config, executor_class
+
+
+def _maybe_patch_quantization_config(
+    vllm_config: VllmConfig,
+    quantization_config: QuantizationConfig | None,
+) -> VllmConfig:
+    """Apply the early-built quantization config only when vLLM found none in the stage checkpoint.
+
+    vLLM reads the stage's own checkpoint (model_subdir, hf_overrides, sidecar files), which the
+    early build does not, so a checkpoint-derived config from vLLM takes precedence.
+
+    TODO (Alex) - handle this case in early resolution after migrating to the omni model config;
+    this is needed for now because of when we build the vLLM Config, but should not allow patching.
+    """
+    if quantization_config is not None and vllm_config.quant_config is None:
+        vllm_config = replace(vllm_config, quant_config=quantization_config)
+        vllm_config.model_config.quantization = quantization_config.get_name()
+        if isinstance(quantization_config, OnlineQuantizationConfig):
+            # Online presets share the name "online", so their args keep the compile-cache hash distinct
+            vllm_config.model_config.quantization_config = quantization_config.args
+    return vllm_config
 
 
 def build_llm_stage_output_processor(

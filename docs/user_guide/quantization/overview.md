@@ -141,7 +141,7 @@ dictionaries, existing `QuantizationConfig` objects, or `None`.
 from vllm_omni.quantization import build_quantization_config
 
 build_quantization_config("fp8")
-build_quantization_config({"method": "fp8", "activation_scheme": "static"})
+build_quantization_config({"method": "fp8", "ignored_layers": ["proj_out"]})
 build_quantization_config("bitsandbytes")
 build_quantization_config({"method": "auto-round", "bits": 4, "group_size": 128})
 build_quantization_config({"transformer": {"method": "fp8"}, "vae": None})
