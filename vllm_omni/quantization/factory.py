@@ -371,11 +371,6 @@ def _maybe_build_component_quant_config(
     component_configs: dict[str, QuantizationConfig | None] = {}
     default_config: QuantizationConfig | None = None
     for prefix, value in spec.items():
-        if not isinstance(value, (str, dict, QuantizationConfig, type(None))):
-            raise TypeError(
-                f"Per-component value for {prefix!r} must be str, dict, "
-                f"QuantizationConfig, or None, got {type(value).__name__}"
-            )
         resolved = None if value is None else build_quantization_config(value, quant_config, is_diffusion=is_diffusion)
         if prefix == "default":
             default_config = resolved

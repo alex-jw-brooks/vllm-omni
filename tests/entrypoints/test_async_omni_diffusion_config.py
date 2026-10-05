@@ -166,7 +166,7 @@ def test_legacy_diffusion_stage_rejects_unowned_field(field_name, value):
     metadata = SimpleNamespace(stage_id=0, cfg_kv_collect_func=None)
 
     with pytest.raises(ValueError, match=rf"stage 0.*{field_name}"):
-        build_diffusion_config("unused", stage_cfg, metadata, None)
+        build_diffusion_config("unused", stage_cfg, metadata)
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_legacy_default_stage_build_accepts_engine_adapter_metadata(monkeypatch)
     metadata = SimpleNamespace(stage_id=0, cfg_kv_collect_func=None, default_sampling_params=None)
     monkeypatch.setattr(stage_init_utils.current_omni_platform, "get_device_count", lambda: 1)
 
-    config = stage_init_utils.build_diffusion_config("unused", stage_cfg, metadata, None)
+    config = stage_init_utils.build_diffusion_config("unused", stage_cfg, metadata)
 
     assert config.model == "unused"
 
@@ -607,8 +607,6 @@ def test_invalid_diffusion_offload_config_fails_before_model_loading(monkeypatch
             stage_cfg=object(),
             metadata=mocker.Mock(),
             stage_init_timeout=30,
-            use_inline=False,
-            quantization_config=None,
         )
 
     create_client.assert_not_called()

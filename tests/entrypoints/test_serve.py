@@ -1029,9 +1029,7 @@ def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture,
         return_value=SimpleNamespace(stage_id=1, stage_type="diffusion"),
     )
     mock_inject = mocker.patch("vllm_omni.engine.stage_init_utils.inject_kv_stage_info")
-    mock_build_diffusion_config = mocker.patch(
-        "vllm_omni.engine.stage_init_utils.build_diffusion_config", autospec=True, return_value=od_config
-    )
+    mocker.patch("vllm_omni.engine.stage_init_utils.build_diffusion_config", return_value=od_config)
     mock_register = mocker.patch(
         "vllm_omni.engine.stage_engine_startup.register_stage_with_omni_master",
         return_value=StageRegistrationResponse(
@@ -1063,8 +1061,6 @@ def test_run_headless_diffusion_registers_and_spawns_proc(mocker: MockerFixture,
     mocker.patch("signal.signal")
 
     run_headless(_make_headless_args(stage_id=1))
-
-    assert mock_build_diffusion_config.call_args.args[3] is None
 
     mock_inject.assert_called_once()
     assert mock_inject.call_args.args[0] is stage_cfg
@@ -1109,10 +1105,8 @@ def test_run_headless_generic_diffusion_launches_structured_stage(
     captured: dict[str, Any] = {}
     od_config = SimpleNamespace()
 
-    def _build_diffusion_config(model, stage_config, metadata, quantization_config):
-        captured.update(
-            model=model, stage_config=stage_config, metadata=metadata, quantization_config=quantization_config
-        )
+    def _build_diffusion_config(model, stage_config, metadata):
+        captured.update(model=model, stage_config=stage_config, metadata=metadata)
         return od_config
 
     def _launch_replica_group(**kwargs):
@@ -1154,7 +1148,7 @@ def test_run_headless_generic_diffusion_launches_structured_stage(
     assert captured["metadata"].stage_type == "diffusion"
     assert captured["metadata"].model_stage == "diffusion"
     assert captured["model"] == "generic-diffusion"
-    assert captured["quantization_config"].get_name() == "fp8"
+    assert stage.quantization_config.get_name() == "fp8"
     assert captured["group_kwargs"]["stage_id"] == 0
     assert captured["group_kwargs"]["omni_dp_size_local"] == 1
     assert captured["group_kwargs"]["per_replica_devices"] == ["0"]

@@ -81,9 +81,6 @@ class ReplicaInitPlan:
     stage_vllm_config: VllmConfig | None = None
     executor_class: type | None = None
     engine_args_dict: dict[str, Any] | None = None
-    # TODO (Alex): A lot of the ReplicaInitPlan, including quantization_config,
-    # and stage_vllm_config, should be folded into the OmniModelConfig.
-    quantization_config: QuantizationConfig | None = None
 
 
 @dataclass
@@ -1990,7 +1987,6 @@ def build_diffusion_config(
     model: str,
     stage_cfg: Any,
     metadata: StageMetadata,
-    quantization_config: QuantizationConfig | None,
 ) -> Any:
     """Build diffusion config for a stage."""
     from vllm_omni.config.omni_config import extract_diffusion_stage_config_kwargs
@@ -2000,8 +1996,6 @@ def build_diffusion_config(
         if isinstance(stage_cfg, BaseVllmOmniStageConfig)
         else build_engine_args_dict(stage_cfg, model)
     )
-    engine_args_dict["quantization_config"] = quantization_config
-
     stage_id = engine_args_dict.get("stage_id", metadata.stage_id)
     diffusion_kwargs = extract_diffusion_stage_config_kwargs(
         engine_args_dict,
@@ -2049,8 +2043,7 @@ def initialize_diffusion_stage(
     stage_cfg: Any,
     metadata: StageMetadata,
     stage_init_timeout: int,
-    use_inline: bool,
-    quantization_config: QuantizationConfig | None,
+    use_inline: bool = False,
 ) -> Any:
     """Build a diffusion stage client.
 
@@ -2063,7 +2056,7 @@ def initialize_diffusion_stage(
     """
     from vllm_omni.diffusion.stage_diffusion_client import create_diffusion_client
 
-    od_config = build_diffusion_config(model, stage_cfg, metadata, quantization_config)
+    od_config = build_diffusion_config(model, stage_cfg, metadata)
     return create_diffusion_client(model, od_config, metadata, stage_init_timeout, use_inline)
 
 

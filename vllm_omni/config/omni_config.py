@@ -908,7 +908,7 @@ class _DiffusionConfigProjection:
         valid_fields = {config_field.name for config_field in fields(cast(Any, cls))}
         validate_omni_diffusion_kwargs(normalized, valid_fields)
         parse_diffusion_offload_config(normalized.get("diffusion_offload_config"))
-        return cls(**{name: value for name, value in normalized.items() if name in valid_fields and value is not None})
+        return cls(**{name: value for name, value in normalized.items() if value is not None})
 
     def __post_init__(self) -> None:
         # Keep diffusion imports lazy so importing vllm_omni.config does not

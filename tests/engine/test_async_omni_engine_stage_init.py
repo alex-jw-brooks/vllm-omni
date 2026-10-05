@@ -53,7 +53,6 @@ class _FakeParallelConfig:
 @dataclass
 class _FakeVllmConfig:
     parallel_config: _FakeParallelConfig = field(default_factory=_FakeParallelConfig)
-    quant_config: object = None
 
 
 @dataclass
@@ -99,7 +98,7 @@ def test_build_ray_diffusion_config_preserves_explicit_stage_env(monkeypatch, ty
         types.SimpleNamespace(device_control_env_var=None, get_device_count=lambda: 0),
     )
 
-    result = init_mod.build_diffusion_config("model", {}, metadata, None)
+    result = init_mod.build_diffusion_config("model", {}, metadata)
 
     assert result is config
     assert result.ray_worker_env == {"CUSTOM_PLUGIN_SETTING": "stage", "OMP_NUM_THREADS": "2"}
@@ -307,10 +306,7 @@ def _make_stage_runtime(
 
 
 def _make_vllm_config_like() -> types.SimpleNamespace:
-    return types.SimpleNamespace(
-        quant_config=None,
-        model_config=types.SimpleNamespace(max_model_len=64),
-    )
+    return types.SimpleNamespace(model_config=types.SimpleNamespace(max_model_len=64))
 
 
 def test_stage_engine_core_client_module_reload_keeps_forward_refs_deferred():
@@ -479,11 +475,7 @@ def test_build_logical_stage_init_plans_handles_stage_without_devices(monkeypatc
     monkeypatch.setattr(runtime_mod, "get_stage_connector_spec", lambda **_: {})
     monkeypatch.setattr(runtime_mod, "resolve_omni_kv_config_for_stage", lambda *_: (None, None, None))
     monkeypatch.setattr(runtime_mod, "build_engine_args_dict", lambda *_, **__: {})
-    monkeypatch.setattr(
-        runtime_mod,
-        "build_vllm_config",
-        lambda *_args, **_kwargs: (types.SimpleNamespace(quant_config=None), object),
-    )
+    monkeypatch.setattr(runtime_mod, "build_vllm_config", lambda *_args, **_kwargs: (types.SimpleNamespace(), object))
 
     replicas_per_stage, replica_devices_map = compute_replica_layout([stage_cfg])
     stage_plans = runtime._build_logical_stage_init_plans(
@@ -652,7 +644,7 @@ def test_initialize_local_llm_replica_scopes_runtime_env(monkeypatch):
     import vllm_omni.engine.stage_runtime as runtime_mod
 
     runtime = _make_stage_runtime()
-    plan = _make_llm_plan(0, stage_id=0, vllm_config=types.SimpleNamespace(quant_config=None)).replicas[0]
+    plan = _make_llm_plan(0, stage_id=0, vllm_config=object()).replicas[0]
     plan.engine_args_dict = {}
 
     runtime_env_var = "VLLM_OMNI_TEST_STAGE_RUNTIME_ENV"
@@ -716,7 +708,6 @@ def test_initialize_diffusion_stage_preserves_configured_max_num_seqs(monkeypatc
         metadata,
         stage_init_timeout=12,
         use_inline=True,
-        quantization_config=None,
     )
 
     assert od_config.max_num_seqs == 4
@@ -801,10 +792,8 @@ def test_launch_diffusion_stage_replica_preserves_configured_max_num_seqs(monkey
             stage_init_timeout=12,
             use_inline=False,
             omni_master_server=omni_master_server,
-            omni_coordinator_address=None,
             stage_visible_devices="1",
             spawn_device_lock=spawn_lock,
-            quantization_config=None,
         )
 
     assert not spawn_lock.locked()
@@ -835,7 +824,6 @@ def test_initialize_diffusion_stage_does_not_write_max_num_seqs(monkeypatch):
         metadata,
         stage_init_timeout=12,
         use_inline=True,
-        quantization_config=None,
     )
 
     assert od_config.max_num_seqs == 8
@@ -888,10 +876,6 @@ def test_launch_diffusion_stage_replica_preserves_step_execution_max_num_seqs(mo
         stage_init_timeout=12,
         use_inline=False,
         omni_master_server=omni_master_server,
-        omni_coordinator_address=None,
-        stage_visible_devices=None,
-        spawn_device_lock=None,
-        quantization_config=None,
     )
 
     assert od_config.max_num_seqs == 8
@@ -1400,10 +1384,7 @@ def test_build_logical_stage_init_plans_applies_replica_device_splits(monkeypatc
     monkeypatch.setattr(
         runtime_mod,
         "build_vllm_config",
-        lambda stage_cfg, *_args, **_kwargs: (
-            types.SimpleNamespace(tag=f"cfg-{stage_cfg.stage_id}", quant_config=None),
-            object,
-        ),
+        lambda stage_cfg, *_args, **_kwargs: (types.SimpleNamespace(tag=f"cfg-{stage_cfg.stage_id}"), object),
     )
 
     stage_plans = runtime._build_logical_stage_init_plans(
@@ -1531,7 +1512,7 @@ def test_initialize_local_llm_replica_passes_stage_init_timeout_to_complete_stag
     runtime = _make_stage_runtime()
     stage_init_timeout = 302
 
-    fake_vllm_config = types.SimpleNamespace(quant_config=None)
+    fake_vllm_config = types.SimpleNamespace()
     fake_addresses = types.SimpleNamespace(inputs=["in"], outputs=["out"], frontend_stats_publish_address=None)
     captured_timeout: int | None = None
 
@@ -2630,7 +2611,7 @@ def test_native_kv_producer_replica_identity_and_bootstrap_are_isolated(
     mocker.patch.object(
         runtime_module,
         "build_vllm_config",
-        return_value=(types.SimpleNamespace(kv_transfer_config=kv_config, quant_config=None), object),
+        return_value=(types.SimpleNamespace(kv_transfer_config=kv_config), object),
     )
 
     for _ in range(2):
@@ -2784,11 +2765,8 @@ def test_colocated_diffusion_scopes_devices(monkeypatch, fail):
             metadata=plan.metadata,
             stage_init_timeout=1,
             use_inline=True,
-            omni_master_server=None,
-            omni_coordinator_address=None,
             stage_visible_devices="1",
             spawn_device_lock=lock,
-            quantization_config=None,
         )
         assert result is client
     assert os.environ[env_var] == "0,1"
