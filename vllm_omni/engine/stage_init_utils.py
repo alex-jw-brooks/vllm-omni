@@ -85,14 +85,6 @@ class ReplicaInitPlan:
     # and stage_vllm_config, should be folded into the OmniModelConfig.
     quantization_config: QuantizationConfig | None = None
 
-    def __post_init__(self):
-        # The vLLM Config contains the quantization config for the LLM case, so we need to make sure
-        # it aligns with self.quantization_config, since diffusion and the LLM case now use the same
-        # init path for quantization config. This is a precondition because build_vllm_config
-        # also builds the quantization config internally.
-        if self.stage_vllm_config is not None and self.stage_vllm_config.quant_config is not self.quantization_config:
-            raise RuntimeError("vLLM Config and quantization config must be the same object")
-
 
 @dataclass
 class LogicalStageInitPlan:

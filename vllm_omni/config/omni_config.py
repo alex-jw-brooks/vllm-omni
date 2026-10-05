@@ -900,7 +900,7 @@ class _DiffusionConfigProjection:
         from vllm_omni.diffusion.data import normalize_omni_kwargs, validate_omni_diffusion_kwargs
         from vllm_omni.diffusion.offloader.config import parse_diffusion_offload_config
 
-        normalized = normalize_omni_kwargs(kwargs, is_diffusion=True)
+        normalized = normalize_omni_kwargs(kwargs)
         # Validate before stage construction while retaining the raw mapping
         # needed by dataclass/config serialization across process boundaries.
         # Reject unknown fields before dropping None values, so a stray key still
@@ -1319,7 +1319,7 @@ def normalize_and_validate_diffusion_engine_ingress_kwargs(
         for name in _DIFFUSION_SHARED_ONLY_ENGINE_FIELDS | {"quantization"}
         if name in mixed_kwargs
     }
-    normalized = normalize_omni_kwargs(mixed_kwargs, is_diffusion=True, apply_defaults=False)
+    normalized = normalize_omni_kwargs(mixed_kwargs, apply_defaults=False)
     if engine_owned.get("quantization") is not None and normalized.get("quantization_config") is not None:
         raise ValueError("Diffusion config fields 'quantization' and 'quantization_config' cannot both be provided.")
     normalized.update(engine_owned)
@@ -1382,7 +1382,7 @@ def extract_diffusion_stage_config_kwargs(
     # the compatibility adapter without treating it as a deprecated alias.
     mixed_kwargs = {name: _copy_value(value) for name, value in kwargs.items()}
     engine_quantization = mixed_kwargs.pop("quantization", None)
-    normalized = normalize_omni_kwargs(mixed_kwargs, is_diffusion=True)
+    normalized = normalize_omni_kwargs(mixed_kwargs)
     if engine_quantization is not None:
         if normalized.get("quantization_config") is not None:
             raise ValueError(

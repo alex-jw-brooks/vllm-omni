@@ -72,7 +72,6 @@ def _move_diffusion_alias(
 
 def normalize_omni_kwargs(
     kwargs: Mapping[str, Any],
-    is_diffusion: bool,
     *,
     apply_defaults: bool = True,
 ) -> dict[str, Any]:
@@ -93,15 +92,6 @@ def normalize_omni_kwargs(
         normalized["dtype"] = str(dtype).removeprefix("torch.")
     elif not isinstance(dtype, str):
         raise TypeError(f"Provided dtype must be a string or torch.dtype, got {type(dtype).__name__}")
-
-    if not is_diffusion:
-        # For quantization, map quantization -> quantization_config so we can build
-        # the config from the same field later regardless of engine type.
-        if "quantization" in normalized and normalized.get("quantization_config", None) is None:
-            normalized["quantization_config"] = normalized.pop("quantization")
-        else:
-            normalized.pop("quantization", None)
-        return normalized
 
     ### Diffusion specific
     # Promote deprecated aliases onto their canonical fields. Each warns on use
@@ -566,7 +556,7 @@ class TransformerConfig:
         disk_qc = params.get("quantization_config")
         if isinstance(disk_qc, dict):
             raw_quant_method = get_quantization_method(disk_qc)
-            quant_config = build_quantization_config(disk_qc, is_diffusion=True)
+            quant_config = build_quantization_config(disk_qc)
             if quant_config is not None:
                 quant_method = raw_quant_method if raw_quant_method is not None else quant_config.get_name()
 
@@ -1403,10 +1393,10 @@ class OmniDiffusionConfig:
         if isinstance(self.quantization_config, (str, Mapping)):
             logger.warning_once(
                 "Passing a string or mapping as OmniDiffusionConfig.quantization_config "
-                "is deprecated and will be removed in vLLM-Omni>0.30. Pass a "
+                "is deprecated and will be removed in vLLM-Omni>0.32. Pass a "
                 "preconstructed QuantizationConfig object instead."
             )
-        self.quantization_config = build_quantization_config(self.quantization_config, is_diffusion=True)
+        self.quantization_config = build_quantization_config(self.quantization_config)
 
         # Auto-detect quantization from TransformerConfig if not explicitly set.
         # This covers the case where tf_model_config is passed at construction
@@ -1754,7 +1744,7 @@ class OmniDiffusionConfig:
 
     @classmethod
     def normalize_init_kwargs(cls, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        config_kwargs = normalize_omni_kwargs(kwargs, is_diffusion=True)
+        config_kwargs = normalize_omni_kwargs(kwargs)
 
         valid_fields = {f.name for f in fields(cls)}
         # Reject unknown fields before dropping None values, so a stray key still
