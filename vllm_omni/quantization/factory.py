@@ -73,6 +73,7 @@ def _register_humming_stubs() -> None:
 
 _register_humming_stubs()
 
+from vllm.config.quantization import resolve_quantization_config  # noqa: E402
 from vllm.model_executor.layers.quantization import (  # noqa: E402
     QUANTIZATION_METHODS,
     get_quantization_config,
@@ -85,8 +86,10 @@ from vllm.model_executor.layers.quantization.modelopt import (  # noqa: E402
     ModelOptFp8Config,
     ModelOptNvFp4Config,
 )
+from vllm.model_executor.layers.quantization.online.base import OnlineQuantizationConfig  # noqa: E402
 
 from .component_config import ComponentQuantizationConfig  # noqa: E402
+from .fp8_config import DiffusionFp8Config  # noqa: E402
 
 logger = init_logger(__name__)
 
@@ -393,7 +396,7 @@ def build_quantization_config(
 
         build_quantization_config("fp8")
         build_quantization_config("fp8", {"quant_method": "fp8", "is_checkpoint_fp8_serialized": True})
-        build_quantization_config({"method": "fp8", "activation_scheme": "static"})
+        build_quantization_config({"method": "fp8", "ignored_layers": ["proj_out"]})
         build_quantization_config({"transformer": "fp8", "vae": None}) # component config
 
     Args:
@@ -478,7 +481,23 @@ def build_quantization_config(
     if from_checkpoint:
         set_quantization_method(spec, quantization)
         return quant_cls.from_config(spec)
+    if quant_cls is OnlineQuantizationConfig:
+        return _build_online_quantization_config(method, spec)
+    # Upstream Fp8Config only describes serialized checkpoints, so online fp8
+    # (non-serialized) is routed to DiffusionFp8Config for all stage types.
+    if method == "fp8" and not spec.get("is_checkpoint_fp8_serialized", False):
+        return DiffusionFp8Config(**spec)
     return quant_cls(**spec)
+
+
+def _build_online_quantization_config(method: str, spec: dict[str, Any]) -> OnlineQuantizationConfig:
+    """Build vLLM's online config from explicit args or an online shorthand (e.g. fp8_per_tensor)."""
+    if "args" in spec:
+        return OnlineQuantizationConfig(**spec)
+    args = resolve_quantization_config(method, spec or None)
+    if args is None:
+        raise ValueError("Online quantization requires quantization config arguments")
+    return OnlineQuantizationConfig(args)
 
 
 def build_quant_config(

@@ -24,6 +24,7 @@ from vllm_omni.diffusion.model_metadata import (
     HUNYUAN_IMAGE3_MAX_INPUT_IMAGES,
     QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES,
 )
+from vllm_omni.quantization.fp8_config import DiffusionFp8Config
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -49,7 +50,7 @@ def _roundtrip_diffusion_config(**kwargs) -> OmniDiffusionConfig:
 
 class TestQuantizationConfigPropagation:
     def test_init_resolves_mapping_without_mutating_input(self):
-        spec = {"method": "fp8", "activation_scheme": "static"}
+        spec = {"method": "fp8", "is_checkpoint_fp8_serialized": True, "activation_scheme": "static"}
         expected = dict(spec)
 
         config = OmniDiffusionConfig(model=None, quantization_config=spec)
@@ -67,7 +68,7 @@ class TestQuantizationConfigPropagation:
     def test_init_resolves_string_quantization_config(self):
         config = OmniDiffusionConfig(model=None, quantization_config="fp8")
 
-        assert isinstance(config.quantization_config, Fp8Config)
+        assert isinstance(config.quantization_config, DiffusionFp8Config)
 
     @pytest.mark.parametrize("value", [1, [], object()])
     def test_init_rejects_invalid_quantization_type(self, value):
