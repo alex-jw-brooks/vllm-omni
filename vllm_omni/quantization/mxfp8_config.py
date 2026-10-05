@@ -59,7 +59,6 @@ from vllm.model_executor.model_loader.weight_utils import initialize_single_dumm
 from vllm.model_executor.parameter import ModelWeightParameter
 from vllm.model_executor.utils import replace_parameter
 
-from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization._copy_missing_attrs import (
     copy_missing_attrs as _copy_missing_attrs,
 )
@@ -131,6 +130,8 @@ class DiffusionMXFP8Config(QuantizationConfig):
         layer: torch.nn.Module,
         prefix: str,
     ) -> QuantizeMethodBase | None:
+        from vllm_omni.platforms import current_omni_platform
+
         if isinstance(layer, LinearBase):
             if is_layer_skipped(
                 prefix=prefix,

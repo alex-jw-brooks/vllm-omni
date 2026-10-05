@@ -925,7 +925,7 @@ def test_mxfp4_layer_and_step_union_routes_actual_methods(
     from vllm_omni.diffusion.forward_context import ForwardContext, override_forward_context
     from vllm_omni.quantization import build_quantization_config, mxfp4_config
 
-    monkeypatch.setattr(mxfp4_config.current_omni_platform, "is_npu", lambda: True)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
     selected = "blocks.10.attn1.to_qkv"
     other = "blocks.11.attn2.to_q"
     preserved = "blocks.12.ffn.net_2"
