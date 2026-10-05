@@ -78,7 +78,7 @@ def test_fp8_scope_and_prefix_propagation(monkeypatch):
     )
 
     from vllm_omni.diffusion.models.minimax_h3 import minimax_h3_transformer as h3
-    from vllm_omni.quantization.fp8_config import DiffusionFp8Config
+    from vllm_omni.quantization.fp8_config import OmniFp8Config
 
     monkeypatch.setattr(h3, "ColumnParallelLinear", _FakeLinear)
     monkeypatch.setattr(h3, "MergedColumnParallelLinear", _FakeLinear)
@@ -94,7 +94,7 @@ def test_fp8_scope_and_prefix_propagation(monkeypatch):
         "blocks.0.adaln_proj.linear",
         "final_layer.adaln_proj.linear",
     }
-    fp8_config = DiffusionFp8Config(ignored_layers=sorted(ignored_layers))
+    fp8_config = OmniFp8Config(ignored_layers=sorted(ignored_layers))
     model = h3.MiniMaxH3DiTModel(
         _small_od_config(),
         quant_config=fp8_config,

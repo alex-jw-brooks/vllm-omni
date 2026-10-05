@@ -89,7 +89,6 @@ from vllm.model_executor.layers.quantization.modelopt import (  # noqa: E402
 from vllm.model_executor.layers.quantization.online.base import OnlineQuantizationConfig  # noqa: E402
 
 from .component_config import ComponentQuantizationConfig  # noqa: E402
-from .fp8_config import DiffusionFp8Config  # noqa: E402
 
 logger = init_logger(__name__)
 
@@ -150,6 +149,7 @@ def register_omni_quantization_configs() -> None:
     """
     from . import (  # noqa: F401  (import side-effect = decorator registration)
         bitsandbytes_config,
+        fp8_config,
         inc_config,
         int8_config,
         mxfp4_config,
@@ -482,22 +482,12 @@ def build_quantization_config(
         set_quantization_method(spec, quantization)
         return quant_cls.from_config(spec)
     if quant_cls is OnlineQuantizationConfig:
-        return _build_online_quantization_config(method, spec)
-    # Upstream Fp8Config only describes serialized checkpoints, so online fp8
-    # (non-serialized) is routed to DiffusionFp8Config for all stage types.
-    if method == "fp8" and not spec.get("is_checkpoint_fp8_serialized", False):
-        return DiffusionFp8Config(**spec)
+        # If it's an OnlineQuantizationConfig, build vLLM's args & init the online class directly
+        args = resolve_quantization_config(method, spec or None)
+        if args is None:
+            raise ValueError("Online quantization requires quantization config arguments")
+        return quant_cls(args)
     return quant_cls(**spec)
-
-
-def _build_online_quantization_config(method: str, spec: dict[str, Any]) -> OnlineQuantizationConfig:
-    """Build vLLM's online config from explicit args or an online shorthand (e.g. fp8_per_tensor)."""
-    if "args" in spec:
-        return OnlineQuantizationConfig(**spec)
-    args = resolve_quantization_config(method, spec or None)
-    if args is None:
-        raise ValueError("Online quantization requires quantization config arguments")
-    return OnlineQuantizationConfig(args)
 
 
 def build_quant_config(

@@ -36,6 +36,7 @@ from vllm_omni.quantization.factory import (
     get_quantization_method,
     get_stage_quantization_config,
 )
+from vllm_omni.quantization.fp8_config import OmniFp8Config
 from vllm_omni.quantization.inc_config import OmniINCConfig
 from vllm_omni.quantization.int8_config import DiffusionInt8Config
 from vllm_omni.quantization.mxfp4_config import (
@@ -77,7 +78,7 @@ _CONFIG_CASES = {
     "inc": ConfigCase(OmniINCConfig, partial(OmniINCConfig, weight_bits=4, group_size=128)),
     "torchao": ConfigCase(OmniTorchAOConfig, _make_torchao_config),
     "torchao_float8_weight_only": ConfigCase(OmniTorchAOFloat8WeightOnlyConfig, _make_torchao_float8_config),
-    "fp8": ConfigCase(Fp8Config, Fp8Config),
+    "fp8": ConfigCase(OmniFp8Config, OmniFp8Config),
 }
 
 # AutoRound checkpoints are NOT registered as names (matching vLLM, which keeps

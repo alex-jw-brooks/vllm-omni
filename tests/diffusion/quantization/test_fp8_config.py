@@ -5,39 +5,101 @@
 from types import SimpleNamespace
 
 import pytest
+import torch
+from pytest_mock import MockerFixture
 from torch import nn
-from vllm.config.quantization import QuantizationConfigArgs, QuantSpec
-from vllm.model_executor.layers.quantization.fp8 import Fp8Config
+from vllm.config import set_current_vllm_config
+from vllm.model_executor.layers.attention import Attention
+from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
+from vllm.model_executor.layers.quantization.fp8 import Fp8KVCacheMethod
 from vllm.model_executor.layers.quantization.modelopt import ModelOptFp8Config, ModelOptNvFp4Config
 from vllm.model_executor.layers.quantization.online.base import OnlineQuantizationConfig
+from vllm.model_executor.layers.quantization.online.fp8 import Fp8PerTensorOnlineLinearMethod
 from vllm.model_executor.layers.quantization.utils.quant_utils import kFp8StaticTensorSym
 
 from vllm_omni.config.model import OmniModelArchConfigConvertor
 from vllm_omni.diffusion.data import OmniDiffusionConfig, TransformerConfig
+from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
 from vllm_omni.quantization import (
     SUPPORTED_QUANTIZATION_METHODS,
     ComponentQuantizationConfig,
     build_quantization_config,
 )
 from vllm_omni.quantization.factory import resolve_quantization_config_from_disk
+from vllm_omni.quantization.fp8_config import OmniFp8Config
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
+LAYER_PREFIX = "blocks.0.attn"
+GLOB_IGNORED_LAYER = "blocks.*.ff"
+GLOB_IGNORED_PREFIX = "blocks.3.ff"
+GLOB_KEPT_PREFIX = "blocks.3.attn"
+FUSED_QKV_PREFIX = "blocks.0.attn.qkv_proj"
+PACKED_QKV_MAPPING = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
+IGNORED_QKV_SHARDS = ["blocks.0.attn.q_proj", "blocks.0.attn.k_proj", "blocks.0.attn.v_proj"]
 
-def test_build_quantization_config_fp8():
-    config = build_quantization_config("fp8")
-    assert config is not None
+
+@pytest.fixture
+def bf16_vllm_config():
+    """Set the model dtype that vLLM's online fp8 methods read on construction."""
+    od_config = OmniDiffusionConfig(model=None, dtype=torch.bfloat16)
+    with set_current_vllm_config(create_diffusion_vllm_config(torch.device("cpu"), od_config)):
+        yield
+
+
+@pytest.mark.parametrize("is_diffusion", [True, False])
+def test_build_quantization_config_fp8(is_diffusion):
+    config = build_quantization_config("fp8", is_diffusion=is_diffusion)
+    assert isinstance(config, OmniFp8Config)
     assert config.get_name() == "fp8"
     assert config.activation_scheme == "dynamic"
     assert not config.is_checkpoint_fp8_serialized
 
 
-def test_build_quantization_config_fp8_uses_native_online_quantization():
-    config = build_quantization_config({"method": "fp8", "ignored_layers": ["proj_out"]})
-    assert isinstance(config, OnlineQuantizationConfig)
-    assert config.args.linear.weight == kFp8StaticTensorSym
-    assert config.args.moe.weight == kFp8StaticTensorSym
-    assert config.ignored_layers == ["proj_out"]
+def test_online_fp8_uses_upstream_online_linear_method(bf16_vllm_config, mocker: MockerFixture):
+    """Ensure online fp8 quantizes linears with vLLM's online method."""
+    config = build_quantization_config("fp8")
+    linear = mocker.Mock(spec=LinearBase)
+
+    method = config.get_quant_method(linear, LAYER_PREFIX)
+
+    assert isinstance(method, Fp8PerTensorOnlineLinearMethod)
+
+
+def test_online_fp8_ignored_layers_match_globs(bf16_vllm_config, mocker: MockerFixture):
+    """Ensure online fp8 ignored_layers match glob patterns like vLLM's online config."""
+    config = build_quantization_config({"method": "fp8", "ignored_layers": [GLOB_IGNORED_LAYER]})
+    linear = mocker.Mock(spec=LinearBase)
+
+    ignored_method = config.get_quant_method(linear, GLOB_IGNORED_PREFIX)
+    kept_method = config.get_quant_method(linear, GLOB_KEPT_PREFIX)
+
+    assert isinstance(ignored_method, UnquantizedLinearMethod)
+    assert isinstance(kept_method, Fp8PerTensorOnlineLinearMethod)
+
+
+def test_online_fp8_forwards_packed_modules_mapping(bf16_vllm_config, mocker: MockerFixture):
+    """Ensure online fp8 forwards packed_modules_mapping so ignoring q/k/v_proj also skips the fused qkv_proj."""
+    config = build_quantization_config({"method": "fp8", "ignored_layers": IGNORED_QKV_SHARDS})
+    config.packed_modules_mapping = PACKED_QKV_MAPPING
+    linear = mocker.Mock(spec=LinearBase)
+
+    method = config.get_quant_method(linear, FUSED_QKV_PREFIX)
+
+    assert isinstance(method, UnquantizedLinearMethod)
+
+
+def test_only_serialized_fp8_loads_kv_cache_scales(mocker: MockerFixture):
+    """Ensure only serialized fp8 checkpoints load KV-cache scales for attention."""
+    online = build_quantization_config("fp8")
+    serialized = build_quantization_config({"method": "fp8", "is_checkpoint_fp8_serialized": True})
+    attention = mocker.Mock(spec=Attention)
+
+    online_method = online.get_quant_method(attention, LAYER_PREFIX)
+    serialized_method = serialized.get_quant_method(attention, LAYER_PREFIX)
+
+    assert online_method is None
+    assert isinstance(serialized_method, Fp8KVCacheMethod)
 
 
 def test_build_quantization_config_upstream_online_fp8_shorthand():
@@ -52,11 +114,11 @@ def test_online_fp8_rejects_static_activation():
         build_quantization_config({"method": "fp8", "activation_scheme": "static"})
 
 
-def test_build_online_quantization_config_preserves_explicit_native_args():
-    args = QuantizationConfigArgs(linear=QuantSpec(weight="fp8_per_tensor_static"), ignore=["proj_out"])
-    config = build_quantization_config({"method": "online", "args": args})
+def test_build_online_quantization_config_from_fields():
+    """Ensure "online" builds vLLM's online config from plain QuantizationConfigArgs fields in vLLM."""
+    config = build_quantization_config({"method": "online", "linear": "fp8_per_tensor_static", "ignore": ["proj_out"]})
     assert isinstance(config, OnlineQuantizationConfig)
-    assert config.args is args
+    assert config.args.linear.weight == kFp8StaticTensorSym
     assert config.ignored_layers == ["proj_out"]
 
 
@@ -70,7 +132,7 @@ def test_serialized_checkpoint_replaces_online_fp8_config():
         build_quantization_config("fp8"),
         {"quant_method": "fp8", "is_checkpoint_fp8_serialized": True, "activation_scheme": "static"},
     )
-    assert isinstance(config, Fp8Config)
+    assert isinstance(config, OmniFp8Config)
     assert config.is_checkpoint_fp8_serialized
     assert config.activation_scheme == "static"
 
@@ -115,7 +177,7 @@ def test_build_quantization_config_checkpoint_metadata_not_mutated():
 
     config = build_quantization_config(None, metadata)
 
-    assert isinstance(config, Fp8Config)
+    assert isinstance(config, OmniFp8Config)
     assert config.is_checkpoint_fp8_serialized
     assert metadata == original
 
@@ -178,12 +240,12 @@ def test_build_quantization_config_conflicting_method_keys_raise():
 
 
 def test_build_quantization_config_passthrough():
-    fp8 = Fp8Config()
+    fp8 = OmniFp8Config()
     assert build_quantization_config(fp8) is fp8
 
 
 def test_component_config_routing():
-    fp8 = Fp8Config()
+    fp8 = OmniFp8Config()
     config = ComponentQuantizationConfig(component_configs={"transformer": fp8, "vae": None})
 
     assert config.get_name() == "component"
@@ -193,7 +255,7 @@ def test_component_config_routing():
 
 
 def test_component_config_with_default():
-    fp8 = Fp8Config()
+    fp8 = OmniFp8Config()
     config = ComponentQuantizationConfig(component_configs={"vae": None}, default_config=fp8)
 
     assert config.resolve("transformer.blocks.0") is fp8
