@@ -2690,6 +2690,10 @@ class OrchestratorBase:
         params_override: OmniSamplingParams | None,
     ) -> None:
         """End a request at its yielded stage and return the next stage's input to the caller."""
+        sampling_params_list = list(req_state.sampling_params_list)
+        if params_override is not None:
+            # The override is the receiver's own params plus this request's CFG companion ids.
+            sampling_params_list[receiver_stage_id] = params_override
         await self._cleanup_request_ids([req_id])
         await self.output_async_queue.put(
             NextStageInputMessage(
@@ -2698,9 +2702,8 @@ class OrchestratorBase:
                 receiver_stage_id=receiver_stage_id,
                 requests=requests,
                 submit_kwargs=submit_kwargs,
-                params_override=params_override,
                 stage_output=req_state.yield_stage_output,
-                sampling_params_list=req_state.sampling_params_list,
+                sampling_params_list=sampling_params_list,
                 final_stage_id=req_state.final_stage_id,
                 final_output_stage_ids=list(req_state.final_output_stage_ids),
             )
@@ -3058,7 +3061,6 @@ class Orchestrator(OrchestratorBase):
                 already_submitted=False,
                 t_submit_start=_time.perf_counter(),
                 submit_kwargs=msg.submit_kwargs,
-                params_override=msg.params_override,
             ),
             req_id=req_id,
             stage_id=receiver_stage_id,

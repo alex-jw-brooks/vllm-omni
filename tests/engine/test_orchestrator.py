@@ -57,7 +57,6 @@ _COMPANION_REQUEST_ID = "req-run-call1-neg"
 # Tokens each stage produces, and the input the orchestrator builds for the next stage from them.
 _STAGE0_OUTPUT_TOKEN_IDS = (3, 4)
 _STAGE1_INPUT_TOKEN_IDS = (7, 8, 9)
-_STAGE1_OUTPUT_TOKEN_IDS = (10, 11)
 _STAGE2_INPUT_TOKEN_IDS = (12, 13, 14)
 _STAGE2_OUTPUT_TOKEN_IDS = (15, 16)
 
@@ -683,7 +682,7 @@ async def _start_three_stage_run(
     )
     processors = [
         FakeOutputProcessor(request_outputs=_finished_outputs(_CALL1_REQUEST_ID, token_ids=_STAGE0_OUTPUT_TOKEN_IDS)),
-        FakeOutputProcessor(request_outputs=_finished_outputs(_CALL2_REQUEST_ID, token_ids=_STAGE1_OUTPUT_TOKEN_IDS)),
+        FakeOutputProcessor(request_outputs=_finished_outputs(_CALL2_REQUEST_ID)),
         FakeOutputProcessor(request_outputs=_finished_outputs(_CALL3_REQUEST_ID, token_ids=_STAGE2_OUTPUT_TOKEN_IDS)),
     ]
     orchestrator_fixture = orchestrator_factory([stage0, stage1, stage2], output_processors=processors)
@@ -773,7 +772,7 @@ async def test_run_yield_waits_for_cfg_companions(orchestrator_factory) -> None:
 
         assert isinstance(msg, NextStageInputMessage)
         assert msg.requests == [original_prompt]
-        assert msg.params_override.cfg_kv_request_ids == {"negative": _COMPANION_REQUEST_ID}
+        assert msg.sampling_params_list[1].cfg_kv_request_ids == {"negative": _COMPANION_REQUEST_ID}
         assert stage1.add_request_calls == []
         assert _CALL1_REQUEST_ID not in orchestrator.request_states
         assert _COMPANION_REQUEST_ID not in orchestrator.request_states
@@ -830,7 +829,6 @@ async def test_run_requests_rejected_with_async_chunk(orchestrator_factory) -> N
     stage0 = FakeStageClient(stage_type="llm", final_output=False)
     stage1 = FakeStageClient(stage_type="llm", final_output=True)
     orchestrator_fixture = orchestrator_factory([stage0, stage1], async_chunk=True)
-    sampling_params_list = [_sampling_params(), _sampling_params()]
     try:
         await _enqueue_run_request(orchestrator_fixture)
         orchestrator_fixture.request_sync_q.put_nowait(
@@ -840,9 +838,8 @@ async def test_run_requests_rejected_with_async_chunk(orchestrator_factory) -> N
                 receiver_stage_id=1,
                 requests=[],
                 submit_kwargs=None,
-                params_override=None,
                 stage_output=None,
-                sampling_params_list=sampling_params_list,
+                sampling_params_list=[_sampling_params(), _sampling_params()],
                 final_stage_id=1,
                 final_output_stage_ids=[1],
             )

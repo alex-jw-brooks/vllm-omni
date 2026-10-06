@@ -123,7 +123,6 @@ class NextStageInputMessage(EngineQueueMessage, kw_only=True):
     receiver_stage_id: int
     requests: list[EngineCoreRequest] | list[OmniPromptType]
     submit_kwargs: dict[str, object] | None
-    params_override: OmniSamplingParams | None
     stage_output: OmniRequestOutput | None
     sampling_params_list: list[OmniSamplingParams]
     final_stage_id: int

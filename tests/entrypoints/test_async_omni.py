@@ -4,6 +4,7 @@
 import asyncio
 import re
 from types import SimpleNamespace
+from typing import Any
 
 import anyio
 import pytest
@@ -830,27 +831,6 @@ def test_qwen_video_sampling_keeps_all_three_stages_delta(input_kind):
     asyncio.run(run())
 
 
-# End to end tests for ensuring internal manipulation of request ID
-# in diffusion / Omni models don't leak back to the user.
-#
-# One AsyncOmni per test function (all cases in a single asyncio loop) to avoid
-# repeated cold starts. Do not use class/module-scoped engine fixtures here:
-# pytest-asyncio uses a function-scoped event loop by default, so reusing an
-# engine across tests can hang on the second generate() call.
-
-
-# Covers:
-#   * plain client ids (``my-req-1``)
-#   * OpenAI-style prefixed ids (``img_gen-*``, ``chatcmpl-*``) that AsyncOmni
-#     suffixes internally for engine routing — streamed outputs must still echo
-#     the caller-visible id, not the internal UUID-suffixed id
-#   * empty ``request_id`` — server assigns a non-empty id for the caller
-_DIFFUSION_REQ_IDS = ["my-req-1", "img_gen-abc123", "chatcmpl-xyz"]
-_OMNI_REQ_IDS = ["my-req-1", "img_gen-abc123", "chatcmpl-xyz"]
-
-
-@hardware_test(res={"cuda": "L4"}, num_cards=1)
-@pytest.mark.omni
 def _next_stage_input(request_id: str) -> NextStageInputMessage:
     return NextStageInputMessage(
         request_id=request_id,
@@ -858,7 +838,6 @@ def _next_stage_input(request_id: str) -> NextStageInputMessage:
         receiver_stage_id=1,
         requests=[],
         submit_kwargs=None,
-        params_override=None,
         stage_output=None,
         sampling_params_list=[],
         final_stage_id=1,
@@ -873,7 +852,7 @@ def test_run_entry_stage_yields_at_entry_stage():
     async def run():
         omni = get_async_omni_instance()
         omni.engine.num_stages = 2
-        submitted = {}
+        submitted: dict[str, Any] = {}
 
         async def fake_add_request_async(*, request_id, **kwargs):
             submitted.update(kwargs, request_id=request_id)
@@ -949,6 +928,27 @@ def test_run_entry_stage_raises_error_response():
     asyncio.run(run())
 
 
+# End to end tests for ensuring internal manipulation of request ID
+# in diffusion / Omni models don't leak back to the user.
+#
+# One AsyncOmni per test function (all cases in a single asyncio loop) to avoid
+# repeated cold starts. Do not use class/module-scoped engine fixtures here:
+# pytest-asyncio uses a function-scoped event loop by default, so reusing an
+# engine across tests can hang on the second generate() call.
+
+
+# Covers:
+#   * plain client ids (``my-req-1``)
+#   * OpenAI-style prefixed ids (``img_gen-*``, ``chatcmpl-*``) that AsyncOmni
+#     suffixes internally for engine routing — streamed outputs must still echo
+#     the caller-visible id, not the internal UUID-suffixed id
+#   * empty ``request_id`` — server assigns a non-empty id for the caller
+_DIFFUSION_REQ_IDS = ["my-req-1", "img_gen-abc123", "chatcmpl-xyz"]
+_OMNI_REQ_IDS = ["my-req-1", "img_gen-abc123", "chatcmpl-xyz"]
+
+
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.omni
 @pytest.mark.asyncio
 async def test_diffusion_generate_request_id():
     """Diffusion E2E request-id contract (``riverclouds/qwen_image_random``).
