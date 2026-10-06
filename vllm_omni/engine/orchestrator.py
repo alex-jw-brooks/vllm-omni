@@ -89,7 +89,7 @@ def cleanup_request_artifact_dirs(artifact_dirs: set[str] | list[str]) -> None:
 # Default is off except for pipelines with an explicit validated default.
 _EVENT_DRIVEN_ORCH_ENV = "VLLM_OMNI_EVENT_DRIVEN_ORCH"
 
-_RUN_STAGE_ASYNC_CHUNK_ERROR = "Running one stage per request is not supported with async_chunk"
+_RUN_STAGE_ASYNC_CHUNK_ERROR = "Async chunking is not supported for individual stage processing"
 
 # How often the event-driven loop reconciles its reader-task set against
 # `available_replica_ids()` (elastic membership, replica eviction) while idle.
