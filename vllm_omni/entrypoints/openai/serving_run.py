@@ -31,7 +31,7 @@ def encode_payload(payload: NextStageInputMessage | OmniRequestOutput) -> str:
 
 
 def decode_stage_input(data: str, stage_types: Sequence[str]) -> NextStageInputMessage:
-    """Decode a next stage input encoded by ``encode_payload``.
+    """Decode a next stage input encoded by `encode_payload`.
 
     The codec returns structs as plain containers, which we rebuild based on stage type.
     """
@@ -49,7 +49,7 @@ class ServingRun:
         self.stage_types = [get_stage_type(stage_config) for stage_config in engine_client.stage_configs]
 
     async def run(self, request: RunRequest, *, request_id: str) -> RunResponse:
-        """Run the stage named by ``request.stage_id`` and return its encoded result."""
+        """Run the stage named by `request.stage_id` and return its encoded result."""
         sampling_params_list = coerce_param_message_types(
             to_sampling_params_list(self.engine_client, request.sampling_params or []), is_streaming=False
         )

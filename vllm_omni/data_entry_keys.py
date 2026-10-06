@@ -18,6 +18,9 @@ from typing import TYPE_CHECKING, Any, TypedDict
 import msgspec
 import numpy as np
 import torch
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 
 # Internal output routing markers shared by first-frame producers and orchestration.
 FIRST_AUDIO_KEY = "_omni_first_audio"
@@ -475,3 +478,34 @@ def deserialize_payload(
             flat[key] = entry.scalar_data
 
     return unflatten_payload(flat)  # type: ignore[return-value]
+
+
+def payload_finished(payload: OmniPayload) -> bool:
+    """Return whether the payload marks its producer's output as finished (`meta.finished`)."""
+    # Some async-chunk callers pass untyped connector results.
+    if not isinstance(payload, dict):
+        logger.warning_once("payload_finished expected an OmniPayload dict, got %s", type(payload).__name__)
+        return False
+    if "finished" in payload:
+        logger.warning_once("legacy flat 'finished' key in payload; expected 'meta.finished'")
+    meta = payload.get("meta")
+    if not isinstance(meta, dict) or "finished" not in meta:
+        return False
+    flag = meta["finished"]
+    if isinstance(flag, torch.Tensor):
+        return flag.numel() == 1 and bool(flag.item())
+    return bool(flag)
+
+
+def payload_audio_codes(payload: OmniPayload) -> torch.Tensor | None:
+    """Return the payload's audio codes (`codes.audio`), or None if it has none."""
+    # Some async-chunk callers pass untyped connector results.
+    if not isinstance(payload, dict):
+        logger.warning_once("payload_audio_codes expected an OmniPayload dict, got %s", type(payload).__name__)
+        return None
+    if "code_predictor_codes" in payload:
+        logger.warning_once("legacy flat 'code_predictor_codes' key in payload; expected 'codes.audio'")
+    codes = payload.get("codes")
+    if isinstance(codes, dict):
+        return codes.get("audio")
+    return None

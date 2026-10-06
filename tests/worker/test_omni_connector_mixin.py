@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
+from vllm_omni.data_entry_keys import OmniPayload, OmniPayloadMeta
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import (
     OmniKVTransferManager,
 )
@@ -1411,7 +1412,10 @@ class TestAsyncPayloadLifecycle(unittest.TestCase):
         host._poll_single_request("r1")
         output2 = host.get_omni_connector_output()
         self.assertEqual(output2.chunk_ready_req_ids, set())
-        self.assertEqual(output2.request_metadata, {"r1": {"next_stage_prompt_len": 7}})
+        self.assertEqual(
+            output2.request_metadata,
+            {"r1": OmniPayload(meta=OmniPayloadMeta(next_stage_prompt_len=7, finished=torch.tensor(False)))},
+        )
 
         host.shutdown_omni_connectors()
 

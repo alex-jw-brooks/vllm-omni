@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING, Any, cast
 import torch
 from vllm.distributed.parallel_state import get_tp_group
 
-from vllm_omni.data_entry_keys import OmniPayload
+from vllm_omni.core.sched.omni_scheduling_coordinator import payload_for_scheduler
+from vllm_omni.data_entry_keys import (
+    OmniPayload,
+    payload_audio_codes,
+    payload_finished,
+)
 from vllm_omni.distributed.omni_connectors.model_runner.omni_connector_runtime import (
     _OmniConnectorRuntimeMixin,
     logger,
@@ -68,47 +73,13 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
         """Remove and return a stage payload (consume after use)."""
         return cast(OmniPayload | None, self._local_stage_payload_cache.pop(req_id, None))
 
-    def put_local_request_metadata(self, req_id: str, metadata: dict[str, Any]) -> None:
+    def put_local_request_metadata(self, req_id: str, metadata: OmniPayload) -> None:
         """Store lightweight scheduling metadata for a request."""
         self._local_request_metadata[req_id] = metadata
 
-    def get_local_request_metadata(self, req_id: str) -> dict[str, Any] | None:
+    def get_local_request_metadata(self, req_id: str) -> OmniPayload | None:
         """Retrieve scheduling metadata for a request."""
         return self._local_request_metadata.get(req_id)
-
-    # ------------------------------------------------------------------ #
-    #  Scheduling metadata extraction
-    # ------------------------------------------------------------------ #
-
-    @classmethod
-    def _extract_scheduling_metadata(cls, payload: dict[str, Any] | OmniPayload) -> dict[str, Any]:
-        """Extract only the fields the scheduler needs from a full payload."""
-        extracted: dict[str, Any] = {}
-        meta = payload.get("meta") if isinstance(payload, dict) else None
-        meta = meta if isinstance(meta, dict) else {}
-        if "next_stage_prompt_len" in meta:
-            extracted["next_stage_prompt_len"] = meta["next_stage_prompt_len"]
-        else:
-            legacy_prompt_len = cast(dict[str, Any], payload).get("next_stage_prompt_len")
-            if legacy_prompt_len is not None:
-                logger.warning_once(
-                    "legacy flat 'next_stage_prompt_len' key in payload; expected 'meta.next_stage_prompt_len'"
-                )
-                extracted["next_stage_prompt_len"] = legacy_prompt_len
-
-        audio_codes = cls._payload_audio_codes(payload)
-        if audio_codes is not None:
-            extracted["code_predictor_codes"] = audio_codes
-
-        if "left_context_size" in meta:
-            extracted["left_context_size"] = meta["left_context_size"]
-        elif "left_context_size" in payload:
-            logger.warning_once("legacy flat 'left_context_size' key in payload; expected 'meta.left_context_size'")
-
-        if cls._payload_finished(payload):
-            extracted["input_terminal"] = True
-
-        return extracted
 
     _NON_CONSUMABLE_PAYLOAD_KEYS: set[tuple[str, str]] = {
         ("meta", "finished"),
@@ -130,31 +101,6 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
             return len(value) > 0
         return True
 
-    @staticmethod
-    def _payload_finished(payload: Any) -> bool:
-        if not isinstance(payload, dict):
-            return False
-        if "finished" in payload:
-            logger.warning_once("legacy flat 'finished' key in payload; expected 'meta.finished'")
-        meta = payload.get("meta")
-        if not isinstance(meta, dict) or "finished" not in meta:
-            return False
-        flag = meta["finished"]
-        if isinstance(flag, torch.Tensor):
-            return flag.numel() == 1 and bool(flag.item())
-        return bool(flag)
-
-    @staticmethod
-    def _payload_audio_codes(payload: Any) -> Any:
-        if not isinstance(payload, dict):
-            return None
-        if "code_predictor_codes" in payload:
-            logger.warning_once("legacy flat 'code_predictor_codes' key in payload; expected 'codes.audio'")
-        codes = payload.get("codes")
-        if isinstance(codes, dict):
-            return codes.get("audio")
-        return None
-
     @classmethod
     def _payload_is_consumable(cls, payload: dict[str, Any] | OmniPayload | None) -> bool:
         """Return True when an async payload can drive a real forward step.
@@ -175,7 +121,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                     return True
                 return decode_embeddings.numel() > 0 and decode_embeddings.shape[0] > 0
 
-        audio_codes = cls._payload_audio_codes(payload)
+        audio_codes = payload_audio_codes(payload)
         if audio_codes is not None:
             if isinstance(audio_codes, torch.Tensor):
                 return audio_codes.numel() > 0
@@ -514,7 +460,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                 self._pending_load_reqs.pop(req_id, None)
             self._apply_staged_payloads_locked(results)
             for req_id, payload in results.items():
-                self._local_request_metadata[req_id] = self._extract_scheduling_metadata(payload)
+                self._local_request_metadata[req_id] = payload_for_scheduler(payload)
         logger.debug(
             "[Stage-%s] recv_full_payload_inputs: consumed %s reqs: %s, stage_recv_req_ids now=%s",
             self._stage_id,
@@ -781,7 +727,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                 logger.debug("[Stage-%s] send_full_payload_outputs: payload is None for %s", self._stage_id, req_id)
                 continue
             if isinstance(payload, dict):
-                audio_codes = self._payload_audio_codes(payload)
+                audio_codes = payload_audio_codes(payload)
                 if isinstance(audio_codes, torch.Tensor):
                     code_len = int(audio_codes.numel())
                 elif hasattr(audio_codes, "__len__"):
@@ -1166,7 +1112,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                 external_req_id,
                 connector_get_key,
                 sorted(payload_data.keys()),
-                self._payload_finished(payload_data),
+                payload_finished(payload_data),
             )
 
         with self._lock:
@@ -1177,11 +1123,11 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
             self._get_req_chunk[req_id] += 1
 
         if self._async_chunk:
-            is_finished = self._payload_finished(payload_data)
+            is_finished = payload_finished(payload_data)
             incoming_payload_consumable = self._payload_is_consumable(payload_data)
 
             if self._model_mode != "ar":
-                new_ids = self._payload_audio_codes(payload_data)
+                new_ids = payload_audio_codes(payload_data)
                 if not self._payload_value_has_content(new_ids) and not is_finished:
                     return False
                 payload_consumable = self._payload_is_consumable(payload_data)
@@ -1215,7 +1161,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                     self._local_stage_payload_cache[req_id] = payload_data
                 staged_payload = self._local_stage_payload_cache[req_id]
                 self._async_chunk_updated_req_ids.add(req_id)
-                self.put_local_request_metadata(req_id, self._extract_scheduling_metadata(staged_payload))
+                self.put_local_request_metadata(req_id, payload_for_scheduler(staged_payload))
                 # A finish-only sentinel still needs one terminal wake-up so
                 # the downstream stage can sync the merged local payload and
                 # flush/finish even when the last recv carries no new

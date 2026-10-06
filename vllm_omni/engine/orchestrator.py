@@ -3013,7 +3013,7 @@ class Orchestrator(OrchestratorBase):
         return True
 
     async def _fail_if_cannot_submit(self, req_id: str, stage_id: int, *, is_run_request: bool) -> bool:
-        """Fail the request if it can't be submitted to ``stage_id``; return whether it failed."""
+        """Fail the request if it can't be submitted to `stage_id`; return whether it failed."""
         if not self.stage_pools[stage_id].live_replica_ids():
             # The stage lost all replicas between the HTTP-layer errored check and
             # dispatch. Runs before request state / running counter registration,

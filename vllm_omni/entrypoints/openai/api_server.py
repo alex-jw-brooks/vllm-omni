@@ -1884,7 +1884,7 @@ async def _reject_multi_api_duplex(websocket: WebSocket) -> bool:
 @with_cancellation
 @load_aware_call
 async def run_stage(request: RunRequest, raw_request: Request):
-    """Run one pipeline stage and return its encoded result; see ``ServingRun``."""
+    """Run one pipeline stage and return its encoded result; see `ServingRun`."""
     serving: ServingRun = raw_request.app.state.run_serving
     request_id = f"run-{random_uuid()}"
     raw_request.state.request_metadata = RequestResponseMetadata(request_id=request_id)
