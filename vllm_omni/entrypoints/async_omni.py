@@ -540,12 +540,18 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
             return await self._stage_response(req_state)
 
     async def run_downstream_stage(
-        self, stage_input: NextStageInputMessage, *, request_id: str
+        self,
+        stage_input: NextStageInputMessage,
+        sampling_params_list: Sequence[OmniSamplingParams],
+        *,
+        request_id: str,
     ) -> NextStageInputMessage | OutputMessage:
         """Run the receiver stage of a next stage input as its own request."""
         async with self._stage_request(request_id, stage_id=stage_input.receiver_stage_id) as req_state:
             await self.engine.add_next_stage_input_async(
-                msgspec.structs.replace(stage_input, request_id=req_state.request_id)
+                msgspec.structs.replace(
+                    stage_input, request_id=req_state.request_id, sampling_params_list=list(sampling_params_list)
+                )
             )
             return await self._stage_response(req_state)
 

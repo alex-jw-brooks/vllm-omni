@@ -874,11 +874,12 @@ def test_run_entry_stage_yields_at_entry_stage():
 
 @pytest.mark.cpu
 def test_run_downstream_stage_resubmits_and_returns_finished_output():
-    """Ensure a downstream stage call resubmits under a fresh id and returns the finished output, not a partial one."""
+    """Ensure a downstream stage call resubmits with the caller's params under a fresh id and returns the finished output, not a partial one."""
 
     async def run():
         omni = get_async_omni_instance()
         stage_input = _next_stage_input("earlier-call")
+        sampling_params_list = [SamplingParams(seed=1), SamplingParams(seed=2)]
         submitted = []
         next_stage_id = 1
 
@@ -896,12 +897,13 @@ def test_run_downstream_stage_resubmits_and_returns_finished_output():
 
         omni.engine.add_next_stage_input_async = fake_add_next_stage_input_async
 
-        response = await omni.run_downstream_stage(stage_input, request_id="downstream-call")
+        response = await omni.run_downstream_stage(stage_input, sampling_params_list, request_id="downstream-call")
 
         assert isinstance(response, OutputMessage)
         assert response.finished is True
         assert re.fullmatch(rf"downstream-call-[0-9a-f]{{8}}-{next_stage_id}", submitted[0].request_id)
         assert response.request_id == submitted[0].request_id
+        assert submitted[0].sampling_params_list == sampling_params_list
         assert omni.request_states == {}
 
     asyncio.run(run())

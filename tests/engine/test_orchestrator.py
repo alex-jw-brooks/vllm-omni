@@ -44,7 +44,7 @@ from vllm_omni.engine.orchestrator import (
     _build_terminal_empty_output,
 )
 from vllm_omni.engine.stage_pool import StagePool
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -646,14 +646,19 @@ def _finished_outputs(*request_ids: str, token_ids: tuple[int, ...] = (1, 2)) ->
     return [_build_request_output(request_id, token_ids=list(token_ids), finished=True) for request_id in request_ids]
 
 
+def _run_sampling_params_list(orchestrator_fixture: OrchestratorFixture) -> list[OmniSamplingParams]:
+    """Per-stage params the caller sends on every call of a run chain."""
+    return [
+        OmniDiffusionSamplingParams() if pool.stage_type == "diffusion" else _sampling_params()
+        for pool in orchestrator_fixture.orchestrator.stage_pools
+    ]
+
+
 async def _enqueue_run_request(
     orchestrator_fixture: OrchestratorFixture, *, original_prompt: dict[str, str] | None = None
 ) -> None:
     """Enqueue the first call of a run chain: it yields at stage 0 and ends at the last stage."""
-    sampling_params_list = [
-        OmniDiffusionSamplingParams() if pool.stage_type == "diffusion" else _sampling_params()
-        for pool in orchestrator_fixture.orchestrator.stage_pools
-    ]
+    sampling_params_list = _run_sampling_params_list(orchestrator_fixture)
     await _enqueue_add_request(
         orchestrator_fixture,
         request_id=_CALL1_REQUEST_ID,
@@ -712,6 +717,7 @@ async def test_run_chain_yields_at_each_stage_until_final_output(orchestrator_fa
     """Ensure each call in a run chain yields at its stage and the last call returns the final output."""
     orchestrator_fixture, stage1, stage2 = await _start_three_stage_run(orchestrator_factory, stage0_final_output=False)
     request_states = orchestrator_fixture.orchestrator.request_states
+    sampling_params_list = _run_sampling_params_list(orchestrator_fixture)
     later_calls = [
         (stage1, _CALL2_REQUEST_ID, _STAGE1_INPUT_TOKEN_IDS),
         (stage2, _CALL3_REQUEST_ID, _STAGE2_INPUT_TOKEN_IDS),
@@ -719,12 +725,15 @@ async def test_run_chain_yields_at_each_stage_until_final_output(orchestrator_fa
     try:
         msg = _get_messages_until_response(orchestrator_fixture)[-1]
         for stage, request_id, input_token_ids in later_calls:
-            # The previous call yielded and left no state behind.
+            # The previous call yielded, left no state behind, and returned no sampling params.
             assert isinstance(msg, NextStageInputMessage)
             assert msg.stage_output is None
+            assert msg.sampling_params_list == []
             assert msg.request_id not in request_states
 
-            orchestrator_fixture.request_sync_q.put_nowait(msgspec.structs.replace(msg, request_id=request_id))
+            orchestrator_fixture.request_sync_q.put_nowait(
+                msgspec.structs.replace(msg, request_id=request_id, sampling_params_list=sampling_params_list)
+            )
             await _wait_for(lambda: len(stage.add_request_calls) == 1)
             submitted = stage.add_request_calls[0][0]
             assert submitted.request_id == request_id
@@ -744,7 +753,7 @@ async def test_run_chain_yields_at_each_stage_until_final_output(orchestrator_fa
 
 @pytest.mark.asyncio
 async def test_run_yield_waits_for_cfg_companions(orchestrator_factory) -> None:
-    """Ensure a yielded stage waits for its CFG companions, forwards their ids, and leaves no state behind."""
+    """Ensure a yielded stage waits for its CFG companions and leaves no state behind."""
     stage0 = FakeStageClient(stage_type="llm", final_output=False)
     stage1 = FakeStageClient(stage_type="diffusion", final_output=True, final_output_type="image")
     stage0_processor = FakeOutputProcessor(request_outputs=_finished_outputs(_CALL1_REQUEST_ID, _COMPANION_REQUEST_ID))
@@ -772,17 +781,19 @@ async def test_run_yield_waits_for_cfg_companions(orchestrator_factory) -> None:
 
         assert isinstance(msg, NextStageInputMessage)
         assert msg.requests == [original_prompt]
-        assert msg.sampling_params_list[1].cfg_kv_request_ids == {"negative": _COMPANION_REQUEST_ID}
         assert stage1.add_request_calls == []
         assert _CALL1_REQUEST_ID not in orchestrator.request_states
         assert _COMPANION_REQUEST_ID not in orchestrator.request_states
         assert not orchestrator._cfg_tracker.has_companions(_CALL1_REQUEST_ID)
 
-        orchestrator_fixture.request_sync_q.put_nowait(msgspec.structs.replace(msg, request_id=_CALL2_REQUEST_ID))
+        orchestrator_fixture.request_sync_q.put_nowait(
+            msgspec.structs.replace(
+                msg, request_id=_CALL2_REQUEST_ID, sampling_params_list=_run_sampling_params_list(orchestrator_fixture)
+            )
+        )
         await _wait_for(lambda: len(stage1.add_request_calls) == 1)
-        request_id, prompt, params = stage1.add_request_calls[0]
+        request_id, prompt, _ = stage1.add_request_calls[0]
         assert (request_id, prompt) == (_CALL2_REQUEST_ID, original_prompt)
-        assert params.cfg_kv_request_ids == {"negative": _COMPANION_REQUEST_ID}
     finally:
         await _shutdown_orchestrator(orchestrator_fixture)
 

@@ -124,6 +124,7 @@ class NextStageInputMessage(EngineQueueMessage, kw_only=True):
     requests: list[EngineCoreRequest] | list[OmniPromptType]
     submit_kwargs: dict[str, object] | None
     stage_output: OmniRequestOutput | None
+    # For now, callers pass the full list of params on every call
     sampling_params_list: list[OmniSamplingParams]
     final_stage_id: int
     final_output_stage_ids: list[int]
