@@ -41,6 +41,16 @@ def decode_stage_input(data: str, stage_types: Sequence[str]) -> NextStageInputM
     return NextStageInputMessage(**fields)
 
 
+def decode_output(data: str) -> OmniRequestOutput:
+    """Decode a final output encoded by `encode_payload`."""
+    # NOTE: This is temporarily how we get the response back from the last stage,
+    # but will change as we integrate into route specific post processing.
+    output = OmniMsgpackDecoder().decode(base64.b64decode(data))
+    if not isinstance(output, OmniRequestOutput):
+        raise ValueError(f"output decodes to {type(output).__name__}, not an OmniRequestOutput")
+    return output
+
+
 class ServingRun:
     """Runs one stage per call and returns its raw encoded result."""
 

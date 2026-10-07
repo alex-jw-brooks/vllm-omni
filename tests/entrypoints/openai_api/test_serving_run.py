@@ -6,7 +6,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pybase64 as base64
 import pytest
 import torch
 from fastapi import FastAPI
@@ -14,13 +13,12 @@ from fastapi.testclient import TestClient
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.v1.engine import EngineCoreRequest
 
-from vllm_omni.distributed.omni_connectors.utils.serialization import OmniMsgpackDecoder
 from vllm_omni.engine.messages import NextStageInputMessage, OutputMessage
 from vllm_omni.engine.orchestrator import build_engine_core_request_from_tokens
 from vllm_omni.engine.serialization import serialize_additional_information
 from vllm_omni.entrypoints.openai import api_server
 from vllm_omni.entrypoints.openai.protocol.run import RunRequest
-from vllm_omni.entrypoints.openai.serving_run import ServingRun, decode_stage_input, encode_payload
+from vllm_omni.entrypoints.openai.serving_run import ServingRun, decode_output, decode_stage_input, encode_payload
 from vllm_omni.errors import OmniClientError
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -97,7 +95,7 @@ async def test_final_call_returns_encoded_output():
     )
     request = RunRequest(stage_id=1, stage_input=encode_payload(_next_stage_input()))
     response = await serving.run(request, request_id="run-final")
-    assert OmniMsgpackDecoder().decode(base64.b64decode(response.output)) == final_output
+    assert decode_output(response.output) == final_output
 
 
 @pytest.mark.asyncio

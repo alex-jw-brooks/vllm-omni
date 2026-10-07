@@ -11,7 +11,6 @@ import os
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
-import base64
 import io
 import json
 
@@ -31,8 +30,8 @@ from tests.helpers.stage_config import (
     get_deploy_config_stage,
     modify_stage_config,
 )
-from vllm_omni.distributed.omni_connectors.utils.serialization import OmniMsgpackDecoder
 from vllm_omni.entrypoints.openai.protocol.audio import OpenAICreateSpeechRequest
+from vllm_omni.entrypoints.openai.serving_run import decode_output
 from vllm_omni.entrypoints.openai.serving_speech import OmniOpenAIServingSpeech
 from vllm_omni.entrypoints.openai.tts_adapters.base import conditioning_cache_salt
 from vllm_omni.model_executor.models.qwen3_tts.prompt_embeds_builder import Qwen3TTSPromptEmbedsBuilder
@@ -224,9 +223,7 @@ def _stage0_input(text: str, speaker: str) -> dict:
 
 def _output_to_wav(output: str) -> bytes:
     """Decode a /v1/run final output into WAV bytes."""
-    audio_output, audio_key = OmniOpenAIServingSpeech._extract_audio_output(
-        OmniMsgpackDecoder().decode(base64.b64decode(output))
-    )
+    audio_output, audio_key = OmniOpenAIServingSpeech._extract_audio_output(decode_output(output))
     wav = io.BytesIO()
     sf.write(wav, concat_audio(audio_output[audio_key]), int(audio_output["sr"]), format="WAV")
     return wav.getvalue()
