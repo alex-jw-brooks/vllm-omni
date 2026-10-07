@@ -2965,18 +2965,13 @@ class OrchestratorBase:
         self,
         sender_stage_id: int,
         *,
-        request_id: str | None = None,
-    ) -> dict[str, Any] | None:
+        request_id: str,
+    ) -> dict[str, Any] | bytes | None:
         if sender_stage_id < 0 or sender_stage_id >= len(self.stage_pools):
             return None
         sender_pool = self.stage_pools[sender_stage_id]
-        sender_stage = sender_pool.get_bound_client(request_id) if request_id is not None else None
-        if sender_stage is None:
-            sender_stage = sender_pool.stage_client
-        get_sender_info = getattr(sender_stage, "get_payload_sender_info", None)
-        if not callable(get_sender_info):
-            return None
-        return get_sender_info()
+        # NOTE: we return a dict in the common case, or raw bytes in the run case
+        return sender_pool.get_payload_sender_info(request_id)
 
     # ---- Shutdown / lifecycle ----
 

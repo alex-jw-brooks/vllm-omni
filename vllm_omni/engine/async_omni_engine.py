@@ -16,6 +16,7 @@ from vllm.logger import init_logger
 from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.kv_hints import KvHintsEnvelope
 
+from vllm_omni.core.sched.omni_scheduling_coordinator import uses_full_payload_input_coordinator
 from vllm_omni.data_entry_keys import REQUEST_ARTIFACT_DIRS_KEY, TRANSFORM_OWNED_META_KEYS
 from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.engine.async_engine_utils import (
@@ -391,7 +392,13 @@ class AsyncOmniEngine(OmniEngineBase):
             # to match the key used in Orchestrator.request_states so that
             # output routing (output.request_id lookup) can find the req_state.
             request.external_req_id = request_id
-            request = apply_omni_final_stage_metadata(request, final_stage_id)
+            # A run request's yielded stage returns its payload when the next stage takes a full payload.
+            return_stage_payload = yield_stage_id is not None and uses_full_payload_input_coordinator(
+                self.stage_vllm_configs[yield_stage_id + 1].model_config
+            )
+            request = apply_omni_final_stage_metadata(
+                request, final_stage_id, return_stage_payload=return_stage_payload
+            )
 
             # Registration with stage 0's output processor is deferred to the
             # orchestrator thread (see Orchestrator._handle_add_request), which

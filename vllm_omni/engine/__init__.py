@@ -82,7 +82,9 @@ class OmniEngineCoreRequest(EngineCoreRequest):
     # GPUModelRunner.model_intermediate_buffer instead of using the deprecated
     # additional_information request transport.
     model_intermediate_buffer: dict[str, Any] | None = None
-    payload_sender_info: dict[str, Any] | None = None
+    # Where the receiver gets this request's stage payload. this is either the sender's
+    # connector address or the serialized payload itself (bytes) for run requests.
+    payload_sender_info: dict[str, Any] | bytes | None = None
 
     @classmethod
     def from_request(
@@ -92,7 +94,7 @@ class OmniEngineCoreRequest(EngineCoreRequest):
         prompt_embeds: torch.Tensor | None = None,
         additional_information: AdditionalInformationPayload | None = None,
         model_intermediate_buffer: dict[str, Any] | None = None,
-        payload_sender_info: dict[str, Any] | None = None,
+        payload_sender_info: dict[str, Any] | bytes | None = None,
     ) -> "OmniEngineCoreRequest":
         """Clone an EngineCoreRequest into an OmniEngineCoreRequest with optional payload overrides."""
 
@@ -152,6 +154,8 @@ class OmniEngineCoreOutput(EngineCoreOutput):
     new_prompt_len_snapshot: int | None = None
     # Authoritative segment count when the native plane suppresses token IPC.
     num_generation_tokens: int | None = None
+    # A request's serialized stage payload; this is only used for run requests
+    stage_payload: bytes | None = None
 
 
 class OmniEngineCoreOutputs(EngineCoreOutputs):

@@ -108,7 +108,7 @@ class OmniChunkRecvHandle:
 
     request_id: str
     external_req_id: str | None = None
-    payload_sender_info: dict[str, object] | None = None
+    payload_sender_info: dict[str, object] | bytes | None = None
 
 
 @dataclass

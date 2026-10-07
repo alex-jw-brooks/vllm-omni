@@ -26,6 +26,7 @@ def test_ready_inbox_coalesces_live_events_and_drops_cancelled(mocker):
         _async_chunk=True, update_request_metadata=mocker.Mock(), process_pending_chunks=mocker.Mock()
     )
     scheduler.input_coordinator = coordinator
+    scheduler._outputs_awaiting_stage_payload = {}
     scheduler._init_omni_connector_output_inbox()
     scheduler.enqueue_omni_connector_output(OmniConnectorOutput(chunk_ready_req_ids={"r"}))
     scheduler.enqueue_omni_connector_output(

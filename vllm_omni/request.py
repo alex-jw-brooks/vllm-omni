@@ -39,7 +39,7 @@ class OmniRequest(Request):
         external_req_id: str | None = None,
         additional_information: AdditionalInformationPayload | None = None,
         model_intermediate_buffer: dict | None = None,
-        payload_sender_info: dict[str, Any] | None = None,
+        payload_sender_info: dict[str, Any] | bytes | None = None,
         **kwargs,
     ):
         if prompt_embeds is not None:
@@ -59,8 +59,8 @@ class OmniRequest(Request):
         self.additional_information: AdditionalInformationPayload | None = additional_information
         # Runner-owned runtime payload.
         self.model_intermediate_buffer: dict | None = model_intermediate_buffer
-        # Sender's connector address for this request's stage payload.
-        self.payload_sender_info: dict[str, Any] | None = payload_sender_info
+        # Sender's connector address for this request's stage payload, or raw bytes for run requests
+        self.payload_sender_info: dict[str, Any] | bytes | None = payload_sender_info
 
     @staticmethod
     def _maybe_decode_prompt_embeds(
