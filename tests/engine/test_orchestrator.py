@@ -22,6 +22,7 @@ from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs, FinishReason
 from vllm.v1.engine.exceptions import EngineDeadError
 from vllm.v1.metrics.stats import IterationStats
 
+from vllm_omni.data_entry_keys import returns_stage_payload
 from vllm_omni.engine import OmniEngineCoreOutput, OmniEngineCoreOutputs
 from vllm_omni.engine.errors import NativeKVHandoffError
 from vllm_omni.engine.messages import (
@@ -674,7 +675,7 @@ async def _enqueue_run_request(
 
 
 async def _start_three_stage_run(
-    orchestrator_factory, *, stage0_final_output: bool
+    orchestrator_factory, *, stage0_final_output: bool, stage_vllm_configs: list[object] | None = None
 ) -> tuple[OrchestratorFixture, FakeStageClient, FakeStageClient]:
     """Start a three-stage LLM run request that yields at stage 0 and finish stage 0."""
     stage0 = FakeStageClient(stage_type="llm", final_output=stage0_final_output)
@@ -693,7 +694,9 @@ async def _start_three_stage_run(
         FakeOutputProcessor(request_outputs=_finished_outputs(_CALL2_REQUEST_ID)),
         FakeOutputProcessor(request_outputs=_finished_outputs(_CALL3_REQUEST_ID, token_ids=_STAGE2_OUTPUT_TOKEN_IDS)),
     ]
-    orchestrator_fixture = orchestrator_factory([stage0, stage1, stage2], output_processors=processors)
+    orchestrator_fixture = orchestrator_factory(
+        [stage0, stage1, stage2], output_processors=processors, stage_vllm_configs=stage_vllm_configs
+    )
     await _enqueue_run_request(orchestrator_fixture)
     await _wait_for(lambda: len(stage0.add_request_calls) == 1)
     stage0.push_engine_core_outputs(_engine_core_outputs("stage0-raw", 1.0))
@@ -717,17 +720,28 @@ async def test_run_yield_stage_forwards_final_output_in_next_stage_input(orchest
 
 @pytest.mark.asyncio
 async def test_run_chain_yields_at_each_stage_until_final_output(orchestrator_factory) -> None:
-    """Ensure each call in a run chain yields at its stage and the last call returns the final output."""
-    orchestrator_fixture, stage1, stage2 = await _start_three_stage_run(orchestrator_factory, stage0_final_output=False)
+    """Ensure each call in a run chain yields at its stage and the last call returns the final output.
+
+    A resubmitted stage returns its payload only when it yields to a stage that takes a full payload.
+    """
+    default_vllm_config = SimpleNamespace(model_config=SimpleNamespace(max_model_len=64))
+    full_payload_vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(max_model_len=64, stage_id=2, requires_full_payload_input=True)
+    )
+    orchestrator_fixture, stage1, stage2 = await _start_three_stage_run(
+        orchestrator_factory,
+        stage0_final_output=False,
+        stage_vllm_configs=[default_vllm_config, default_vllm_config, full_payload_vllm_config],
+    )
     request_states = orchestrator_fixture.orchestrator.request_states
     sampling_params_list = _run_sampling_params_list(orchestrator_fixture)
     later_calls = [
-        (stage1, _CALL2_REQUEST_ID, _STAGE1_INPUT_TOKEN_IDS),
-        (stage2, _CALL3_REQUEST_ID, _STAGE2_INPUT_TOKEN_IDS),
+        (stage1, _CALL2_REQUEST_ID, _STAGE1_INPUT_TOKEN_IDS, True),
+        (stage2, _CALL3_REQUEST_ID, _STAGE2_INPUT_TOKEN_IDS, False),
     ]
     try:
         msg = _get_messages_until_response(orchestrator_fixture)[-1]
-        for stage, request_id, input_token_ids in later_calls:
+        for stage, request_id, input_token_ids, returns_payload in later_calls:
             # The previous call yielded, left no state behind, and returned no sampling params.
             assert isinstance(msg, NextStageInputMessage)
             assert msg.stage_output is None
@@ -741,6 +755,7 @@ async def test_run_chain_yields_at_each_stage_until_final_output(orchestrator_fa
             submitted = stage.add_request_calls[0][0]
             assert submitted.request_id == request_id
             assert submitted.prompt_token_ids == list(input_token_ids)
+            assert returns_stage_payload(submitted.additional_information) is returns_payload
 
             stage.push_engine_core_outputs(_engine_core_outputs(f"{request_id}-raw", 1.0))
             msg = _get_messages_until_response(orchestrator_fixture)[-1]

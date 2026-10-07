@@ -15,6 +15,7 @@ from vllm.logger import init_logger
 from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.metrics.stats import IterationStats
 
+from vllm_omni.core.sched.omni_scheduling_coordinator import uses_full_payload_input_coordinator
 from vllm_omni.data_entry_keys import flatten_payload
 from vllm_omni.distributed.omni_coordinator import (
     LoadBalancer,
@@ -23,7 +24,7 @@ from vllm_omni.distributed.omni_coordinator import (
     ReplicaStatus,
 )
 from vllm_omni.distributed.omni_coordinator.load_balancer import Task
-from vllm_omni.engine import OmniEngineCoreOutputs
+from vllm_omni.engine import OmniEngineCoreOutputs, PayloadSenderInfo
 from vllm_omni.engine.serialization import deserialize_additional_information
 from vllm_omni.engine.stage_client import (
     StagePoolClient,
@@ -212,6 +213,14 @@ class StagePool:
     @property
     def stage_vllm_config(self) -> Any:
         return self._stage_vllm_config
+
+    @property
+    def takes_full_payload_input(self) -> bool:
+        """Whether this stage receives each request's input as one full payload from the previous stage."""
+        # Diffusion stages have no vllm config.
+        return self._stage_vllm_config is not None and uses_full_payload_input_coordinator(
+            self._stage_vllm_config.model_config
+        )
 
     @property
     def output_processor(self) -> Any:
@@ -537,7 +546,7 @@ class StagePool:
         self._audio_sample_rate_by_request.pop(str(request_id), None)
         self._stage_payloads.pop(str(request_id), None)
 
-    def get_payload_sender_info(self, request_id: str) -> dict[str, Any] | bytes | None:
+    def get_payload_sender_info(self, request_id: str) -> PayloadSenderInfo | None:
         """Tell the next stage where to get this request's payload."""
         # For run requests, the payload is stored directly as bytes under the request ID
         if request_id in self._stage_payloads:

@@ -35,10 +35,15 @@ from vllm.v1.engine.exceptions import EngineDeadError
 from vllm.v1.metrics.stats import IterationStats
 
 from vllm_omni.core.sched.omni_scheduling_coordinator import uses_native_mrv2_data_plane
-from vllm_omni.data_entry_keys import FIRST_AUDIO_KEY, FIRST_AUDIO_REQUIRED_KEY
+from vllm_omni.data_entry_keys import FIRST_AUDIO_KEY, FIRST_AUDIO_REQUIRED_KEY, RETURN_STAGE_PAYLOAD_KEY
 from vllm_omni.diffusion.data import is_diffusion_request_started_output
 from vllm_omni.distributed.omni_connectors.utils.config import stage_receives_chunks
-from vllm_omni.engine import OmniEngineCoreRequest
+from vllm_omni.engine import (
+    AdditionalInformationEntry,
+    AdditionalInformationPayload,
+    OmniEngineCoreRequest,
+    PayloadSenderInfo,
+)
 from vllm_omni.engine.cfg_companion_tracker import CfgCompanionTracker
 from vllm_omni.engine.errors import NativeKVHandoffError
 from vllm_omni.engine.membership_controller import MembershipController
@@ -199,13 +204,20 @@ def build_engine_core_request_from_tokens(
     )
 
 
-def _update_stale_request_metadata(requests: list[EngineCoreRequest], request_id: str) -> None:
-    """Give requests built by an earlier request the new request's id and a fresh arrival time."""
+def _update_stale_request_metadata(
+    requests: list[OmniEngineCoreRequest], request_id: str, *, return_stage_payload: bool
+) -> None:
+    """Give requests built by an earlier request the new request's id, a fresh arrival time and payload routing."""
     arrival_time = _time.time()
+    return_stage_payload_entry = AdditionalInformationEntry(scalar_data=return_stage_payload)
     for request in requests:
         request.request_id = request_id
         request.external_req_id = request_id
         request.arrival_time = arrival_time
+        if request.additional_information is None:
+            request.additional_information = AdditionalInformationPayload(entries={})
+        # Written raw so the request's other tensors are not decoded.
+        request.additional_information.entries[RETURN_STAGE_PAYLOAD_KEY] = return_stage_payload_entry
 
 
 @dataclass
@@ -2047,7 +2059,7 @@ class OrchestratorBase:
         *,
         mm_features: list | None = None,
         resumable: bool = False,
-        payload_sender_info: dict[str, Any] | None = None,
+        payload_sender_info: PayloadSenderInfo | None = None,
     ) -> EngineCoreRequest:
         next_pool = self.stage_pools[next_stage_id]
         if self._next_stage_input_is_tokens(next_input):
@@ -2966,7 +2978,7 @@ class OrchestratorBase:
         sender_stage_id: int,
         *,
         request_id: str,
-    ) -> dict[str, Any] | bytes | None:
+    ) -> PayloadSenderInfo | None:
         if sender_stage_id < 0 or sender_stage_id >= len(self.stage_pools):
             return None
         sender_pool = self.stage_pools[sender_stage_id]
@@ -3027,19 +3039,24 @@ class Orchestrator(OrchestratorBase):
         if await self._fail_if_cannot_submit(req_id, receiver_stage_id, is_run_request=True):
             return
 
+        yield_stage_id = receiver_stage_id if receiver_stage_id < msg.final_stage_id else None
         req_state = OrchestratorRequestState(
             request_id=req_id,
             sampling_params_list=msg.sampling_params_list,
             final_stage_id=msg.final_stage_id,
             final_output_stage_ids=set(msg.final_output_stage_ids),
-            yield_stage_id=receiver_stage_id if receiver_stage_id < msg.final_stage_id else None,
+            yield_stage_id=yield_stage_id,
             request_timestamp=_time.time(),
         )
         self.request_states[req_id] = req_state
         self._register_running_request(req_state)
         # Ensure LLM stages update core engine request metadata that's now stale
         if self.stage_pools[receiver_stage_id].stage_type == "llm":
-            _update_stale_request_metadata(msg.requests, req_id)
+            # Like the entry stage, a yielding stage returns its payload when the next stage takes a full payload.
+            return_stage_payload = (
+                yield_stage_id is not None and self.stage_pools[yield_stage_id + 1].takes_full_payload_input
+            )
+            _update_stale_request_metadata(msg.requests, req_id, return_stage_payload=return_stage_payload)
         await self._dispatch_or_fail_request(
             lambda: self._submit_to_stage(
                 req_id,
