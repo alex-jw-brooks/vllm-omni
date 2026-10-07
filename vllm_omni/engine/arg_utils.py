@@ -156,7 +156,7 @@ class OmniEngineArgs(EngineArgs):
             (default: "Qwen2_5OmniForConditionalGeneration")
         engine_output_type: Optional output type specification for the engine.
             Used to route outputs to appropriate processors (e.g., "image",
-            "audio", "latents"). If None, output type is inferred.
+            "audio", "latent", "token_ids"). If None, output type is inferred.
         hf_config_name: Optional key for HF config subkey to be extracted
             for this stage, e.g., talker_config; If None, the default
             HF config will be used.
@@ -585,6 +585,10 @@ class OrchestratorArgs:
     diffusion_attention_config: str | None = None
     diffusion_compile_granularity: str | None = None
     diffusion_compile_dynamic: bool | None = None
+    # CUDA graph capture of fixed-shape KV-cache decode steps (Qwen-Image-2.1
+    # today). None defers to the OmniDiffusionConfig default (enabled);
+    # --enforce-eager also disables it.
+    enable_cuda_graph_decode: bool | None = None
     cache_backend: str = "none"
     cache_config: str | None = None
     video_output_transport: dict[str, object] | None = None
