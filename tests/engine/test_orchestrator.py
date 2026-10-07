@@ -2200,6 +2200,29 @@ async def test_stage_pool_preserves_none_iteration_stats() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stage_pool_sends_a_stage_payload_only_for_requests_it_still_serves() -> None:
+    """Ensure a returned stage payload becomes sender info only while its request is bound to the pool."""
+    pool = StagePool(
+        0,
+        [FakeStageClient(stage_type="llm")],
+        output_processor=FakeOutputProcessor(),
+        stage_vllm_config=SimpleNamespace(model_config=SimpleNamespace(max_model_len=64)),
+    )
+    pool.select_replica_id("bound")
+    # "released" stands for a request the orchestrator already cleaned up (e.g. aborted).
+    raw_outputs = OmniEngineCoreOutputs(
+        outputs=[
+            OmniEngineCoreOutput(request_id=request_id, new_token_ids=[], stage_payload=b"payload")
+            for request_id in ("bound", "released")
+        ]
+    )
+
+    await pool.process_llm_raw_outputs(0, raw_outputs)
+    assert pool.get_payload_sender_info("bound") == b"payload"
+    assert pool.get_payload_sender_info("released") is None
+
+
+@pytest.mark.asyncio
 async def test_stage_pool_process_llm_raw_outputs_mutates_iteration_stats() -> None:
     client = FakeStageClient(stage_type="llm", final_output=True)
     processor = IterationStatsOutputProcessor()

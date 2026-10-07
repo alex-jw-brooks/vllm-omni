@@ -1209,7 +1209,8 @@ class StagePool:
             return []
         client = cast(StagePoolLLMClient, raw_client)
         for eco in raw_outputs.outputs:
-            if eco.stage_payload is not None:
+            # A payload can arrive after its request was cleaned up (e.g. aborted); don't keep it then.
+            if eco.stage_payload is not None and self.get_bound_replica_id(eco.request_id) is not None:
                 self._stage_payloads[eco.request_id] = eco.stage_payload
         processor = self.output_processor
         processed = processor.process_outputs(

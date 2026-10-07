@@ -1073,6 +1073,15 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
         if chunk_transfer_adapter := getattr(self, "chunk_transfer_adapter", None):
             chunk_transfer_adapter.finish_requests(request_ids, finished_status, self.requests)
 
+        # A run request whose output is held already finished; dropping the output aborts it.
+        if request_ids is None:
+            self._outputs_awaiting_stage_payload.clear()
+        else:
+            # Otherwise, purge any explicit run request targets
+            for request_id in target_request_ids:
+                if request_id in self._outputs_awaiting_stage_payload:
+                    del self._outputs_awaiting_stage_payload[request_id]
+
         self._realign_request_status_to_queues(
             request_ids,
             pre_adapter_streaming_wait_ids=pre_adapter_streaming_wait_ids,
