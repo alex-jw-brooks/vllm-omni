@@ -643,6 +643,7 @@ def test_scheduler_chunk_gate_preserves_kv_holding_queue(build_adapter, active_s
     scheduler.waiting = create_request_queue(SchedulingPolicy.FCFS)
     scheduler.kv_holding_waiting = create_request_queue(SchedulingPolicy.FCFS)
     scheduler.deferred_waiting = set()
+    scheduler._outputs_awaiting_stage_payload = {}
     scheduler.running = []
     scheduler.chunk_transfer_adapter = adapter
     scheduler.input_coordinator = None

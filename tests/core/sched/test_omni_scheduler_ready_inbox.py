@@ -55,6 +55,7 @@ def test_native_input_gate_parks_and_restores_kv_holders(policy, async_chunk):
     scheduler.waiting = create_request_queue(policy)
     scheduler.kv_holding_waiting = create_request_queue(policy)
     scheduler.deferred_waiting = set()
+    scheduler._outputs_awaiting_stage_payload = {}
     scheduler.running = []
     scheduler.chunk_transfer_adapter = None
     scheduler.input_coordinator = OmniSchedulingCoordinator(
@@ -111,6 +112,7 @@ def test_native_input_gate_preserves_upstream_blocked_waits(async_chunk, status)
     scheduler.waiting = create_request_queue(SchedulingPolicy.FCFS)
     scheduler.kv_holding_waiting = create_request_queue(SchedulingPolicy.FCFS)
     scheduler.deferred_waiting = set()
+    scheduler._outputs_awaiting_stage_payload = {}
     scheduler.running = []
     request = Request("blocked", [1, 2, 3], SamplingParams(max_tokens=1), pooling_params=None)
     request.status = status

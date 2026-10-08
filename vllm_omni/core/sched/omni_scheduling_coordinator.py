@@ -411,7 +411,8 @@ class OmniSchedulingCoordinator:
                             )
 
             if model_mode != "ar":
-                new_ids = self._flatten_prompt_token_ids(payload_audio_codes(metadata))
+                new_codes = payload_audio_codes(metadata)
+                new_ids = self._flatten_prompt_token_ids(new_codes)
                 runtime_seed = None
                 if "left_context_size" in meta:
                     runtime_seed = {
