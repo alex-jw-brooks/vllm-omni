@@ -20,8 +20,8 @@ from vllm_omni.worker.omni_connector_validation import validate_worker_omni_conn
 
 logger = init_logger(__name__)
 
-# `--stage-id none`: the head runs only the API server and orchestrator, and every stage is launched remotely.
-# Stage ids are non-negative, so this filter never matches (or indexes) a stage.
+# Stage ids are non-negative, so this filter never matches a stage id; it must never be used as an index.
+# We use this as a sentinel value for --stage-id none to indicate all stages should be launched remotely.
 FRONTEND_ONLY_ID_FILTER = -1
 
 
