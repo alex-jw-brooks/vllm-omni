@@ -491,6 +491,27 @@ class TestSingleStageModeDetection:
                 stage_id=999,
             )
 
+    def test_frontend_only_head_plans_every_replica_remote(self, mocker: MockerFixture):
+        """Ensure that launching with the frontend placeholder makes every replica run as remote."""
+        stage_plans = []
+
+        def capture_plans_and_stop(runtime, plans):
+            stage_plans.extend(plans)
+            raise RuntimeError("stage plans captured")
+
+        mocker.patch.object(
+            DistStageRuntime, "_start_omni_master_server", autospec=True, side_effect=capture_plans_and_stop
+        )
+        with pytest.raises(RuntimeError, match="stage plans captured"):
+            AsyncOmniEngine(
+                model="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+                stage_id=FRONTEND_ONLY_ID_FILTER,
+                omni_master_address="127.0.0.1",
+                omni_master_port=26000,
+            )
+
+        assert {replica.launch_mode for plan in stage_plans for replica in plan.replicas} == {"remote"}
+
     def test_no_stage_id_no_single_stage_mode(self, mocker: MockerFixture):
         engine = self._make_engine_no_thread(mocker)
         assert engine.single_stage_mode is False

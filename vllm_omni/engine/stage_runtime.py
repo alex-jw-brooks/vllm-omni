@@ -1405,7 +1405,10 @@ class DistStageRuntime(StageRuntime):
 
     def _prepare_stage_plans(self) -> list[LogicalStageInitPlan]:
         self._validate_single_stage_mode_replica_constraints()
-        return super()._prepare_stage_plans()
+        stage_plans = super()._prepare_stage_plans()
+        if all(replica.launch_mode == "remote" for plan in stage_plans for replica in plan.replicas):
+            logger.info("No local stage replicas found in stage plans (server + orchestrator only)")
+        return stage_plans
 
     def _validate_single_stage_mode_replica_constraints(self) -> None:
         """Apply --omni-dp-size-local to the local stage's runtime.num_replicas."""
