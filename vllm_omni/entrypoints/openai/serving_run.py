@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 import msgspec
 import pybase64 as base64
+from vllm.outputs import RequestOutput
 
 from vllm_omni.distributed.omni_connectors.utils.serialization import OmniMsgpackDecoder, OmniMsgpackEncoder
 from vllm_omni.engine import OmniEngineCoreRequest
@@ -18,14 +19,13 @@ from vllm_omni.entrypoints.openai.utils import get_stage_type
 from vllm_omni.entrypoints.utils import coerce_param_message_types
 from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniSamplingParams
-from vllm_omni.outputs import OmniRequestOutput
 
 
 def is_diffusion(stage_type: str) -> bool:
     return stage_type == "diffusion"
 
 
-def encode_payload(payload: NextStageInputMessage | OmniRequestOutput) -> str:
+def encode_payload(payload: NextStageInputMessage | RequestOutput) -> str:
     """Encode a next stage input or a final output as base64 text for a JSON response."""
     return base64.b64encode(OmniMsgpackEncoder().encode(payload)).decode("ascii")
 
@@ -41,13 +41,13 @@ def decode_stage_input(data: str, stage_types: Sequence[str]) -> NextStageInputM
     return NextStageInputMessage(**fields)
 
 
-def decode_output(data: str) -> OmniRequestOutput:
+def decode_output(data: str) -> RequestOutput:
     """Decode a final output encoded by `encode_payload`."""
     # NOTE: This is temporarily how we get the response back from the last stage,
     # but will change as we integrate into route specific post processing.
     output = OmniMsgpackDecoder().decode(base64.b64decode(data))
-    if not isinstance(output, OmniRequestOutput):
-        raise ValueError(f"output decodes to {type(output).__name__}, not an OmniRequestOutput")
+    if not isinstance(output, RequestOutput):
+        raise ValueError(f"output decodes to {type(output).__name__}, not a RequestOutput")
     return output
 
 

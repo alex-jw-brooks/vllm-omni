@@ -10,6 +10,7 @@ import pytest
 import torch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.v1.engine import EngineCoreRequest
 
@@ -20,7 +21,6 @@ from vllm_omni.entrypoints.openai import api_server
 from vllm_omni.entrypoints.openai.protocol.run import RunRequest
 from vllm_omni.entrypoints.openai.serving_run import ServingRun, decode_output, decode_stage_input, encode_payload
 from vllm_omni.errors import OmniClientError
-from vllm_omni.outputs import OmniRequestOutput
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -88,14 +88,26 @@ async def test_non_final_call_returns_next_stage_id_and_stage_input():
 
 @pytest.mark.asyncio
 async def test_final_call_returns_encoded_output():
-    """Ensure the final stage's call returns its encoded output."""
-    final_output = OmniRequestOutput(request_id="run-final", stage_id=1)
+    """Ensure the final stage's call returns its raw output, encoded with the audio on its completion output."""
+    audio = torch.arange(4.0)
+    completion = CompletionOutput(index=0, text="", token_ids=[], cumulative_logprob=None, logprobs=None)
+    completion.multimodal_output = {"audio": audio}
+    final_output = RequestOutput(
+        request_id="run-final",
+        prompt=None,
+        prompt_token_ids=[],
+        prompt_logprobs=None,
+        outputs=[completion],
+        finished=True,
+    )
     serving = ServingRun(
         _engine_client(OutputMessage(request_id="run-final", stage_id=1, engine_outputs=final_output, finished=True))
     )
     request = RunRequest(stage_id=1, stage_input=encode_payload(_next_stage_input()))
     response = await serving.run(request, request_id="run-final")
-    assert decode_output(response.output) == final_output
+    output = decode_output(response.output)
+    assert type(output) is RequestOutput
+    assert torch.equal(output.outputs[0].multimodal_output["audio"], audio)
 
 
 @pytest.mark.asyncio
