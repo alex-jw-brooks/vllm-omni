@@ -758,7 +758,7 @@ async def test_rejected_response_create_does_not_cancel_active_response() -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("session_updates", "expected_kwargs", "expected_error_codes", "expected_num_updated"),
+    ("session_updates", "expected_wm_vals", "expected_error_codes", "expected_num_updated"),
     [
         ([], [], [], 0),
         ([{"watermarking": False}, {"instructions": "Be brief."}], [False], [], 2),
@@ -767,16 +767,16 @@ async def test_rejected_response_create_does_not_cancel_active_response() -> Non
 )
 async def test_realtime_watermarking_follows_session_updates(
     session_updates,
-    expected_kwargs,
+    expected_wm_vals,
     expected_error_codes,
     expected_num_updated,
-):
+) -> None:
     """Ensure responses use the session's latest valid watermarking setting and invalid updates are not applied."""
-    submitted_kwargs: list[bool] = []
+    submitted_wm_vals: list[bool] = []
 
     async def generate(**kwargs: Any):
         if "watermarking" in kwargs:
-            submitted_kwargs.append(kwargs["watermarking"])
+            submitted_wm_vals.append(kwargs["watermarking"])
         yield SimpleNamespace(final_output_type="text", outputs=[])
 
     engine = SimpleNamespace(
@@ -805,12 +805,13 @@ async def test_realtime_watermarking_follows_session_updates(
 
     await connection._run_response(active.response_id, response, {"prompt_token_ids": []})
     events = _websocket_events(websocket)
+    assert events and events[-1]["response"]["status"] == "completed"
 
     actual_error_codes = [event["error"]["code"] for event in events if event["type"] == "error"]
     actual_num_updated = sum(event["type"] == "session.updated" for event in events)
 
     # Ensure the watermark value submitted to generate is correct
-    assert submitted_kwargs == expected_kwargs
+    assert submitted_wm_vals == expected_wm_vals
     # Ensure that we have the right numbers of errors vs successful updates
     assert actual_error_codes == expected_error_codes
     assert actual_num_updated == expected_num_updated
