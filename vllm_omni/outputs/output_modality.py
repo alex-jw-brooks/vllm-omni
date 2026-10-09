@@ -29,6 +29,7 @@ class OutputModalityNames(str, Enum):
     AUDIO = "audio"
     LATENT = "latent"
     TOKEN_IDS = "token_ids"
+    VIDEO = "video"
 
 
 # Specify which output modalities may be drained when handling delta messages.
@@ -75,6 +76,7 @@ class OutputModality(Flag):
     Unlike continuous latents, these values identify discrete symbols.
     The distinction is semantic, not inferred from the tensor dtype.
     """
+    VIDEO = auto()
 
     @classmethod
     def from_string(cls, s: str | None) -> OutputModality:

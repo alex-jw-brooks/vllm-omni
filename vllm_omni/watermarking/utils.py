@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+import numpy as np
 import torch
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
@@ -17,6 +18,7 @@ from vllm_omni.outputs.output_modality import OutputModalityNames
 from vllm_omni.watermarking.base import Watermarker, WatermarkFailureError
 from vllm_omni.watermarking.converters import (
     MEDIA_CONVERTERS,
+    infer_visual_channel_axis,
     media_to_tensor,
     restore_media,
 )
@@ -42,9 +44,30 @@ def watermark_media(
         if modality == OutputModalityNames.AUDIO and isinstance(data, list):
             raise TypeError("audio chunk lists must be watermarked per chunk before accumulation")
         converter = MEDIA_CONVERTERS[modality]
-        tensor = media_to_tensor(data, converter.to_tensor)
+        source = data
+        wrapped_batch = False
+        if (
+            modality in {OutputModalityNames.IMAGE, OutputModalityNames.VIDEO}
+            and isinstance(data, list)
+            and len(data) == 1
+        ):
+            first = data[0]
+            expected_rank = 4 if modality is OutputModalityNames.IMAGE else 5
+            if isinstance(first, torch.Tensor | np.ndarray) and first.ndim == expected_rank:
+                source = first
+                wrapped_batch = True
+        tensor = media_to_tensor(source, converter.to_tensor)
+        if modality in {OutputModalityNames.IMAGE, OutputModalityNames.VIDEO}:
+            channel_axis = metadata.get("channel_axis")
+            if channel_axis is None:
+                channel_axis = infer_visual_channel_axis(source, tensor, modality)
+            metadata = {
+                **metadata,
+                "channel_axis": channel_axis,
+            }
         watermarked = watermarker.watermark_output(request_id, tensor, metadata)
-        return restore_media(watermarked, data, converter.restore)
+        result = restore_media(watermarked, source, converter.restore)
+        return [result] if wrapped_batch else result
     except (RuntimeError, TypeError, ValueError) as error:
         raise WatermarkFailureError(f"invalid {modality.value} output") from error
 
@@ -90,6 +113,27 @@ def _watermark_core_output(
         output.multimodal_output = payload  # type: ignore[assignment]
 
 
+def _watermark_visual_media(
+    output: OmniRequestOutput,
+    watermarkers: Mapping[str, Watermarker],
+) -> None:
+    """Apply watermarkers (if applicable) to visual tensors."""
+    watermarker = watermarkers.get(output.final_output_type)
+    if watermarker is None:
+        return
+    modality = OutputModalityNames(output.final_output_type)
+    metadata = output.multimodal_output
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    output.images = watermark_media(  # type: ignore[assignment]
+        output.request_id,
+        modality,
+        watermarker,
+        output.images,
+        metadata,
+    )
+
+
 def _watermark_request_output(
     output: RequestOutput,
     watermarkers: Mapping[str, Watermarker],
@@ -113,6 +157,8 @@ def _watermark_request_output(
                 payload,
             )
 
+    if isinstance(output, OmniRequestOutput) and not output.outputs and output.images:
+        _watermark_visual_media(output, watermarkers)
     if output.finished:
         for watermarker in watermarkers.values():
             watermarker.discard_request_state(output.request_id)
