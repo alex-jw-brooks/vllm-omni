@@ -730,6 +730,7 @@ def test_no_detokenizer_process_outputs_returns_nonterminal_audio_chunk(monkeypa
         },
         output_type="audio",
         pooling_output=None,
+        new_token_ids=[],
         finish_reason=None,
         stop_reason=None,
         kv_transfer_params=None,
