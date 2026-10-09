@@ -194,6 +194,15 @@ class OpenAIFullDuplexConnection:
         except _UnsupportedAudioFormatError as exc:
             await self._send_error(str(exc), "unsupported_audio_format", event_id=event.event_id)
             return
+
+        # For watermarking, the OpenAI session model keeps it as an extra field for now
+        session_extra = event.session.model_extra or {}
+        if "watermarking" in session_extra and not isinstance(session_extra["watermarking"], bool):
+            await self._send_error(
+                "session.watermarking must be a boolean", "invalid_request_error", event_id=event.event_id
+            )
+            return
+
         s.config = merge_session_config(s.config, cfg)
         await self._send_session_updated()
 
@@ -711,6 +720,14 @@ class OpenAIFullDuplexConnection:
         except Exception:
             logger.debug("Failed to send failure response.done for %s", response_id, exc_info=True)
 
+    @staticmethod
+    def _build_opt_kwargs_from_model_extras(model_extra: dict[str, Any] | None) -> dict[str, Any]:
+        """build any optional kwargs to generate from the passed model_extra."""
+        opt_kwargs = {}
+        if model_extra and "watermarking" in model_extra:
+            opt_kwargs["watermarking"] = model_extra["watermarking"]
+        return opt_kwargs
+
     async def _run_response_inner(self, response_id, response, s, active, engine_input: EngineInput):
         previous_item_id = s.items[-1].id if s.items else None
         modalities = response.modalities
@@ -750,7 +767,7 @@ class OpenAIFullDuplexConnection:
         )
 
         try:
-            s.insert_item(item_obj, previous_item_id=previous_item_id or "root")
+            (s.insert_item(item_obj, previous_item_id=previous_item_id or "root"),)
         except ValueError:
             logger.warning(
                 "[realtime] previous item '%s' vanished while starting response %s; appending instead",
@@ -924,11 +941,13 @@ class OpenAIFullDuplexConnection:
         sampling_params_list = self.chat_handler._fix_minicpmo45_audio_stream_output_kinds(
             sampling_params_list, modalities
         )
+        opt_kwargs = self._build_opt_kwargs_from_model_extras(s.config.model_extra)
         gen = self.engine.generate(
             prompt=engine_input,
             request_id=active.request_id,
             sampling_params_list=sampling_params_list,
             output_modalities=modalities,
+            **opt_kwargs,
         )
 
         try:
@@ -970,13 +989,11 @@ class OpenAIFullDuplexConnection:
                         usage.input_tokens = max(usage.input_tokens, len(output.prompt_token_ids))
 
                     if tool_parser is not None:
-                        # Additive branch: when no tools are configured for
                         # this response, tool_parser is None and this whole
                         # block is skipped -- the plain-text path below is
                         # untouched.
                         current_text = previous_text + delta_text
                         current_token_ids = previous_token_ids + delta_token_ids
-                        delta_msg = None
                         if delta_text or delta_token_ids:
                             delta_msg = tool_parser.extract_tool_calls_streaming(
                                 previous_text,
