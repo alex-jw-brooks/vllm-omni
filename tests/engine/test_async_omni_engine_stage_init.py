@@ -18,16 +18,19 @@ from omegaconf import OmegaConf
 from vllm.v1.engine.utils import EngineZmqAddresses
 
 from tests.helpers.mock import patch_hf_snapshot_download
-from vllm_omni.config.omni_config import OmniStageRuntimeConfig
+from vllm_omni.config.omni_config import OmniStageRuntimeConfig, VllmOmniARStageConfig
+from vllm_omni.config.stage_config import StagePipelineConfig
 from vllm_omni.config.watermarking import WatermarkConfig
 from vllm_omni.diffusion.data import AttentionConfig
 from vllm_omni.engine import omni_engine_base as async_omni_engine_module
+from vllm_omni.engine import stage_init_utils
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.engine.stage_engine_startup import StageReplicaResources
 from vllm_omni.engine.stage_init_utils import (
     LogicalStageInitPlan,
     ReplicaInitPlan,
     build_stage0_input_processor,
+    build_vllm_config,
     compute_replica_layout,
     split_devices_for_replicas,
     stage_runtime_env,
@@ -180,6 +183,48 @@ def test_stage_runtime_initializes_configured_audio_watermarker(monkeypatch, sta
     constructor.assert_called_once_with()
     assert runtime.stage_pools[0]._watermarkers == {"audio": watermarker}
     assert runtime.stage_pools[0]._strict_watermarking
+
+
+@pytest.mark.parametrize(
+    ("final_output_type", "use_v2_model_runner", "expected"),
+    [
+        ("text", True, {"key": 1234, "algorithm": "gumbel"}),
+        # vLLM only watermarks while sampling in Model Runner V2
+        ("text", False, None),
+        ("audio", True, None),
+    ],
+)
+def test_build_vllm_config_forwards_text_watermark_config(
+    monkeypatch: pytest.MonkeyPatch,
+    final_output_type: str,
+    use_v2_model_runner: bool,
+    expected: dict[str, object] | None,
+) -> None:
+    """Ensure vLLM gets the text watermark config only for text output on Model Runner V2."""
+
+    class _StopAfterEngineArgsError(Exception):
+        """Stops build_vllm_config once vLLM has received the engine args."""
+
+    def create_engine_config(engine_args, **_kwargs):
+        forwarded.append(engine_args.watermark_config)
+        raise _StopAfterEngineArgsError
+
+    monkeypatch.setattr(stage_init_utils.OmniEngineArgs, "create_engine_config", create_engine_config)
+    stage = VllmOmniARStageConfig(
+        stage_pipeline_config=StagePipelineConfig(stage_id=0, model_stage="test", final_output_type=final_output_type)
+    )
+    forwarded: list[dict[str, object] | None] = []
+
+    with pytest.raises(_StopAfterEngineArgsError):
+        # start to build the vLLM config and ensure the Omni watermark config is properly parsed
+        build_vllm_config(
+            stage,
+            "dummy-model",
+            engine_args_dict={"use_v2_model_runner": use_v2_model_runner},
+            watermark_config=WatermarkConfig({"text": {"key": 1234, "algorithm": "gumbel"}}),
+        )
+
+    assert forwarded == [expected]
 
 
 def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):
