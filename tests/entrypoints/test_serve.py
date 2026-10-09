@@ -689,6 +689,7 @@ def _make_headless_args(*, explicit_keys: frozenset[str] | None = None, **kwargs
         "disable_log_stats": False,
         "stage_init_timeout": 600,
         "tokenizer": None,
+        "watermark_config": None,
     }
     ns_kwargs = {**defaults, **kwargs}
     ns = argparse.Namespace(**ns_kwargs)

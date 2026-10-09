@@ -812,6 +812,7 @@ class StageRuntime:
                     engine_args_dict=engine_args_dict,
                     api_process_count=self._client_count,
                     api_process_rank=self._api_process_rank,
+                    watermark_config=self._watermark_config,
                 )
 
             for replica_id in range(num_replicas):
@@ -1316,14 +1317,7 @@ class StageRuntime:
             output_processor = None
             metadata = plan.replicas[0].metadata
             # Initialize watermarkers based on the output type as needed
-            watermarkers = (
-                StagePool.initialize_watermarkers(
-                    metadata.final_output_type,
-                    self._watermark_config,
-                )
-                if metadata.final_output
-                else {}
-            )
+            watermarkers = StagePool.initialize_watermarkers(metadata.final_output_type, self._watermark_config)
             if metadata.stage_type != "diffusion":
                 stage_vllm_config = plan.replicas[0].stage_vllm_config
                 if stage_vllm_config is None:

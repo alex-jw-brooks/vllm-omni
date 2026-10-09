@@ -9,6 +9,7 @@ import torch
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 
+from vllm_omni.config.watermarking import TEXT_MODALITY, WatermarkConfig
 from vllm_omni.engine import OmniEngineCoreOutput
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.outputs.mm_outputs import MultimodalCompletionOutput, MultimodalPayload
@@ -155,3 +156,22 @@ def watermark_outputs(
             _handle_watermark_failure(output.request_id, watermarkers)
             watermark_failed_request_ids.add(output.request_id)
     return watermark_failed_request_ids
+
+
+def to_vllm_watermark_config(
+    watermark_config: WatermarkConfig | None,
+    final_output_type: str | None,
+    use_v2_model_runner: bool,
+) -> dict[str, object] | None:
+    """Select vLLM's text watermark config for a stage that outputs text."""
+    text_config = None if watermark_config is None else watermark_config.modalities.get(TEXT_MODALITY)
+    if text_config is None or final_output_type != TEXT_MODALITY:
+        return None
+
+    # vLLM only supports watermarking text through model runner v2
+    if not use_v2_model_runner:
+        logger.warning("Text output will not be watermarked; vLLM watermarking requires model_runner v2")
+        return None
+
+    # Validation is left to vLLM since we need to pass it to the vLLM Config initializer anyway
+    return dict(text_config)
