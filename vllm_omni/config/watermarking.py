@@ -10,6 +10,7 @@ from vllm.config.utils import config
 from vllm_omni.watermarking import WATERMARKER_REGISTRY
 
 ALGORITHM_KEY = "algorithm"
+TEXT_MODALITY = "text"
 WATERMARK_CONFIG_EXAMPLE = '{"strict": false, "modalities": {"<modality>": {"algorithm": "<algorithm>"}}}'
 
 
@@ -34,9 +35,13 @@ class WatermarkConfig:
 
     def __post_init__(self) -> None:
         for modality, modality_config in self.modalities.items():
+            if modality == TEXT_MODALITY:
+                # Text watermarking is done at sampling time and implemented in vLLM, so we don't register
+                # in the watermarking registry for Omni, which is primarily post-processing on mm outputs
+                continue
             registered_algorithms = WATERMARKER_REGISTRY.get(modality)
             if registered_algorithms is None:
-                supported_modalities = ", ".join(sorted(WATERMARKER_REGISTRY))
+                supported_modalities = ", ".join(sorted((*WATERMARKER_REGISTRY, TEXT_MODALITY)))
                 raise ValueError(f"unsupported watermark modality {modality}; supported: {supported_modalities}")
             algorithm = modality_config.get(ALGORITHM_KEY)
             if not isinstance(algorithm, str) or algorithm not in registered_algorithms:
