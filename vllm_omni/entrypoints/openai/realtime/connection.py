@@ -767,7 +767,7 @@ class OpenAIFullDuplexConnection:
         )
 
         try:
-            (s.insert_item(item_obj, previous_item_id=previous_item_id or "root"),)
+            s.insert_item(item_obj, previous_item_id=previous_item_id or "root")
         except ValueError:
             logger.warning(
                 "[realtime] previous item '%s' vanished while starting response %s; appending instead",
@@ -989,11 +989,13 @@ class OpenAIFullDuplexConnection:
                         usage.input_tokens = max(usage.input_tokens, len(output.prompt_token_ids))
 
                     if tool_parser is not None:
+                        # Additive branch: when no tools are configured for
                         # this response, tool_parser is None and this whole
                         # block is skipped -- the plain-text path below is
                         # untouched.
                         current_text = previous_text + delta_text
                         current_token_ids = previous_token_ids + delta_token_ids
+                        delta_msg = None
                         if delta_text or delta_token_ids:
                             delta_msg = tool_parser.extract_tool_calls_streaming(
                                 previous_text,

@@ -46,8 +46,7 @@ def test_stable_audio_t2a_online_with_watermarking(
     omni_server: OmniServer,
     online_client,
 ) -> None:
-    """Stable Audio Open text-to-audio: `/v1/audio/generate` returns a non-empty
-    WAV.
+    """Stable Audio Open text-to-audio: `/v1/audio/generate` returns a non-empty WAV.
 
     Uses tiny steps / short duration to keep CI light, matching the offline smoke
     test in `tests/e2e/offline_inference/test_stable_audio_expansion.py`.

@@ -25,7 +25,6 @@ from vllm.entrypoints.cli.types import CLISubcommand
 from vllm.entrypoints.launchers.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.serve.utils.api_utils import VLLM_SUBCMD_PARSER_EPILOG
 from vllm.logger import init_logger
-from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from vllm_omni.config.watermarking import WATERMARK_CONFIG_EXAMPLE, WatermarkConfig
 from vllm_omni.diffusion.registry import resolve_native_single_file
@@ -334,7 +333,7 @@ class OmniServeCommand(CLISubcommand):
             return
         validate_parsed_serve_args(args)
 
-    def subparser_init(self, subparsers: argparse._SubParsersAction) -> FlexibleArgumentParser:
+    def subparser_init(self, subparsers: argparse._SubParsersAction) -> TrackingArgumentParser:
         serve_parser = subparsers.add_parser(
             self.name,
             description=DESCRIPTION,
