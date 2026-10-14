@@ -107,7 +107,8 @@ CUDA_VISIBLE_DEVICES=1 vllm serve Qwen/Qwen3-Omni-30B-A3B-Instruct --omni \
     --omni-master-port 26000
 ```
 
-NOTE: you may pass `--stage-id none` to run only the API server and orchestrator. This is useful when you want to launch every stage, including stage 0, as a headless worker.
+!!! note
+    you may pass `--stage-id none` to run only the API server and orchestrator. This is useful when you want to launch every stage, including stage 0, as a headless worker.
 
 When utilizing a custom deployment YAML, append `--deploy-config /path/to/override.yaml` to each command execution.
 
