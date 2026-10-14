@@ -1,14 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 from pytest_mock import MockerFixture
+from transformers import LlamaConfig
+from vllm.config import ModelConfig, VllmConfig
+from vllm.inputs.engine import tokens_input
 from vllm.pooling_params import PoolingParams
+from vllm.renderers import renderer_from_config
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreRequest
+from vllm.v1.engine.input_processor import InputProcessor
 
 from vllm_omni.distributed.omni_coordinator import ReplicaInfo, ReplicaStatus
 from vllm_omni.engine import OmniEngineCoreRequest
@@ -813,3 +819,23 @@ def test_cfg_expansion_returning_nothing_is_not_an_error(mocker: MockerFixture):
         == []
     )
     engine.request_queue.sync_q.put.assert_not_called()
+
+
+def test_input_processor_preserves_request_id(tmp_path: Path):
+    """Ensure stage requests keep the orchestrator request id; this ensures that requests
+    going through paths hitting vLLM's process_inputs, e.g., _build_next_stage_request,
+    don't change the request ID, which is important for keeping the orchestrator and engine
+    request IDs aligned.
+    """
+    req_id = "req-1"
+    LlamaConfig(architectures=["LlamaForCausalLM"]).save_pretrained(tmp_path)
+    vllm_config = VllmConfig(model_config=ModelConfig(model=str(tmp_path), skip_tokenizer_init=True))
+    processor = InputProcessor(vllm_config, renderer_from_config(vllm_config))
+    request = processor.process_inputs(
+        req_id,
+        tokens_input([1, 2, 3]),
+        SamplingParams(max_tokens=1),
+        ("generate",),
+    )
+
+    assert request.request_id == req_id
