@@ -1415,7 +1415,7 @@ class DistStageRuntime(StageRuntime):
         self._validate_single_stage_mode_replica_constraints()
         stage_plans = super()._prepare_stage_plans()
         if all(replica.launch_mode == "remote" for plan in stage_plans for replica in plan.replicas):
-            logger.info("No local stage replicas found in stage plans (server + orchestrator only)")
+            logger.info("All stage replicas are remote; running only the frontend (API server + orchestrator)")
         return stage_plans
 
     def _validate_single_stage_mode_replica_constraints(self) -> None:
