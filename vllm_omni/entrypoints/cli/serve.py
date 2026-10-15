@@ -79,11 +79,16 @@ def _parse_stage_overrides(value: str) -> dict[str, dict[str, Any]]:
 
 def _parse_stage_id(value: str) -> int:
     """Parse `--stage-id` as a non-negative int, or `none` (no local stage) as `FRONTEND_ONLY_ID_FILTER`."""
-    if value == "none":
+    if value.lower() == "none":
         return FRONTEND_ONLY_ID_FILTER
-    if not (value.isascii() and value.isdigit()):
-        raise argparse.ArgumentTypeError(f"--stage-id must be a non-negative integer or 'none', got {value!r}")
-    return int(value)
+    msg = f"Stage ID must be a non-negative integer or 'none', got {value!r}"
+    try:
+        stage_id = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(msg) from exc
+    if stage_id < 0:
+        raise argparse.ArgumentTypeError(msg)
+    return stage_id
 
 
 def _nonneg_finite_float(value: str) -> float:
