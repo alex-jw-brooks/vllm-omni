@@ -44,6 +44,7 @@ from vllm_omni.core.prefix_cache.interface import (
     Tid,
     WriteSchedule,
 )
+from vllm_omni.core.prefix_cache.profiling import record_bytes, section, timed
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +417,7 @@ class StagingBufferPool:
             self._bufs[key] = buf
         return buf
 
+    @timed("save: wait for staging slot")
     def claim(self, holder: StagingBufferHolder, timeout: float) -> int:
         """Grab a free slot for `holder`. Waits until one is free, then
         times out. ``timeout<=0`` fails immediately if none are free.
@@ -726,6 +728,7 @@ class OmniPrefixCacheController:
             ev.record()
         return ev
 
+    @timed("save: stage step D2H")
     def _stage_step_host(
         self,
         tensors: dict[str, torch.Tensor],
@@ -797,6 +800,7 @@ class OmniPrefixCacheController:
             if queued:
                 task.transition(TaskState.QUEUED)
 
+    @timed("save: dispatch writes")
     def _dispatch(self, tasks: list[WriteTask]) -> None:
         """Hand registered, queued tasks to the copy path. Threaded: enqueue.
         Eager: the copy + pool write run here, inline — never call this
@@ -832,6 +836,7 @@ class OmniPrefixCacheController:
             for ticket in tickets:
                 self._staged_bytes -= ticket.release(task.tid)
 
+    @timed("save: reserve GPU budget")
     def _reserve_bytes(self, nbytes: int) -> None:
         # GPU-byte budget: force-copy oldest pending tasks until under
         # budget. Bounded wait: their device→host has usually long completed.
@@ -886,6 +891,7 @@ class OmniPrefixCacheController:
         """
         self._wait_tasks(tids, "host_ready")
 
+    @timed("wait: join writer tasks")
     def _wait_tasks(self, tids: list[int], event: Literal["done", "host_ready"]) -> None:
         timeout = self._config.staging_claim_timeout_s
         deadline = time.monotonic() + timeout
@@ -943,6 +949,7 @@ class OmniPrefixCacheController:
     # ------------------------------------------------------------ fetch_host
 
     @torch.inference_mode()
+    @timed("hit read: fetch in-flight rows")
     def fetch_host(self, handle: WriteTaskHandle, slots: torch.Tensor, key: str) -> torch.Tensor:
         """Rows for `slots` of one not-yet-done JOIN_ON_FINISH task.
 
@@ -1070,6 +1077,7 @@ class OmniPrefixCacheController:
                 self._fail_task(tid)
 
     @torch.inference_mode()
+    @timed("writer: copy task")
     def _copy_task(self, task: WriteTask) -> None:
         """COPYING -> HOST_READY. Staging: wait the save-time device→host event.
         Deferred: this is the device→host into owned `chunk.host` tensors.
@@ -1078,7 +1086,8 @@ class OmniPrefixCacheController:
             # `chunk.host` is already a staging view; device→host ran at save.
             # `mark_host_ready` waits `step_d2h_event` if one was recorded.
             # No per-task copy. Pool write is `_scatter_host_ready`.
-            task.mark_host_ready()
+            with section("writer: wait step D2H event (shared per step)"):
+                task.mark_host_ready()
             self._release_staged_bytes(task)
             return
         # One device cat + one device→host per key, not one per chunk (a
@@ -1104,7 +1113,8 @@ class OmniPrefixCacheController:
                 pending.append((k, chunks, parts))
             ev = torch.cuda.Event()
             ev.record()
-        ev.synchronize()
+        with section("writer: wait deferred D2H"):
+            ev.synchronize()
         rows_out: list[tuple[_WriteChunk, str, torch.Tensor]] = []
         for k, chunks, parts in pending:
             host = parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
@@ -1159,9 +1169,12 @@ class OmniPrefixCacheController:
                 self._fail_task(tid)
 
     @torch.inference_mode()
+    @timed("writer: pool write")
     def _scatter(self, task: WriteTask) -> None:
         for key, slots, host in task.scatter_rows():
-            self._pool.write(key, slots, host)
+            with section("writer: pool index_copy_"):
+                self._pool.write(key, slots, host)
+            record_bytes("writer: pool index_copy_", host)
         # `done` is set LAST: a join(done) waiter (the save barrier) must find
         # the completion record on its next drain and the staging slot free —
         # a done-but-undrained window would leave occupancy IN_TRANSIT and

@@ -51,7 +51,6 @@ already in the next step. Warmup/dummy runs are never fed.
 from __future__ import annotations
 
 import logging
-import threading
 from collections import deque
 from collections.abc import Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -87,6 +86,7 @@ from vllm_omni.core.prefix_cache.interface import (
     is_hidden_key,
     without_hidden,
 )
+from vllm_omni.core.prefix_cache.profiling import make_lock, record_bytes, section, timed
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +421,7 @@ class OmniPrefixCacheManager:
         # Serializes engine vs async-builder public entries. Non-reentrant:
         # those entries never call each other, and the lock must not cover
         # a wait-for-copy, GPU-byte-budget flush, or device→host copy.
-        self._state_lock = threading.Lock()
+        self._state_lock = make_lock("manager state")
 
         self._slot_status = _SlotStatusTable(config.num_blocks * config.block_size)
         # Hidden is known from the default policy; mm rows at init_table.
@@ -462,6 +462,7 @@ class OmniPrefixCacheManager:
             self._slot_status.init_table(hk)
 
     @torch.inference_mode()
+    @timed("engine: new_step_starts")
     def new_step_starts(self, step: PrefixCacheStep) -> None:
         """Handle one immutable adapter-produced step.
 
@@ -543,6 +544,7 @@ class OmniPrefixCacheManager:
             self._controller.escalate(to_escalate)
 
     @torch.inference_mode()
+    @timed("engine: save_outputs")
     def save_outputs(
         self,
         hidden_states: torch.Tensor | None,
@@ -647,6 +649,7 @@ class OmniPrefixCacheManager:
             raise
 
     @torch.inference_mode()
+    @timed("output: materialize")
     def materialize(self, step_id: int, req_ids: list[str]) -> StageCacheOutputs:
         """Per-request merged outputs for the step saved as `step_id`.
 
@@ -707,7 +710,9 @@ class OmniPrefixCacheManager:
                 # Whole-step device→host was launched at save. One event wait
                 # (usually already complete), then a contiguous copy-out per
                 # key so consumers no longer depend on the reusable slot.
-                current = ctx.d2h_snapshot.copy_to_cpu()
+                with section("copy: step D2H wait + clone rows"):
+                    current = ctx.d2h_snapshot.copy_to_cpu()
+                record_bytes("copy: step D2H wait + clone rows", *current.values())
                 self._release_step_staging(ctx)
                 step_released = True
 
@@ -775,6 +780,7 @@ class OmniPrefixCacheManager:
                 # COW may have preserved the prior tenant, which this hit must not use.
                 del futs[src.key]
 
+    @timed("plan: prefetch hit spans")
     def _prefetch_hit_spans(self) -> None:
         """Caller holds ``_state_lock``. Plan each hit span not yet planned
         and gather it on the prefetch thread.
@@ -807,18 +813,22 @@ class OmniPrefixCacheManager:
                 del self._hit_prefetch[req_id]
 
     @torch.inference_mode()
+    @timed("prefetch: gather one hit")
     def _prefetch_hit(self, src: _SlotRef, n_new: int) -> torch.Tensor:
         """Prefetch thread: gather the hit span and pre-build the merged
         buffer with the prefix filled. materialize writes only this step's
         rows at the tail — the gather AND the prefix copy both happen while
         the forward runs, and the cat leaves the critical path."""
         rows = self._fetch_source(src)
-        out = torch.empty((rows.shape[0] + n_new, rows.shape[-1]), dtype=rows.dtype)
-        out[: rows.shape[0]] = rows
+        with section("copy: fill merged buffer"):
+            out = torch.empty((rows.shape[0] + n_new, rows.shape[-1]), dtype=rows.dtype)
+            out[: rows.shape[0]] = rows
+        record_bytes("copy: fill merged buffer", rows)
         return out
 
     # ---------------------------------------------------------- save
 
+    @timed("save: prepare step (staging + D2H launch)")
     def _prepare_step(
         self,
         step_id: StepId,
@@ -845,6 +855,7 @@ class OmniPrefixCacheManager:
                 f"(in_flight_tasks={self._controller.in_flight_tasks()})"
             ) from e
 
+    @timed("save: wait previous step writes")
     def _wait_for_host_ready(self) -> None:
         """Pop last step's join worklists and wait them out, unlocked.
 
@@ -865,6 +876,7 @@ class OmniPrefixCacheManager:
             self._controller.join(next_step_ids)
 
     @_locked
+    @timed("save: publish step (locked)")
     def _publish_saved_step(
         self,
         *,
@@ -908,6 +920,7 @@ class OmniPrefixCacheManager:
         )
         self._clear_hit_infos()
 
+    @timed("save: split outputs (device clone)")
     def _split_step_outputs(
         self,
         hidden_states: torch.Tensor | None,
@@ -1014,6 +1027,7 @@ class OmniPrefixCacheManager:
         for old, key, stolen in self._slot_status.map_slots(slots, tid, keys):
             self._controller.mark_reassigned(old, key, stolen)
 
+    @timed("scan: preserve rows for pending reads")
     def _preserve_for_pending_reads(self, new_slots: torch.Tensor, keys: tuple[str, ...]) -> None:
         """Caller holds ``_state_lock``. Copy still-valid committed rows into
         each pending ref before ``new_slots`` are claimed.
@@ -1043,6 +1057,7 @@ class OmniPrefixCacheManager:
                 ref.preserved[s] = rows[j].clone()
 
     @torch.inference_mode()
+    @timed("plan: commit drained writes")
     def _commit_drained_writes(self) -> None:
         """Fold completed/failed writes into occupancy. Caller holds ``_state_lock``.
 
@@ -1090,6 +1105,7 @@ class OmniPrefixCacheManager:
         block_ids = torch.tensor(hit_blocks, dtype=torch.int64)
         return (block_ids.unsqueeze(1) * bs + torch.arange(bs)).reshape(-1)[:hit_upto]
 
+    @timed("scan: plan slot ref")
     def _slot_ref(self, slots: torch.Tensor, key: str, req_id: str) -> _SlotRef:
         """Caller holds ``_state_lock``. Pin a ``_SlotRef`` for `slots` (no data movement).
 
@@ -1142,6 +1158,7 @@ class OmniPrefixCacheManager:
         self._pending_reads.append(ref)
         return ref
 
+    @timed("scan: apply preserved rows")
     def _apply_preserved_rows(self, src: _SlotRef, out: torch.Tensor) -> torch.Tensor:
         """Write ``src.preserved`` rows over the matching slots in ``out``."""
         if not src.preserved:
@@ -1152,6 +1169,7 @@ class OmniPrefixCacheManager:
                 out[i] = row
         return out
 
+    @timed("scan: unregister pending read")
     def _unregister_pending_read(self, src: _SlotRef) -> None:
         """Drop ``src`` from ``_pending_reads``. Identity, not dataclass eq
         (tensors in the ref make ``==`` unusable). Safe if already removed."""
@@ -1176,10 +1194,14 @@ class OmniPrefixCacheManager:
     def _fetch_source_inner(self, src: _SlotRef) -> torch.Tensor:
         # For JOIN_NEXT_STEP, wait `done`, drain, read the pool
         if src.join_tids:
-            self._controller.join(src.join_tids)
+            with section("wait: writer join for hit read"):
+                self._controller.join(src.join_tids)
             with self._state_lock:
                 self._commit_drained_writes()
-            joined = self._apply_preserved_rows(src, self._pool.rows(src.key, src.slots))
+            with section("copy: pool gather for hit read"):
+                rows = self._pool.rows(src.key, src.slots)
+            record_bytes("copy: pool gather for hit read", rows)
+            joined = self._apply_preserved_rows(src, rows)
             self._ensure_not_reassigned(
                 src.slots,
                 src.key,
@@ -1193,7 +1215,9 @@ class OmniPrefixCacheManager:
         n = int(src.slots.numel())
         out: torch.Tensor | None = None
         if src.already_staged:
-            out = self._pool.rows(src.key, src.slots)
+            with section("copy: pool gather for hit read"):
+                out = self._pool.rows(src.key, src.slots)
+            record_bytes("copy: pool gather for hit read", out)
         in_transit = None
         for task, mask in src.staged_list:
             try:
@@ -1222,6 +1246,7 @@ class OmniPrefixCacheManager:
             _raise_unreadable_hit(src.req_id, src.key, "no source")
         return out
 
+    @timed("scan: check slots not reassigned")
     def _ensure_not_reassigned(
         self,
         slots: torch.Tensor,
@@ -1270,6 +1295,7 @@ class OmniPrefixCacheManager:
 
     # ---------------------------------------------------------- merge
 
+    @timed("merge: one request")
     def _merge_cached_for_req(
         self,
         ctx: _StepContext,
@@ -1292,11 +1318,13 @@ class OmniPrefixCacheManager:
             # Prefetched during the forward, prefix already in place; only
             # this step's rows land here. result() re-raises fetch/validation
             # errors — unread hits still raise after the thread hop.
-            merged = src.result()
+            with section("wait: prefetch result"):
+                merged = src.result()
             merged[merged.shape[0] - new_rows.shape[0] :] = new_rows
             return merged
         cached = self._fetch_source(src)
-        return torch.cat([cached, new_rows], dim=0)
+        with section("copy: cat cached + new rows"):
+            return torch.cat([cached, new_rows], dim=0)
 
     def _merge_uncached_mm(
         self,
