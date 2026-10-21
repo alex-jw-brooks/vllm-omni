@@ -56,6 +56,7 @@ class _PrefixCacheBatch:
     spans: dict[ReqId, tuple[int, int]]  # each request's rows in this batch
     outputs: dict[TensorName, torch.Tensor]  # per-token outputs, one row per scheduled token
     other_mm: dict[TensorName, Any]  # multimodal outputs that aren't per token, passed through
+    save_id: int | None  # the save_id for this engine step (only if new tensors were recorded)
     hits: dict[ReqId, PrefixHit] = field(default_factory=dict)
 
 
@@ -73,6 +74,9 @@ class OmniPrefixCacheManager:
         # may call while the engine thread saves the next batch.
         self._batches: dict[PrefixCacheBatchId, _PrefixCacheBatch] = {}
         self._batches_lock = threading.Lock()
+        # Saves of merged or skipped batches, now safe to compact. The output thread can't touch
+        # the index, so they wait here for the next save_outputs. Guarded by _batches_lock.
+        self._final_saves: list[int] = []
         self._next_batch_id: PrefixCacheBatchId = 1
 
     def register_policy(self, policy: ModelCachePolicy) -> None:
@@ -131,14 +135,14 @@ class OmniPrefixCacheManager:
         num_tokens_padded: int,
         write_layout: PrefixCacheWriteLayout,
     ) -> PrefixCacheBatchId:
-        """Index this batch's outputs by KV slot and look up its hits; returns the batch id.
+        """Record this step's outputs and look up its new requests' hits. Returns a batch id.
 
-        Engine thread only, after the forward. With async output, the CPU tensors may still be
-        filling from the async output copy; nothing here reads their values, and the output builder
-        waits for the copy before calling merge_batch.
-
-        Pass the batch id to merge_batch, or to skip_merge when nothing reads this batch's outputs.
-        Either call releases the batch, which is held until then; a second call raises.
+        Call once per engine step, on the engine thread, after new_step_starts and the forward.
+        write_layout gives each request's rows and the KV slot of each row. The tensors must be on
+        the CPU and are kept by reference, so with async output they can still be filling. The
+        caller must make sure they're filled, then call exactly one of:
+          - merge_batch, if anything needs this step's outputs;
+          - skip_merge, if nothing does.
         """
         # Rows are kept by reference: a device tensor would hold GPU memory, and CUDA graph outputs are overwritten.
         if _on_device(hidden_states) or _on_device(mm_outputs):
@@ -167,8 +171,11 @@ class OmniPrefixCacheManager:
                 outputs[key] = val[:n]
             else:
                 other_mm[key] = val
-        if n:
-            self._index.record(outputs, write_layout.slots_cpu)
+        # Compaction may read the saves of batches merged or skipped since the last save
+        with self._batches_lock:
+            final_saves, self._final_saves = self._final_saves, []
+        self._index.mark_final(final_saves)
+        save_id = self._index.record(outputs, write_layout.slots_cpu) if n else None
 
         hits = {}
         for req_id, blocks in self._hit_blocks.items():
@@ -180,12 +187,11 @@ class OmniPrefixCacheManager:
                         f"hit span for req {req_id} key={key} is not readable (slots with no saved rows)"
                     )
             hits[req_id] = hit
-        self._hit_blocks.clear()
 
         with self._batches_lock:
             batch_id = self._next_batch_id
             self._next_batch_id += 1
-            self._batches[batch_id] = _PrefixCacheBatch(spans, outputs, other_mm, hits)
+            self._batches[batch_id] = _PrefixCacheBatch(spans, outputs, other_mm, save_id, hits)
         return batch_id
 
     def merge_batch(self, batch_id: PrefixCacheBatchId, req_ids: list[ReqId]) -> StageCacheOutputs:
@@ -221,14 +227,16 @@ class OmniPrefixCacheManager:
     def skip_merge(self, batch_id: PrefixCacheBatchId) -> None:
         """Release a saved batch nothing will merge. Its outputs stay cached for later hits.
 
-        Any thread; same exactly-once contract as merge_batch (unknown or
-        duplicate id raises).
+        Any thread, once the batch's CPU outputs have finished copying; same exactly-once
+        contract as merge_batch (unknown or duplicate id raises).
         """
         self._take(batch_id)
 
     def _take(self, batch_id: PrefixCacheBatchId) -> _PrefixCacheBatch:
         with self._batches_lock:
             batch = self._batches.pop(batch_id, None)
+            if batch is not None and batch.save_id is not None:
+                self._final_saves.append(batch.save_id)
         if batch is None:
             raise OmniPrefixCacheUnmatchError(f"batch {batch_id} missing; already consumed or never saved")
         return batch

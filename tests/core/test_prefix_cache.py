@@ -39,6 +39,8 @@ from vllm_omni.core.prefix_cache.adapter import (
     PrefixCacheRequestEvent,
     PrefixCacheSchedulerAdapter,
     PrefixCacheStep,
+    PrefixCacheWrite,
+    PrefixCacheWriteLayout,
 )
 from vllm_omni.core.prefix_cache.group_view import (
     FullAttentionGroupView,
@@ -60,6 +62,14 @@ NUM_BLOCKS = 16
 BLOCK_SIZE = 4
 HIDDEN = 8
 DTYPE = torch.float32
+
+
+def save_step(mgr, req_id, slots, hidden):
+    """One step where req_id computes `slots`, with no prefix hits. Returns the batch id."""
+    n = len(slots)
+    mgr.new_step_starts(PrefixCacheStep(events=(), scheduled_tokens=((req_id, n),)))
+    layout = PrefixCacheWriteLayout((PrefixCacheWrite(req_id, 0, n),), total_rows=n, slots_cpu=slots)
+    return mgr.save_outputs(hidden, {}, num_tokens_unpadded=n, num_tokens_padded=n, write_layout=layout)
 
 
 class FakeView:
@@ -156,14 +166,9 @@ def run_engine_step_prefix_update(
 
 def cached_rows(mgr, slots: torch.Tensor, key=HIDDEN_KEY, width=HIDDEN) -> torch.Tensor:
     """The rows the cache holds for these KV slots, read through a lookup of their blocks."""
-    blocks = list(dict.fromkeys(int(slot) // BLOCK_SIZE for slot in slots.tolist()))
-    rows = mgr._index.lookup(blocks).cat(key, torch.empty(0, width, dtype=DTYPE))
-    position = {
-        block * BLOCK_SIZE + offset: i * BLOCK_SIZE + offset
-        for i, block in enumerate(blocks)
-        for offset in range(BLOCK_SIZE)
-    }
-    return rows[[position[int(slot)] for slot in slots.tolist()]]
+    blocks, block_pos = torch.unique(slots // BLOCK_SIZE, return_inverse=True)
+    rows = mgr._index.lookup(blocks.tolist()).cat(key, torch.empty(0, width, dtype=DTYPE))
+    return rows[block_pos * BLOCK_SIZE + slots % BLOCK_SIZE]
 
 
 def expected_rows(slots: torch.Tensor) -> torch.Tensor:
@@ -869,3 +874,133 @@ def test_record_rejects_tensors_without_one_row_per_slot(index):
     """Ensure record rejects tensors whose row count doesn't match the slot count."""
     with pytest.raises(OmniPrefixCacheUnmatchError):
         index.record(saved_rows(100, 2), slots=torch.tensor([8, 9, 10, 11]))
+
+
+### Compaction
+
+
+@pytest.fixture
+def eager_compaction(monkeypatch):
+    """Sets the prefix caching compaction ratio high for testing."""
+    monkeypatch.setattr("vllm_omni.core.prefix_cache.slot_index.SAVE_COMPACTION_RATIO", 0.6)
+
+
+def test_compaction_keeps_the_live_rows_and_releases_the_old_save(index, eager_compaction):
+    """Ensure a mostly stale save is copied down to its live rows, which keep their values."""
+    total_blocks = 4
+    blocks_to_reuse = 3
+    num_unref_slots = SLOT_BLOCK_SIZE * blocks_to_reuse
+    num_slots = SLOT_BLOCK_SIZE * total_blocks
+    first = saved_rows(100, num_slots)
+    first_rows = weakref.ref(first["hidden"])
+    # Record the update and mark the data as finalized
+    record_save = index.record(first, slots=torch.arange(num_slots))
+    index.mark_final([record_save])
+    del first
+
+    # Record new data into blocks 0, 1, and 2. Since we are now under the patched compaction ratio
+    # we will then compact the original save, which should copy only the rows still referenced
+    assert first_rows() is not None
+    index.record(
+        saved_rows(200, num_unref_slots),
+        slots=torch.arange(num_unref_slots),
+    )
+    assert first_rows() is None
+
+    # Compaction does not modify the values for lookup
+    expected_lookups = {
+        0: [200, 201],
+        1: [202, 203],
+        2: [204, 205],
+        3: [106, 107],
+    }
+    for block_id, vals in expected_lookups.items():
+        assert hit_values(index.lookup([block_id])) == vals
+
+
+def test_compaction_never_changes_a_save_in_place(index, eager_compaction):
+    """Ensure a hit and the save's own batch keep reading the old rows after compaction."""
+    num_slots = 8
+    last_block = (num_slots // SLOT_BLOCK_SIZE) - 1
+    first = saved_rows(100, num_slots)
+    record_save = index.record(first, slots=torch.arange(num_slots))
+    index.mark_final([record_save])
+    hit = index.lookup([last_block])  # Save the hit output of the last block
+
+    # Reuse enough slots to force compaction while recording. The original save ID should drop
+    assert record_save in index._saves
+    index.record(saved_rows(200, num_slots - 2), slots=torch.arange(2, num_slots))
+    assert record_save not in index._saves
+
+    # Ensure that the hit we already have is still safely referring to the old data
+    assert hit_values(hit) == [106, 107]
+    assert first["hidden"].tolist() == list(range(100, 108))
+    # Also ensure that the new lookup to a compacted block is correct
+    assert hit_values(index.lookup([0])) == [100, 101]
+
+
+def test_pending_save_is_compacted_only_once_final(index, eager_compaction):
+    """Ensure a save isn't read for compaction until mark_final says its values are final."""
+    first = saved_rows(100, 8)
+    first_rows = weakref.ref(first["hidden"])
+    first_id = index.record(first, slots=torch.arange(8))
+    first["hidden"].fill_(float("nan"))  # Represents a copy that hasn't landed yet
+
+    index.record(saved_rows(200, 6), slots=torch.arange(2, 8))  # Then record to mostly stale, but also pending
+    first["hidden"].copy_(torch.arange(100, 108, dtype=torch.float32))  # Then the copy finishes
+    del first
+    # We should still ref the mostly stale save until it's marked as final
+    assert first_rows() is not None
+
+    index.mark_final([first_id])
+    # But after finalizing, the stale ref is removed, and the copy is reflected
+    assert first_rows() is None
+    assert hit_values(index.lookup([0])) == [100, 101]
+
+
+def test_save_freed_while_pending_is_ignored_by_mark_final(index):
+    """Ensure that mark_finalis still safe when called on a freed save."""
+    # The intention of this test is to guard against potential cases we may hit in async
+    # scheduling, e.g., if an existing save has all of its slots overwritten by a record,
+    # but the prefix cache batch referring to it isn't consumed (i.e., we call merge or skip
+    # merge) until afterwards by the output thread.
+    first = saved_rows(100, 2)
+    first_rows = weakref.ref(first["hidden"])
+    first_id = index.record(first, slots=torch.tensor([0, 1]))
+    del first
+
+    index.record(saved_rows(200, 2), slots=torch.tensor([0, 1]))
+    assert first_rows() is None
+    index.mark_final([first_id])
+
+
+### Async output
+
+
+@pytest.mark.parametrize(
+    "consume",
+    [
+        lambda mgr, batch_id: mgr.merge_batch(batch_id, ["a"]),
+        lambda mgr, batch_id: mgr.skip_merge(batch_id),
+    ],
+)
+def test_save_is_not_read_until_its_batch_is_consumed(eager_compaction, consume):
+    """Ensure a save that goes stale while its copy is in flight is only compacted after its batch is consumed."""
+    mgr, _ = make_manager()
+    a_hidden = torch.full((24, HIDDEN), float("nan"), dtype=DTYPE)  # its copy hasn't landed yet
+    a_rows = weakref.ref(a_hidden)
+    a = save_step(mgr, "a", torch.arange(24), a_hidden)  # blocks 0-5
+
+    # b reuses blocks 1-5 while a's copy is in flight, leaving 4 of a's 24 rows pointed at
+    save_step(mgr, "b", torch.arange(4, 24), torch.zeros(20, HIDDEN, dtype=DTYPE))
+    landed = torch.arange(100, 124, dtype=DTYPE)[:, None].expand(24, HIDDEN)
+    a_hidden.copy_(landed)  # the copy lands
+    del a_hidden
+    # merge/skip only queue a's save; the engine thread compacts it at the next save
+    consume(mgr, a)
+    assert a_rows() is not None
+
+    # The next save tells the index a was consumed, which compacts it
+    save_step(mgr, "c", torch.arange(24, 28), torch.zeros(4, HIDDEN, dtype=DTYPE))
+    assert a_rows() is None
+    assert torch.equal(cached_rows(mgr, torch.arange(4)), landed[:4])
