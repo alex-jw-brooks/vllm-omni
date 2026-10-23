@@ -213,8 +213,8 @@ class OmniDiffusionSamplingParams:
     to manage numerous individual parameters.
     """
 
-    # Whether final outputs should be watermarked (when configured)
-    watermarking: bool = True
+    # Whether final outputs should be watermarked (when configured).
+    watermarking: bool | None = None
 
     # Additional text-related parameters
     max_sequence_length: int | None = None

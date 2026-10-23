@@ -200,7 +200,7 @@ def test_generate_watermarking_opt_out_disables_every_stage():
         assert not llm_params.watermarking
         assert not diffusion_params.watermarking
         assert pooling_params is defaults[2]
-        assert defaults[0].watermarking and defaults[1].watermarking
+        assert (defaults[0].watermarking, defaults[1].watermarking) == (None, None)
 
     asyncio.run(run())
 

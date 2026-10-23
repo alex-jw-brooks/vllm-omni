@@ -617,7 +617,7 @@ async def test_sampling_params_for_applies_session_watermarking(watermarking: bo
 
         sampling_params = harness.manager.sampling_params_for(harness.session("sid-wm"))
 
-        assert [params.watermarking for params in sampling_params] == [watermarking] * len(sampling_params)
+        assert [params.watermarking is not False for params in sampling_params] == [watermarking] * len(sampling_params)
 
 
 async def test_duplicate_open_is_rejected_with_session_exists() -> None:

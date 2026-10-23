@@ -1070,7 +1070,7 @@ class StagePool:
                 self._audio_sample_rate_by_request[rid] = audio_sample_rate
 
     def maybe_update_watermarking_state(self, request_id: str, params: OmniSamplingParams | PoolingParams) -> None:
-        should_watermark = params.watermarking if not isinstance(params, PoolingParams) else False
+        should_watermark = not isinstance(params, PoolingParams) and params.watermarking is not False
         if self._watermarkers:
             self._request_watermarking[request_id] = should_watermark
 
