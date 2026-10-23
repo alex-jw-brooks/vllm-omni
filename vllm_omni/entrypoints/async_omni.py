@@ -154,7 +154,7 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
         arrival_time: float | None = None,
         submitted: asyncio.Future[None] | None = None,
         entry_stage_id: int = 0,
-        watermarking: bool = True,
+        watermarking: bool | None = None,
     ) -> AsyncGenerator[OmniRequestOutput, None]:
         """Generate outputs for the given prompt(s) asynchronously.
 
@@ -184,8 +184,8 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
             entry_stage_id: Stage the request is submitted to; > 0 bypasses
                 stage 0 and leaves the prompt raw for that stage. Streaming
                 prompts always enter at stage 0.
-            watermarking: Whether configured watermarking applies to this request;
-                False disables it on every stage.
+            watermarking: Whether configured watermarking applies to this request
+                (None means enabled); False disables it on every stage.
 
         Yields:
             OmniRequestOutput objects as they are produced by each stage.
@@ -268,7 +268,7 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                 sampling_params_list,
                 allow_delta_coercion=True,
             )
-            if not watermarking:
+            if watermarking is False:
                 sampling_params_list = disable_watermarking(sampling_params_list)
 
             # Track per-request metrics

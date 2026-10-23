@@ -239,8 +239,10 @@ class AsyncOmniEngine(OmniEngineBase):
             )
 
         # Opting out on any stage opts the whole request out; pooling stages never watermark
-        if not all(
-            params.watermarking for params in effective_sampling_params_list if isinstance(params, OmniSamplingParams)
+        if any(
+            params.watermarking is False
+            for params in effective_sampling_params_list
+            if isinstance(params, OmniSamplingParams)
         ):
             effective_sampling_params_list = disable_watermarking(effective_sampling_params_list)
 

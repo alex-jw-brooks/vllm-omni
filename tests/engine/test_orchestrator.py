@@ -873,8 +873,8 @@ async def test_run_single_stage_diffusion(orchestrator_factory) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage_type", ["llm", "diffusion"])
-@pytest.mark.parametrize("watermarking", [True, False])
-async def test_request_watermarking(stage_type: str, watermarking: bool) -> None:
+@pytest.mark.parametrize("watermarking", [None, True, False])
+async def test_request_watermarking(stage_type: str, watermarking: bool | None) -> None:
     watermarker = MagicMock()
     watermarker.watermark_output.side_effect = lambda _request_id, samples, _metadata: samples
 
@@ -922,7 +922,7 @@ async def test_request_watermarking(stage_type: str, watermarking: bool) -> None
         )
 
     # Then ensure the watermarking behavior is as expected
-    if watermarking:
+    if watermarking is not False:
         watermarker.watermark_output.assert_called_once()
     else:
         watermarker.watermark_output.assert_not_called()
