@@ -586,7 +586,6 @@ class DuplexSessionConfig:
             )
         if isinstance(model, str) and self.model is None:
             self.model = model
-
         voice_is_echo = False
         if voice_requested:
             # The echo check is playback-independent: SessionControl re-runs

@@ -918,7 +918,6 @@ def test_no_detokenizer_generation_cache_miss_keeps_multimodal_completion():
     assert state.request_id not in processor.request_states
 
 
-@pytest.mark.asyncio
 def test_no_detokenizer_process_outputs_returns_nonterminal_audio_chunk(monkeypatch):
     """Generation-stage MM-only chunks must reach the orchestrator.
 
