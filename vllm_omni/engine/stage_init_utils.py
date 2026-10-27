@@ -1581,13 +1581,16 @@ def build_vllm_config(
 
     omni_engine_args = OmniEngineArgs(**filtered_engine_args_dict)
 
-    # extract the vLLM config arg from Omni's watermark config if we have text watermarking enabled
+    # extract the vLLM config arg from Omni's watermark config if we have text watermarking
+    # explicitly configured and it's supported, otherwise delegate to vLLM's default.
     # NOTE: text watermarking in vLLM is only implemented for model runner v2.
-    omni_engine_args.watermark_config = to_vllm_watermark_config(
+    vllm_wm_config = to_vllm_watermark_config(
         watermark_config,
         stage_config.final_output_type,
         omni_engine_args.use_v2_model_runner,
     )
+    if vllm_wm_config is not None:
+        omni_engine_args.watermark_config = vllm_wm_config
 
     # Guard against a per-stage world size that its assigned ``devices`` cannot
     # satisfy (issue #5003). A top-level ``--tensor-parallel-size`` is broadcast
